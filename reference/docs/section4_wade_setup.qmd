@@ -1,0 +1,359 @@
+<!--
+  WADE setup. Paste this chunk into the v8 setup region (after the cohort-set
+  chunk that defines `cds`/`mats`, and after the sources for
+  R/control_strata.R, R/group_structure.R, wade.R, R/wade_contrasts.R and
+  R/wade_figures.R). It computes every object the §4.x WADE section and the S7
+  supplement quote, so nothing in either fragment is inline-computed twice and
+  nothing is hardcoded.
+
+  Add to the source block:
+    source(cfrna_here("R/control_strata.R"))   # control taxonomy (registry-driven)
+    source(cfrna_here("R/group_structure.R"))  # PCA of the analysis matrix
+    source(cfrna_here("wade.R"))               # the statistic
+    source(cfrna_here("R/wade_contrasts.R"))   # contrast registry + screen + cache
+    source(cfrna_here("R/wade_figures.R"))     # WADE figure grammar
+-->
+
+```{r}
+#| label: wade-setup
+#| include: false
+# ---------------------------------------------------------------------
+# Cohorts. Both definitions are carried through every contrast; the section
+# reports the main one and the cohort-comparison table covers both. Named
+# rather than positional so a reordered checkpoint cannot silently swap them.
+# ---------------------------------------------------------------------
+wade_cds  <- cds
+wade_mats <- mats
+WADE_COHORT_MAIN <- "all panels"
+stopifnot(WADE_COHORT_MAIN %in% names(wade_cds))
+
+# The primary detection contrast, and the genes the diagnostic figure draws.
+# Named here (not inside the figure call) so the section and the figure cannot
+# disagree about which contrast is primary.
+WADE_PRIMARY <- "cancer_vs_hr"
+WADE_NPERMS  <- CFRNA_WADE_NPERMS
+
+# Canonical markers always labelled on the volcano regardless of rank, so a
+# reader can locate familiar genes. Not a nomination claim.
+WADE_CANON_GENES <- c("CEACAM5", "MUC1", "AGR2", "SERPINB5", "KRT19")
+
+# ---------------------------------------------------------------------
+# Registry audit. Runs FIRST and with strict = TRUE: if a future store adds a
+# control-like disease that no stratum names, the build stops here rather than
+# counting those patients as cancer cases. That failure is exactly what
+# `prostate_high_psa` did silently before this module existed.
+# ---------------------------------------------------------------------
+wade_audit <- cfrna_control_strata_audit(
+  wade_cds[[WADE_COHORT_MAIN]]$libraries$disease, strict = TRUE)
+
+# Stratum composition per cohort, for the §4.x.1 table.
+wade_strata <- lapply(wade_cds, function(cd) cfrna_strata_summary(cd$libraries))
+
+# Scalars the §4.x.1 callout quotes. Both are the SIZE of a misclassification
+# that has actually occurred in this project, so they are computed from the
+# cohort rather than typed.
+wade_lb_main <- wade_cds[[WADE_COHORT_MAIN]]$libraries
+wade_n_hr  <- sum(wade_lb_main$disease %in% CFRNA_CONTROL_STRATA$hr_surveil)
+wade_n_psa <- dplyr::n_distinct(
+  wade_lb_main$patient[wade_lb_main$disease == "prostate_high_psa"])
+
+# ---------------------------------------------------------------------
+# Exchangeability. The measurement behind every patient-level caveat: are
+# libraries independent? Quoted in §4.x.2.
+# ---------------------------------------------------------------------
+wade_exch <- cfrna_gs_exchangeability(wade_cds[[WADE_COHORT_MAIN]],
+                                     wade_mats[[WADE_COHORT_MAIN]])
+
+# ---------------------------------------------------------------------
+# Contrast screen, per cohort. Cheap (no permutations), so it is computed
+# rather than cached.
+# ---------------------------------------------------------------------
+wade_screen <- lapply(wade_cds, function(cd) cfrna_wade_screen(cd$libraries))
+
+# Which contrasts run, and which may contribute nominations. `tail_ok` is read
+# off the screen rather than decided at each figure call, so one threshold
+# governs the volcano, the nomination table and the CSV exports.
+wade_runnable <- lapply(wade_screen, function(s) unique(cfrna_wade_runnable(s)$id))
+wade_tail_ok  <- local({
+  s <- dplyr::filter(wade_screen[[WADE_COHORT_MAIN]], unit == "index")
+  setNames(as.list(s$tail_usable), s$id)
+})
+wade_nominatable <- local({
+  s <- dplyr::filter(wade_screen[[WADE_COHORT_MAIN]], unit == "index")
+  s$id[s$nominatable]
+})
+
+# Screen scalars quoted in §4.x.2 prose.
+wade_v_screenpos <- local({
+  s <- dplyr::filter(wade_screen[[WADE_COHORT_MAIN]], unit == "index",
+                     id == "screenpos_vs_hr")
+  s$panel_v[1]
+})
+# What restricting the refused contrast to one design version would give -- the
+# number that turns "refused" into a specific enrolment target.
+wade_pm_v6_nctrl <- local({
+  sp <- CFRNA_WADE_CONTRASTS[[which(vapply(CFRNA_WADE_CONTRASTS,
+                                          function(x) x$id, character(1)) == "screenpos_vs_hr")]]
+  pm <- cfrna_wade_panel_matched(wade_lb_main, sp)
+  pm$n_ctrl[pm$design == "v6"]
+})
+
+# ---------------------------------------------------------------------
+# Run WADE. Cached per contrast per cohort -- the cache key covers the store
+# fingerprint, cohort name, gene count and both groups' library ids, so a
+# refresh invalidates rather than silently reusing. First build is ~25 min for
+# both cohorts; a re-render reloads in seconds.
+#
+# The (count, normalizer) pair is rigel TOTAL counts over effective length,
+# giving standard TPM. Rigel deconvolutes gDNA upstream, so total counts are
+# trustworthy here and use every read rather than only the spliced fraction.
+# ---------------------------------------------------------------------
+wade_z    <- cfrna_store(cohort)
+wade_qnt  <- read_rigel_quant(wade_z, measures = c("count", "effective_length"))
+wade_res  <- lapply(names(wade_cds), function(ch)
+  cfrna_wade_run_all(wade_qnt$count, wade_qnt$effective_length,
+                     wade_cds[[ch]], wade_runnable[[ch]],
+                     cache_dir = cfrna_cache("wade")))
+names(wade_res) <- names(wade_cds)
+
+# ---------------------------------------------------------------------
+# Reporting objects.
+# ---------------------------------------------------------------------
+wade_sig <- lapply(wade_res, cfrna_wade_signal_check)
+
+# Cross-contrast membership uses only the NOMINATABLE contrasts: a descriptive
+# contrast is run and reported, but it does not contribute nominations, so
+# including it here would let a 5-patient comparison mark a gene as consensus.
+wade_cross <- lapply(names(wade_res), function(ch) {
+  keep <- intersect(names(wade_res[[ch]]), wade_nominatable)
+  cfrna_wade_cross(wade_res[[ch]][keep], top_n = 100L,
+                   tail_ok = all(unlist(wade_tail_ok[keep])))
+})
+names(wade_cross) <- names(wade_res)
+
+# Per-gene diagnostic inputs: the normalized matrix WADE actually ran on for
+# the primary contrast, rebuilt with the same seed so the curves are the same
+# numbers the statistic saw.
+wade_primary_libs <- cfrna_wade_resolve(
+  CFRNA_WADE_CONTRASTS[[which(vapply(CFRNA_WADE_CONTRASTS,
+                                     function(x) x$id, character(1)) == WADE_PRIMARY)]],
+  wade_cds[[WADE_COHORT_MAIN]]$libraries)
+wade_libs <- c(wade_primary_libs$case, wade_primary_libs$ctrl)
+wade_cond <- c(rep(1L, length(wade_primary_libs$case)),
+               rep(0L, length(wade_primary_libs$ctrl)))
+wade_gi   <- wade_cds[[WADE_COHORT_MAIN]]$gene_idx
+wade_Xc   <- wade_qnt$count[wade_gi, wade_libs, drop = FALSE]
+wade_Xn   <- wade_qnt$effective_length[wade_gi, wade_libs, drop = FALSE]
+wade_tpm  <- wade_normalize(wade_Xc, wade_Xn,
+                            wade_lib_size(wade_Xc, wade_Xn), seed = 1L)
+rownames(wade_tpm) <- wade_cds[[WADE_COHORT_MAIN]]$gene_name
+
+# Four genes spanning the profiles the diagnostic is built to distinguish,
+# CHOSEN FROM THE DATA rather than carried over from v7 -- v7's picks
+# (CEACAM5 / MUC1 / PANTR1 / GRM7) were right for v7's contrast and cohort and
+# may not be the illustrative cases here.
+#
+# Selection rule on the primary contrast:
+#   subset  top-ranked gene with tail.conc >= 0.6 AND elevated in several
+#           patients -- "subset" must mean a SUBSET, so the patient count is
+#           part of the definition rather than a hope about tail.conc.
+#   bulk    top-ranked gene with tail.conc < 0.4.
+#   outlier high tail.conc that the permutation test REFUSES, and verified to
+#           exceed the control maximum in <= 2 PATIENTS. v7 asserted this
+#           profile; here it is checked, because "single outlier" is the whole
+#           point of the panel and a gene elevated in 19 patients would make
+#           the caption false.
+#   null    smallest |diff.mean| among genes whose tail.conc is INTERPRETABLE.
+#           Selecting on |diff.mean| alone lands on a gene whose tail.conc has
+#           exploded (the denominator is what is near zero), which prints a
+#           meaningless 149 in the panel subtitle.
+WADE_CURVE_GENES <- local({
+  r  <- wade_res[[WADE_COHORT_MAIN]][[WADE_PRIMARY]]
+  # Patients above the control maximum, per gene -- the measurement that makes
+  # "subset" and "single outlier" claims checkable rather than asserted.
+  lbp <- wade_cds[[WADE_COHORT_MAIN]]$libraries
+  pat <- lbp$patient[match(colnames(wade_tpm), lbp$library)]
+  n_pat_above <- function(g) {
+    v <- wade_tpm[g, ]; mx <- max(v[wade_cond == 0])
+    dplyr::n_distinct(pat[wade_cond == 1 & v > mx])
+  }
+  d <- dplyr::filter(r, diff.mean > 0, !is.na(tail.conc), abs(tail.conc) <= 1.5)
+
+  cand_sub <- d |> dplyr::filter(tail.conc >= 0.6) |> dplyr::arrange(rank)
+  g_sub <- cand_sub$gene[which(vapply(cand_sub$gene, n_pat_above, integer(1)) >= 5)[1]]
+
+  g_bulk <- d |> dplyr::filter(tail.conc < 0.4) |> dplyr::arrange(rank) |>
+    dplyr::slice(1) |> dplyr::pull(gene)
+
+  cand_out <- d |> dplyr::filter(p.tail > 0.5, tail.conc > 0.9) |>
+    dplyr::arrange(dplyr::desc(diff.mean))
+  g_out <- cand_out$gene[which(vapply(cand_out$gene, n_pat_above, integer(1)) <= 2)[1]]
+
+  g_null <- d |> dplyr::arrange(abs(diff.mean)) |> dplyr::slice(1) |> dplyr::pull(gene)
+  unique(c(g_sub, g_bulk, g_out, g_null))
+})
+# Patient counts for the caption, so the figure's own claims are computed.
+WADE_CURVE_NPAT <- local({
+  lbp <- wade_cds[[WADE_COHORT_MAIN]]$libraries
+  pat <- lbp$patient[match(colnames(wade_tpm), lbp$library)]
+  vapply(WADE_CURVE_GENES, function(g) {
+    v <- wade_tpm[g, ]; mx <- max(v[wade_cond == 0])
+    dplyr::n_distinct(pat[wade_cond == 1 & v > mx])
+  }, integer(1))
+})
+WADE_CURVE_TITLES <- setNames(
+  paste0(WADE_CURVE_GENES, c("  (subset marker)", "  (bulk shift)",
+                             "  (single outlier \u2014 test refuses)",
+                             "  (null)")[seq_along(WADE_CURVE_GENES)]),
+  WADE_CURVE_GENES)
+
+# Nomination table for the primary contrast, with cross-contrast support.
+wade_nom_table <- lapply(names(wade_res), function(ch) {
+  r  <- cfrna_wade_nominate(wade_res[[ch]][[WADE_PRIMARY]],
+                            tail_ok = isTRUE(wade_tail_ok[[WADE_PRIMARY]]))
+  cx <- wade_cross[[ch]]
+  n_other <- cx$n_nominating[match(r$gene, cx$gene)] - 1L
+  r |>
+    dplyr::mutate(n_other = ifelse(is.na(n_other), 0L, pmax(n_other, 0L))) |>
+    dplyr::arrange(rank) |> dplyr::slice(1:25) |>
+    dplyr::transmute(Rank = rank, Gene = gene,
+                     `diff.mean` = round(diff.mean, 0),
+                     fc = round(fc, 1),
+                     `tail.conc` = round(tail.conc, 2),
+                     `p.diff` = signif(p.diff, 2),
+                     `other contrasts` = n_other)
+})
+names(wade_nom_table) <- names(wade_res)
+
+# Cohort comparison. `measurable` is the denominator that makes `shared`
+# readable: a nomination absent from the other cohort may be a gene that cohort
+# cannot measure rather than a disagreement.
+wade_cohort_compare <- local({
+  chs <- names(wade_res)
+  ids <- Reduce(intersect, lapply(wade_res, names))
+  dplyr::bind_rows(lapply(ids, function(id) {
+    sets <- lapply(chs, function(ch) {
+      r <- cfrna_wade_nominate(wade_res[[ch]][[id]],
+                               tail_ok = isTRUE(wade_tail_ok[[id]]))
+      r$gene[r$nominated]
+    })
+    names(sets) <- chs
+    genes <- lapply(chs, function(ch) wade_cds[[ch]]$gene_name)
+    names(genes) <- chs
+    dplyr::bind_rows(lapply(chs, function(ch) {
+      other <- setdiff(chs, ch)[1]
+      tibble::tibble(
+        Contrast = attr(wade_res[[ch]][[id]], "contrast_label"),
+        Cohort = ch, Genes = length(genes[[ch]]),
+        nominated = length(sets[[ch]]),
+        measurable = sum(sets[[other]] %in% genes[[ch]]),
+        shared = length(intersect(sets[[ch]], sets[[other]])))
+    }))
+  }))
+})
+
+# Cost table for S7.7. `cached` distinguishes a fresh run from a reload, so the
+# quoted timing is honest about which it is.
+wade_cost <- dplyr::bind_rows(lapply(names(wade_res), function(ch)
+  dplyr::bind_rows(lapply(names(wade_res[[ch]]), function(id) {
+    r <- wade_res[[ch]][[id]]
+    tibble::tibble(Contrast = attr(r, "contrast_label"), Cohort = ch,
+                   Genes = attr(r, "n_genes"),
+                   `Case/Ctrl` = sprintf("%d / %d", attr(r, "n_case"), attr(r, "n_ctrl")),
+                   `Seconds` = round(attr(r, "elapsed_sec") %||% NA_real_, 1))
+  }))))
+
+# ---------------------------------------------------------------------
+# The combinatorial permutation floor (S7.4): probability that label shuffling
+# puts all k altered samples in the case group. A property of the group sizes
+# alone, so it is computed exactly rather than simulated -- v7 simulated the
+# equivalent curve, which was slower and noisier for the same answer.
+#
+# DEFINED IN SETUP, NOT IN THE SUPPLEMENT CHUNK. The prose quotes these values
+# ABOVE the chunk that used to build them, and an inline `r` on a not-yet-
+# defined object renders as an EMPTY STRING rather than erroring -- the exact
+# silent failure gate 6 exists to catch. Anything quoted anywhere is built here.
+# ---------------------------------------------------------------------
+wade_pfloor <- function(n1, n0, k) exp(lchoose(n1, k) - lchoose(n1 + n0, k))
+wade_floor_tbl <- dplyr::bind_rows(lapply(names(wade_res[[WADE_COHORT_MAIN]]), function(id) {
+  r  <- wade_res[[WADE_COHORT_MAIN]][[id]]
+  n1 <- attr(r, "n_case"); n0 <- attr(r, "n_ctrl")
+  tibble::tibble(id = id, n_case = n1, n_ctrl = n0,
+                 k2 = wade_pfloor(n1, n0, 2), k3 = wade_pfloor(n1, n0, 3),
+                 k5 = wade_pfloor(n1, n0, 5))
+}))
+
+# ---------------------------------------------------------------------
+# The single FDR-significant result across every run, and the evidence that it
+# is a GPD extrapolation artefact rather than a discovery (S7.4 callout).
+# Found by SEARCHING all runs rather than by knowing which one it is, so if a
+# future refresh moves it -- or produces none -- the callout tracks the data.
+# ---------------------------------------------------------------------
+wade_n_runs <- sum(vapply(wade_res, length, integer(1)))
+wade_gpd <- local({
+  fl <- 1 / (WADE_NPERMS * 250)          # the .gpd_tail_p() floor
+  hits <- dplyr::bind_rows(lapply(names(wade_res), function(ch)
+    dplyr::bind_rows(lapply(names(wade_res[[ch]]), function(id) {
+      r <- wade_res[[ch]][[id]]
+      s <- dplyr::filter(r, padj.tail < 0.10 | padj.diff < 0.10)
+      if (!nrow(s)) return(NULL)
+      dplyr::transmute(s, cohort = ch, id = id, gene,
+                       p = pmin(p.tail, p.diff),
+                       padj = pmin(padj.tail, padj.diff),
+                       at_floor = p <= fl,
+                       n_genes = nrow(r),
+                       n_case = attr(r, "n_case"), n_ctrl = attr(r, "n_ctrl"))
+    }))))
+  stopifnot(nrow(hits) >= 1)             # the callout describes a real hit
+  dplyr::arrange(hits, padj)[1, ]
+})
+wade_gpd_gene   <- wade_gpd$gene
+wade_gpd_padj   <- wade_gpd$padj
+wade_gpd_p      <- wade_gpd$p
+wade_gpd_ngenes <- wade_gpd$n_genes
+wade_gpd_nprobs <- min(wade_gpd$n_case, wade_gpd$n_ctrl)
+# What BH would give from the EMPIRICAL floor alone -- the counterfactual that
+# shows the significance is entirely the tail fit's doing.
+wade_gpd_padj_emp <- (1 / (WADE_NPERMS + 1)) * wade_gpd_ngenes
+# How many patients actually carry the signal.
+wade_gpd_support <- local({
+  cd <- wade_cds[[wade_gpd$cohort]]
+  sp <- CFRNA_WADE_CONTRASTS[[which(vapply(CFRNA_WADE_CONTRASTS,
+                                          function(x) x$id, character(1)) == wade_gpd$id)]]
+  rr <- cfrna_wade_resolve(sp, cd$libraries)
+  lbs <- c(rr$case, rr$ctrl)
+  cnd <- c(rep(1L, length(rr$case)), rep(0L, length(rr$ctrl)))
+  Xc <- wade_qnt$count[cd$gene_idx, lbs, drop = FALSE]
+  Xn <- wade_qnt$effective_length[cd$gene_idx, lbs, drop = FALSE]
+  tp <- wade_normalize(Xc, Xn, wade_lib_size(Xc, Xn), seed = 1L)
+  rownames(tp) <- cd$gene_name
+  v  <- tp[wade_gpd_gene, ]
+  mx <- max(v[cnd == 0])
+  hi <- names(v)[cnd == 1 & v > mx]
+  list(n_lib = length(hi),
+       n_pat = dplyr::n_distinct(cd$libraries$patient[match(hi, cd$libraries$library)]))
+})
+wade_gpd_nlib <- wade_gpd_support$n_lib
+wade_gpd_npat <- wade_gpd_support$n_pat
+
+# Normalizer comparison quoted in S7.6. WADE normalizes internally rather than
+# consuming cfrna_cd_matrix(), so the claim "the two correct comparably" has to
+# carry its own measurement. Residual dependence of per-library MEAN ABUNDANCE
+# on sequencing depth after normalizing -- the same criterion R/normalize.R used
+# to choose ic_spl_sum, so the two numbers are comparable.
+wade_norm_rho <- local({
+  f <- function(ch) {
+    cd <- wade_cds[[ch]]; libs <- cd$library_ids
+    Cc <- wade_qnt$count[cd$gene_idx, libs, drop = FALSE]
+    Ce <- wade_qnt$effective_length[cd$gene_idx, libs, drop = FALSE]
+    dep <- cd$libraries$on_spliced[match(libs, cd$libraries$library)]
+    tp  <- wade_normalize(Cc, Ce, wade_lib_size(Cc, Ce), seed = 1L)
+    c(raw  = stats::cor(colMeans(log2(Cc + 1)), dep, method = "spearman"),
+      wade = stats::cor(colMeans(log2(tp + 1)), dep, method = "spearman"),
+      proj = stats::cor(colMeans(wade_mats[[ch]][, libs, drop = FALSE]), dep,
+                        method = "spearman"))
+  }
+  a <- f(WADE_COHORT_MAIN)
+  list(raw_full = a[["raw"]], wade_full = a[["wade"]], proj_full = a[["proj"]])
+})
+```

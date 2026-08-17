@@ -1,0 +1,286 @@
+## 4.x Discovery: subset-aware differential expression (WADE)
+
+The unsupervised views above establish what varies across this cohort. This
+section asks the discovery question directly: **which genes' plasma cfRNA
+abundance separates one clinical group from another**, knowing that a "case"
+group is heterogeneous — a signal may be present in a fraction of cases and
+absent in the rest.
+
+The method is **WADE** (Wasserstein Area Differential Expression), the lab's
+subset-aware test. It compares two groups' empirical quantile functions rather
+than their means, and reports a **bulk** axis (the signed area between them,
+which equals the mean difference) alongside a **subset** axis (the mean
+difference over the top-10% quantiles, where a rare high-expressing subset
+concentrates). How the statistic works, why inference is by permutation with a
+Generalized-Pareto tail refinement, and what the method does and does not
+guarantee are in @sec-wade-method; this section is what the contrasts found.
+
+### 4.x.1 There is no single control group, so there is no single contrast
+
+The cohort has one cancer group and **four different kinds of control**, and
+they are different in kind rather than in label:
+
+```{r}
+#| label: tbl-wade-strata
+wade_strata[[WADE_COHORT_MAIN]] |>
+  dplyr::transmute(Group = label, Libraries = libraries, Patients = patients,
+                   `Libs/patient` = libs_per_patient, `What it is` = note) |>
+  knitr::kable(align = "lrrrl",
+    caption = sprintf(paste("Clinical strata in the %s cohort. The four reference",
+      "groups are not interchangeable: one is screened cancer-free, one is",
+      "screened biomarker-POSITIVE with malignancy unresolved, one carries",
+      "same-organ neoplastic precursor lesions, and one carries benign disease",
+      "in other organs. Pooling them buys sample size and costs interpretation."),
+      WADE_COHORT_MAIN))
+```
+
+This is a discovery section, so the taxonomy is treated as something to learn
+from rather than a nuisance to average over. We therefore run WADE **three
+ways**: with all controls pooled (maximum power), with the strata separated
+(interpretable reference), and **control against control** — which asks what
+each kind of reference population actually contributes, and is the only way to
+find out whether a "cancer" signal is really a
+disease-versus-cancer-free-plasma signal.
+
+::: {.callout-important}
+## v7's grouping code returns zero controls on this store
+
+v7 built its clinical groups with `grepl("control", disease)`. **No disease
+label in the 2026-08-02 store contains the substring "control"** — the
+surveillance group is `pancreas_high_risk` — so that expression silently
+assigns all `r wade_n_hr` control libraries to "Cancer" and leaves the reference
+group empty. `R/pca.R::cfrna_broad_group()` already caught and documented this.
+
+Auditing the registry against this cohort's vocabulary found a second, live
+instance: **`prostate_high_psa` appears in neither `CFRNA_CONTROL_GROUPS` nor
+`CFRNA_BENIGN`**, so it falls through the "unknown is Cancer" default and
+`r wade_n_psa` screen-positive control patients are counted as cancer cases.
+Both are the same failure mode — a clinical category inferred from a string
+pattern or a default instead of a registry — and
+`cfrna_control_strata_audit()` now fails loudly on it rather than defaulting.
+:::
+
+### 4.x.2 Screening the contrasts before running them
+
+Nine candidate contrasts are enumerated with their group sizes, and each is
+screened on three axes **before** it is run. The screen is not a formality: it
+refuses one contrast outright and caps what may be claimed from three more.
+
+- **Probe design.** Panels were introduced over time and enrolment was not
+  balanced across them, so a group difference can be a panel difference.
+  Measured as Cramér's V on group × **design version** — not capture label,
+  because v6f shares v6's gene targets and splitting them invents a batch the
+  design does not have.
+- **Sequencing depth.** WADE's statistic is a quantile area on normalized
+  abundance, so a systematic depth difference shifts every quantile of the
+  deeper group and manufactures signed area.
+- **Quantile-grid resolution.** WADE compares the groups at
+  `min(n_case, n_ctrl)` probabilities and the tail window is the top 10% of
+  those. A contrast with 6 in the smaller group has a **one-point** tail: its
+  "subset axis" is a single order statistic, and calling that subset detection
+  is a category error rather than a weak result.
+
+Every test is reported at two units — all libraries, and one library per
+patient. The patient-level unit is the one that decides, because libraries are
+not independent: within-patient library pairs correlate at median Spearman
+`r sprintf("%.2f", wade_exch$within_patient)` against
+`r sprintf("%.2f", wade_exch$same_disease)` for same-disease
+different-patient pairs (*p* = `r sprintf("%.1e", wade_exch$p_value)`,
+`r wade_exch$n_within` vs `r wade_exch$n_same_disease` pairs), so a
+library-level test counts correlated replicates as independent observations.
+
+```{r}
+#| label: fig-wade-screen
+#| fig-cap: "Contrast feasibility has two independent axes and a candidate can fail on either. x = size of the smaller group, which IS the quantile-grid resolution (log); y = Cramér's V between group and probe design version. Filled markers are one library per patient, open markers all libraries, joined by a segment — the gap between them is the pseudoreplication effect. Grey band: below the nomination floor. Red band: probe design predicts group, which no sample size fixes. Colour is the index-level verdict."
+#| fig-width: 9.6
+#| fig-height: 6.2
+disc_fig_wade_screen(wade_screen[[WADE_COHORT_MAIN]], cohort_label = WADE_COHORT_MAIN)
+```
+
+```{r}
+#| label: tbl-wade-screen
+wade_screen[[WADE_COHORT_MAIN]] |>
+  dplyr::filter(unit == "index") |>
+  dplyr::transmute(Contrast = label, Family = family,
+                   Case = n_case, Ctrl = n_ctrl, `Tail pts` = k_tail,
+                   `V design` = round(panel_v, 2),
+                   `Depth fc` = round(depth_fc, 2),
+                   Verdict = verdict, Why = reason) |>
+  knitr::kable(align = "llrrrrrll",
+    caption = paste("Contrast screen, one library per patient. `Tail pts` is the",
+      "number of order statistics in the top-10% window — the subset axis is",
+      "believable only when this is 2 or more. Verdicts: `run` (no screen fired),",
+      "`caution` (runnable, caveat named), `descriptive` (too small to nominate",
+      "from, but the comparison is still interpretable — effect sizes only),",
+      "`refuse` (design confounding makes the result uninterpretable at any",
+      "sample size)."))
+```
+
+**One contrast is refused.** Screen-positive-vs-surveillance is confounded with
+probe design at V = `r sprintf("%.2f", wade_v_screenpos)`: every
+screen-positive library is v6-design while the surveillance group spans v3–v6,
+so a gene list from it would have the panel as its most likely explanation.
+That is not fixable by enrolling more patients into the existing design mix, and
+restricting to v6-design alone leaves only
+`r wade_pm_v6_nctrl` surveillance libraries — below the floor. What *is*
+buildable is the panel-matched complement: **cancer vs screen-positive within
+v6-design only**, where the confound is removed by construction rather than by
+adjustment. That contrast is in the run set.
+
+**Three control-vs-control contrasts are `descriptive`.** They survive the
+design screen but have 5–7 patients in the smaller group. Rather than drop
+them, we run them and report effect sizes and top genes while excluding them
+from the nomination product — "underpowered" and "uninterpretable" are
+different problems, and refusing to run a small comparison hides what the
+current data does say. Each is a specific, quantified enrolment target rather
+than a dead end.
+
+### 4.x.3 What the contrasts found
+
+```{r}
+#| label: tbl-wade-signal
+wade_sig[[WADE_COHORT_MAIN]] |>
+  dplyr::transmute(Contrast = label, Case = n_case, Ctrl = n_ctrl,
+                   `p<0.01 bulk` = n_bulk, `p<0.01 tail` = n_tail,
+                   Expected = expected, `Enrich bulk` = enrich_bulk,
+                   `Min FDR` = signif(pmin(min_padj_bulk, min_padj_tail), 2),
+                   `Secs` = round(elapsed_sec)) |>
+  knitr::kable(align = "lrrrrrrrr",
+    caption = paste("Raw signal against chance expectation.",
+      "With ~2,200-2,800 genes and 13-34 reference libraries, exactly one gene",
+      "across all", wade_n_runs, "runs clears FDR < 0.10 on either axis -- and",
+      "that one is an extrapolation artefact rather than a discovery (S7.4).",
+      "`Min FDR` is therefore a power statement, not an absence of signal: the",
+      "enrichment of nominal p<0.01 genes over the number expected by chance is",
+      "what says the signal is real. Nomination is by rank score throughout."))
+```
+
+The framing v7 established still holds and is worth restating plainly: **with
+this many genes and this few reference libraries the p-values are not the
+product**. Across all `r wade_n_runs` runs, exactly one gene clears FDR < 0.10 —
+`r wade_gpd_gene` on the subset axis of the pancreatic-precursor contrast — and
+its *p*-value sits precisely at the tail-fit extrapolation floor on a one-point
+tail window, so it is a resolution limit being reported rather than a
+discovery (@sec-wade-method). What the permutation test does provide is the
+enrichment above chance, and the protection against calling a single extreme
+sample a discovery. Genes are therefore **nominated by rank score**, and where
+the tail window is one or two order statistics the subset axis is dropped from
+nomination entirely.
+
+```{r}
+#| label: fig-wade-volcano
+#| fig-cap: "Bulk effect against subset effect for the primary detection contrast. Each point is one on-target gene, both axes up-in-case, log scales with explicit ranges from the data. Every gene sits above the y=x diagonal because the tail is the high end of the distribution, so the distance above the diagonal is the subset signal. Colour splits nominated genes by tail concentration; grey is unnominated."
+#| fig-width: 9.6
+#| fig-height: 6.6
+disc_fig_wade_volcano(wade_res[[WADE_COHORT_MAIN]][[WADE_PRIMARY]],
+                      tail_ok = wade_tail_ok[[WADE_PRIMARY]],
+                      extra_labels = WADE_CANON_GENES)
+```
+
+```{r}
+#| label: fig-wade-curves
+#| fig-cap: !expr sprintf("The statistic one gene at a time, on the primary contrast. Top row: case and control quantile functions, grey band = top-10%% tail window. Bottom row: cumulative signed area, whose endpoint at p=1 equals diff.mean, and whose SHAPE is the whole distinction the subset axis exists to capture. The four genes are selected from the data by rule, not by hand, and the profile claims are verified rather than asserted: *%s* is elevated above every control in %d patients (a genuine subset), *%s* rises steadily from the middle quantiles (a bulk shift), *%s* clears the control maximum in only %d patient(s) and the permutation test therefore refuses it despite tail.conc = 0.99, and *%s* is a null. The outlier panel is the important one: shape statistics alone cannot tell it from the subset marker, and the permutation p-value is what separates them.", WADE_CURVE_GENES[1], WADE_CURVE_NPAT[[WADE_CURVE_GENES[1]]], WADE_CURVE_GENES[2], WADE_CURVE_GENES[3], WADE_CURVE_NPAT[[WADE_CURVE_GENES[3]]], WADE_CURVE_GENES[4])
+#| fig-width: 11
+#| fig-height: 5.4
+disc_fig_wade_curves(wade_tpm, wade_cond, WADE_CURVE_GENES,
+                     wade_res[[WADE_COHORT_MAIN]][[WADE_PRIMARY]],
+                     titles = WADE_CURVE_TITLES)
+```
+
+The outlier panel is the cautionary case that justifies carrying a p-value the
+nomination does not use. Its `tail.conc` is 0.99 — on the shape statistics alone
+it is indistinguishable from the top-ranked subset marker — but it clears the
+control maximum in only
+`r WADE_CURVE_NPAT[[WADE_CURVE_GENES[3]]]` patient(s), and the permutation test
+declines it (*p* = `r sprintf("%.2f", dplyr::filter(wade_res[[WADE_COHORT_MAIN]][[WADE_PRIMARY]], gene == WADE_CURVE_GENES[3])$p.tail)`).
+The shape statistics describe subset structure; the permutation p-value is what
+stops one extreme sample being called a discovery.
+
+```{r}
+#| label: fig-wade-cross
+#| fig-cap: "Cross-contrast nomination membership. Rows are genes nominated by at least one contrast, ordered by how many contrasts nominated them and then by best rank, so the top of the panel is the consensus set and the bottom is contrast-specific. Columns are contrasts, coloured by family. Grey = not nominated by that contrast. Reading down a single column gives that contrast's private nominations; reading across the top rows gives the genes that do not depend on which reference group was used."
+#| fig-width: 9.2
+#| fig-height: 8.4
+disc_fig_wade_cross(wade_cross[[WADE_COHORT_MAIN]],
+                    screen = dplyr::filter(wade_screen[[WADE_COHORT_MAIN]], unit == "index"),
+                    cohort_label = WADE_COHORT_MAIN)
+```
+
+The cross-contrast panel is what the control taxonomy buys. A gene nominated
+against every reference group is a gene whose signal does not depend on which
+control population it was measured against; a gene nominated only against the
+pooled reference is one whose apparent signal may be carried by whichever
+stratum dominates that pool. Genes nominated by a **control-vs-control**
+contrast are the diagnostic cases: they mark axes on which two nominally
+cancer-free populations differ, so a cancer nomination sharing them is
+measuring disease or referral pathway rather than malignancy.
+
+```{r}
+#| label: tbl-wade-nomination
+wade_nom_table[[WADE_COHORT_MAIN]] |>
+  knitr::kable(align = "rlrrrrrl",
+    caption = paste("Top nominations for the primary detection contrast, ranked",
+      "by the bulk discovery score. `diff.mean` is the mean case-control",
+      "difference in TPM; `tail.conc` is the share of that signal concentrated",
+      "in the top-10% quantiles, so a high value marks a subset-driven gene;",
+      "`other contrasts` counts how many of the remaining contrasts also",
+      "nominate the gene. Full per-gene tables for every contrast are exported",
+      "to `disc_tables/`."))
+```
+
+### 4.x.4 Both cohorts
+
+Every contrast is run on both cohort definitions — all panels, and v3 omitted —
+and the results are keyed by cohort throughout. The two differ in libraries and
+genes together, so a nomination present in one and absent from the other may be
+a gene the other cohort cannot measure rather than a disagreement. The
+head-to-head comparison belongs downstream, once the other discovery features
+exist for both; here both sets are simply produced and cached.
+
+```{r}
+#| label: tbl-wade-cohorts
+wade_cohort_compare |>
+  knitr::kable(align = "llrrrrr",
+    caption = paste("The same contrasts on both cohort definitions. `nominated`",
+      "is the top-100 union across axes where the tail axis is usable;",
+      "`shared` counts genes nominated in both cohorts, and `measurable`",
+      "is how many of the other cohort's nominations exist in this cohort's",
+      "gene set at all -- the denominator that makes `shared` interpretable."))
+```
+
+```{r}
+#| label: wade-export
+#| include: false
+# Per-contrast per-gene tables, one CSV per contrast per cohort, plus the
+# cross-contrast membership table. Written from the cached results, so this
+# chunk is cheap and the CSVs cannot disagree with the figures above.
+wade_out <- cfrna_here("disc_tables"); dir.create(wade_out, showWarnings = FALSE)
+for (ch in names(wade_res)) {
+  slug_ch <- gsub("[^a-z0-9]+", "-", tolower(ch))
+  for (id in names(wade_res[[ch]])) {
+    cfrna_wade_nominate(wade_res[[ch]][[id]], tail_ok = isTRUE(wade_tail_ok[[id]])) |>
+      dplyr::transmute(rank, tail.rank, gene,
+        diff.mean = round(diff.mean, 2), log2fc = round(log2(fc), 3),
+        case.mean = round(cond1.mean, 2), ctrl.mean = round(cond0.mean, 2),
+        w1 = round(w1, 2), tail.mean = round(tail.mean, 2),
+        tail.conc = round(tail.conc, 3),
+        score = round(score, 4), tail.score = round(tail.score, 4),
+        p.diff = signif(p.diff, 3), padj.diff = signif(padj.diff, 3),
+        p.tail = signif(p.tail, 3), padj.tail = signif(padj.tail, 3),
+        nominated) |>
+      readr::write_csv(file.path(wade_out, sprintf("wade_%s_%s.csv", slug_ch, id)))
+  }
+  readr::write_csv(wade_cross[[ch]],
+                   file.path(wade_out, sprintf("wade_cross_contrast_%s.csv", slug_ch)))
+  readr::write_csv(dplyr::filter(wade_screen[[ch]], unit == "index"),
+                   file.path(wade_out, sprintf("wade_contrast_screen_%s.csv", slug_ch)))
+}
+```
+
+**Where this goes next.** The discovery product from this section is a set of
+ranked nominations, each annotated with which reference population it was
+measured against and which others reproduce it. The screen's `descriptive` and
+`refuse` verdicts are the enrolment specification that follows from it: more
+surveillance controls on the current panel would move three control-vs-control
+comparisons from descriptive to nominatable, and a surveillance arm on the
+v6 design is what would make the screen-positive contrast testable at all.
