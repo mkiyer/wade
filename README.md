@@ -18,11 +18,6 @@ testing (scDD, waddR) supplies the mechanism, and cancer-outlier profile analysi
 
 ## Status
 
-**There is no Python implementation yet.** This repository currently contains
-reference material and specifications for one, staged deliberately so that
-development can begin from a written contract rather than from a reading of the
-original R.
-
 WADE was prototyped in R inside a cell-free RNA analysis project. The laboratory
 is moving from R to Python, so WADE is being rebuilt as a Python package with a
 Rust-backed core for the permutation loop. The R in `reference/` is the source of
@@ -31,21 +26,59 @@ maintained. See [`docs/design-decisions.md`](docs/design-decisions.md).
 
 | | |
 |---|---|
-| Python package | not started |
-| Rust kernel | not started |
 | Algorithm specification | complete |
 | R reference implementation | staged, runnable, byte-identical to origin |
-| Golden parity fixtures | not generated — first development task |
-| Rust toolchain | **unverified in this environment** |
+| Golden parity fixtures | 20 fixtures, generated from the R through a deterministic seam |
+| Python package | implemented |
+| Parity suite | layers 0–9, passing |
+| Rust kernel | implemented (PyO3 + rayon), 18–22× faster than the NumPy path |
+
+**Parity, measured:** worst-case relative deviation against the R reference is
+**9.2e-15** across 610 comparisons. The normalized matrix, the quantile grids,
+the permutation null matrices and the rank scores are **bit-for-bit identical**
+to R. Full breakdown, and the two places a correct port must *disagree* with the
+R, in [`docs/port-status.md`](docs/port-status.md).
 
 ## Layout
 
 ```
+src/wade/                 the Python package
+rust/src/lib.rs           the permutation kernel
+tests/                    the parity suite (layers 0–9) and the golden fixtures
+tools/r/                  the deterministic seam and the fixture generator
 docs/                     the specifications — written for the port, read these first
 reference/R/              the original R, runnable in a pinned renv sandbox
 reference/docs/           the source documents the specifications were written from
 reference/PROVENANCE.md   what was copied from where, with checksums
 ```
+
+## Install and use
+
+The Rust kernel is optional: without a toolchain the package installs and runs
+on the NumPy path, which is the correctness baseline the kernel is validated
+against.
+
+```bash
+conda create -n wade -c conda-forge python=3.12 numpy scipy pytest maturin rust
+conda activate wade
+pip install -e . --no-build-isolation
+pytest                    # the full parity suite, ~2 s
+```
+
+```python
+import numpy as np
+from wade import wade
+
+res = wade(counts, normalizer, cond, nperms=2000)   # raw counts, genes x samples
+res.nprobs, res.k                                   # what the design actually resolves
+res.diff_mean, res.tail_mean                        # the bulk and subset axes
+res.padj_tail                                       # BH-adjusted, per axis
+```
+
+The entry point takes **raw counts**, not a normalized matrix. The continuity
+jitter that breaks ties in sparse data is applied at count precision *before*
+division, so a pre-normalized matrix cannot reproduce it; `wade_from_matrix()`
+accepts one anyway and documents what that costs.
 
 ## Reading order
 
@@ -65,7 +98,9 @@ Start with the theory, then the implementation detail:
    parity-suite design.
 6. [`docs/design-decisions.md`](docs/design-decisions.md) — what is settled and
    what is deliberately open.
-7. [`ROADMAP.md`](ROADMAP.md) — the ordered work queue.
+7. [`docs/port-status.md`](docs/port-status.md) — what the port measures against
+   the reference, and the decisions taken while building it.
+8. [`ROADMAP.md`](ROADMAP.md) — the ordered work queue.
 
 [`docs/NEXT_SESSION.md`](docs/NEXT_SESSION.md) is the orientation page for a
 session starting fresh in this repository.

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "wade"
+version = "0.1.0.dev0"
+description = "Wasserstein Area Differential Expression — a quantile-area differential-distribution test built for subset detection"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "scipy>=1.10"]
+
+[tool.maturin]
+python-source = "src"
+module-name = "wade._kernel"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "parity: asserts agreement with the R reference on golden fixtures",
+    "slow: takes more than a few seconds",
+    "validation: method-validation simulations, not parity",
+    "kernel: requires the compiled Rust kernel",
+]
