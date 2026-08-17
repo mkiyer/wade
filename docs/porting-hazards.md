@@ -297,14 +297,13 @@ threshold of 1e-8. At the cfRNA primary contrast's `nprobs` = 22 that means
 `|diff.mean| < 5 × 10⁻¹⁰`.
 
 **Measured on the cfRNA primary contrast** (quoted from
-[`reference/docs/WADE_REPO_SCOPE.md`](../reference/docs/WADE_REPO_SCOPE.md) and
-independently from
-[`reference/R/downstream/README.md`](../reference/R/downstream/README.md), which
-agree): **120 of 2,219 genes (5.4%) return `|tail.conc| > 2`, the largest being
-149.** A "share of the signed area" of 149 is not a share of anything. Both source
-documents also record that no *nominated* gene in any of the 18 cfRNA runs was
-affected — but describe that as luck rather than construction, since any threshold
-on `tail.conc` sits directly on top of it.
+[`reference/docs/WADE_REPO_SCOPE.md`](../reference/docs/WADE_REPO_SCOPE.md), whose
+figures [`reference/R/downstream/README.md`](../reference/R/downstream/README.md)
+also carries): **120 of 2,219 genes (5.4%) return `|tail.conc| > 2`, the largest
+being 149.** A "share of the signed area" of 149 is not a share of anything.
+`WADE_REPO_SCOPE.md` additionally records that no *nominated* gene in any of the 18
+cfRNA runs was affected — but describes that as luck rather than construction, since
+any threshold on `tail.conc` sits directly on top of it.
 
 **The cause is structural, not numerical.** `tail.conc = sum(D[1:k]) / sum(D)`. The
 denominator is the total signed area, which vanishes whenever the lower quantiles'

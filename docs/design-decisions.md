@@ -224,7 +224,7 @@ Pick it as a promise, not as a default.
 
 `.gpd_tail_p()` fits the exceedance distribution by method of moments —
 `xi = ½(1 − m²/v)`, `sigma = ½m(1 + m²/v)` — and the file's own comment calls
-MLE-based GPD "the production upgrade" (line 172). `WADE_REPO_SCOPE.md` agrees and
+MLE-based GPD "the production upgrade" (line 141). `WADE_REPO_SCOPE.md` agrees and
 places the upgrade in the new repository rather than in cfRNA.
 
 **Considerations.** The moment estimators are closed-form and dependency-free, which
