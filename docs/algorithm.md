@@ -1,5 +1,10 @@
 # WADE — algorithm specification
 
+> **Note on citations.** This document cites `reference/docs/` and
+> `reference/R/downstream/`, which were pruned once the port was verified.
+> They are quoted here as the provenance of specific claims; the full record,
+> including digests, is in [`../reference/PROVENANCE.md`](../reference/PROVENANCE.md).
+
 WADE (Wasserstein Area Differential Expression) is a two-group
 differential-*distribution* test for per-gene abundance data, built to detect
 genes altered in only a fraction of the case group. This document is a
@@ -131,11 +136,11 @@ quantity a conventional mean-difference test also targets.
 
 **Source discrepancy, corrected here.** Every prose source in this repository
 states the identity without qualification.
-[`supplement_wade.qmd`](../reference/docs/supplement_wade.qmd) line 30, the v7
+`supplement_wade.qmd` line 30, the v7
 narrative
-([`../reference/docs/notebook_sections/v7_section9_wade_discovery.md`](../reference/docs/notebook_sections/v7_section9_wade_discovery.md)
+(`../reference/docs/notebook_sections/v7_section9_wade_discovery.md`
 line 45), the v8 supplement
-([`../reference/docs/notebook_sections/v8_S7_wade_method_supplement.md`](../reference/docs/notebook_sections/v8_S7_wade_method_supplement.md)
+(`../reference/docs/notebook_sections/v8_S7_wade_method_supplement.md`
 line 46) and the header comment of
 [`../reference/R/wade.R`](../reference/R/wade.R) (line 14) all write
 
@@ -667,7 +672,7 @@ runtime.
 
 These are **not** method parameters — they are the source project's decisions
 about when to believe the method's output, taken from
-[`../reference/R/downstream/wade_contrasts.R`](../reference/R/downstream/wade_contrasts.R)
+`../reference/R/downstream/wade_contrasts.R`
 (lines 113–130, constants defined at 116, 121, 126, 129 and 130). They are
 recorded here because their *rationale* is arithmetic
 on WADE's own parameters and generalizes even though the numbers do not.

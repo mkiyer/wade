@@ -48,7 +48,6 @@ tests/                    the parity suite (layers 0–9) and the golden fixture
 tools/r/                  the deterministic seam and the fixture generator
 docs/                     the specifications — written for the port, read these first
 reference/R/              the original R, runnable in a pinned renv sandbox
-reference/docs/           the source documents the specifications were written from
 reference/PROVENANCE.md   what was copied from where, with checksums
 ```
 
@@ -108,8 +107,6 @@ Start with the theory, then the implementation detail:
    the reference, and the decisions taken while building it.
 8. [`ROADMAP.md`](ROADMAP.md) — the ordered work queue.
 
-[`docs/NEXT_SESSION.md`](docs/NEXT_SESSION.md) is the orientation page for a
-session starting fresh in this repository.
 
 ## Running the R reference
 
@@ -154,8 +151,9 @@ hypothetical. Full treatment in [`docs/limits.md`](docs/limits.md).
 
 Extracted from the MCTP cfRNA analysis repository at commit `828f2f1c`. The
 consumer layer that called WADE (contrast registry, feasibility screen, figures)
-stays in that repository and is copied here only as evidence of what a caller
-needs — see [`reference/R/downstream/README.md`](reference/R/downstream/README.md).
+stays in that repository. It was staged here during the port as evidence of what
+a caller needs, and removed once that contract was implemented; see
+[`reference/PROVENANCE.md`](reference/PROVENANCE.md).
 No patient-derived data is included; every fixture and simulation here is
 synthetic. Details in [`reference/PROVENANCE.md`](reference/PROVENANCE.md).
 

@@ -16,9 +16,9 @@ The same digests are also in sha256sums.txt, which contains ONLY digest lines
 so it can be checked without warnings. Re-verify at any time, from this
 directory:
 
-    shasum -a 256 -c sha256sums.txt         # all 8 must report OK
+    shasum -a 256 -c sha256sums.txt         # all 5 must report OK
 
-(Checking this file directly also works and reports the same 8 OK lines, but
+(Checking this file directly also works and reports the same 5 OK lines, but
 shasum warns about the prose around them.)
 
 VERBATIM COPIES — sha256, target path, source path
@@ -72,3 +72,30 @@ that `shasum -c` checks only the files whose byte-identity is a requirement.
   validation_sims_v7.png, validation_sims_v7_calibration.csv,
   validation_sims_v7_power.csv
       Run products of validation_sims_v7.R, regenerated on every run.
+
+
+PRUNED 2026-08-18 — the cfRNA consumer layer
+--------------------------------------------
+Three files were removed from this directory once the Python port was complete
+and independently verified. Their digests are retained in the VERBATIM COPIES
+block above, so this record remains a complete account of what was staged.
+
+    downstream/wade_contrasts.R
+    downstream/wade_figures.R
+    downstream/control_strata.R
+    downstream/README.md          (written by the R track, not a verbatim copy)
+
+Why they went. They were never porting targets — the downstream README said so
+itself — and were staged only as evidence of what a real caller needs from the
+API. That evidence has been absorbed: the caller contract they demonstrate is
+implemented as wade_contrast(), the nprobs/k arithmetic a caller needs before
+running is exposed as tail_window_report(), and the tail.conc display guard they
+used at the figure layer is superseded by a guard on the statistic itself.
+
+They also encoded an unpublished cohort's clinical vocabulary — stratum names,
+disease categories, contrast definitions — which this repository is intended to
+be publishable without.
+
+The five files still listed above are what the port is verified against, and
+wade.R remains byte-identical to the cfRNA original. Everything removed here is
+recoverable from git history at or before commit ac5c49a.

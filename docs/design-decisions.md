@@ -1,12 +1,17 @@
 # Design decisions: what is settled and what is open
 
+> **Note on citations.** This document cites `reference/docs/` and
+> `reference/R/downstream/`, which were pruned once the port was verified.
+> They are quoted here as the provenance of specific claims; the full record,
+> including digests, is in [`../reference/PROVENANCE.md`](../reference/PROVENANCE.md).
+
 This document exists to stop the next session relitigating ground that has already
 been decided. It records five decisions made in this repository's planning sessions
 — the reasoning, not only the outcome — and five questions deliberately left open,
 each with the considerations that bear on it and no invented answer.
 
 Two of the settled decisions **reverse recommendations** in
-[`reference/docs/WADE_REPO_SCOPE.md`](../reference/docs/WADE_REPO_SCOPE.md), which is
+`reference/docs/WADE_REPO_SCOPE.md`, which is
 staged reference material and was written before them. Where that happens this
 document says what the source recommends, what was decided instead, and why. A
 reader who finds the two in conflict should follow this document; the scope analysis

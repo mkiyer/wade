@@ -1,5 +1,10 @@
 # WADE — statistical rationale
 
+> **Note on citations.** This document cites `reference/docs/` and
+> `reference/R/downstream/`, which were pruned once the port was verified.
+> They are quoted here as the provenance of specific claims; the full record,
+> including digests, is in [`../reference/PROVENANCE.md`](../reference/PROVENANCE.md).
+
 This document carries the reasoning that must survive the port. The formulas are
 in [`algorithm.md`](algorithm.md); what the method cannot do is in
 [`limits.md`](limits.md). Here: why this statistic exists, why each design choice
@@ -41,10 +46,10 @@ cases and silent in the other 62, then:
   p-value further from significance.
 
 The example is the source project's own framing:
-[`../reference/docs/supplement_wade.qmd`](../reference/docs/supplement_wade.qmd)
+`../reference/docs/supplement_wade.qmd`
 puts it as "a gene elevated in 15 of 60 cases and silent in the other 45", and
 the v7 narrative uses 15 of 77
-([`../reference/docs/notebook_sections/v7_section9_wade_discovery.md`](../reference/docs/notebook_sections/v7_section9_wade_discovery.md)
+(`../reference/docs/notebook_sections/v7_section9_wade_discovery.md`
 line 37). The two differ in denominator because they were written against
 different cohort versions; the argument is the same and does not depend on
 either number.
@@ -82,7 +87,7 @@ differential-distribution test supplies the **mechanism**, and cancer-outlier
 profile analysis supplies the **goal**. That framing appears verbatim in the
 `wade.R` header
 ([`../reference/R/wade.R`](../reference/R/wade.R) lines 21–24), in
-[`../reference/docs/supplement_wade.qmd`](../reference/docs/supplement_wade.qmd)
+`../reference/docs/supplement_wade.qmd`
 §S7.2, and in the v7 narrative.
 
 **Differential-distribution testing** — cited by the sources as scDD and waddR —
@@ -172,7 +177,7 @@ The intended way to read them is the per-gene diagnostic
 ([`algorithm.md`](algorithm.md) §7): the cumulative signed area, accumulated in
 ascending quantile order, whose endpoint is exactly `diff.mean`. Its three
 readings, as the source project's figure module records them
-([`../reference/R/downstream/README.md`](../reference/R/downstream/README.md)):
+(`../reference/R/downstream/README.md`):
 
 - a broad shift **rises steadily** across all quantiles;
 - a rare high-expressing subset **stays flat then climbs** inside the tail
@@ -331,7 +336,7 @@ things follow, and both must travel with any port:
 
 - **A port that "improves" the floor by returning smaller p-values is a
   regression**, not an enhancement. The source documents say so explicitly
-  ([`../reference/docs/WADE_REPO_SCOPE.md`](../reference/docs/WADE_REPO_SCOPE.md),
+  (`../reference/docs/WADE_REPO_SCOPE.md`,
   parity item 5).
 - **A p-value sitting exactly at the floor means "beyond this cohort's
   resolution", not "very small".** It is a censored value reported at its
@@ -475,7 +480,7 @@ actually used, and they are computed only from columns the test already
 produced. The argument against is the one the source itself makes — "a package
 that offers `score` next to `padj.diff` without comment invites a user to treat
 a heuristic rank as inference"
-([`../reference/docs/WADE_REPO_SCOPE.md`](../reference/docs/WADE_REPO_SCOPE.md)).
+(`../reference/docs/WADE_REPO_SCOPE.md`).
 The prior analysis recommends moving them into a separate namespace documented
 as nomination-not-inference.
 

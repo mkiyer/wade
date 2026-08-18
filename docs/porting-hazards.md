@@ -1,5 +1,10 @@
 # Cross-language porting hazards
 
+> **Note on citations.** This document cites `reference/docs/` and
+> `reference/R/downstream/`, which were pruned once the port was verified.
+> They are quoted here as the provenance of specific claims; the full record,
+> including digests, is in [`../reference/PROVENANCE.md`](../reference/PROVENANCE.md).
+
 The places where two correct-looking implementations of WADE will disagree. Each
 entry states the hazard, why it bites, and how to test for it. The organizing
 principle is that **none of these produces an error**: every one of them returns
@@ -8,7 +13,7 @@ port and a silent wrong answer is a test that was written on purpose.
 
 This document is written against [`reference/R/wade.R`](../reference/R/wade.R) as
 the reference implementation, and it extends the parity section of
-[`reference/docs/WADE_REPO_SCOPE.md`](../reference/docs/WADE_REPO_SCOPE.md) with
+`reference/docs/WADE_REPO_SCOPE.md` with
 measurements taken in this repository's pinned R sandbox and in a local Python
 environment during the session that wrote this document. The function-by-function
 conventions are in [`r-implementation.md`](r-implementation.md); this document
@@ -297,8 +302,8 @@ threshold of 1e-8. At the cfRNA primary contrast's `nprobs` = 22 that means
 `|diff.mean| < 5 × 10⁻¹⁰`.
 
 **Measured on the cfRNA primary contrast** (quoted from
-[`reference/docs/WADE_REPO_SCOPE.md`](../reference/docs/WADE_REPO_SCOPE.md), whose
-figures [`reference/R/downstream/README.md`](../reference/R/downstream/README.md)
+`reference/docs/WADE_REPO_SCOPE.md`, whose
+figures `reference/R/downstream/README.md`
 also carries): **120 of 2,219 genes (5.4%) return `|tail.conc| > 2`, the largest
 being 149.** A "share of the signed area" of 149 is not a share of anything.
 `WADE_REPO_SCOPE.md` additionally records that no *nominated* gene in any of the 18

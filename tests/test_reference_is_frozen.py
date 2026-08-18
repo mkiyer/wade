@@ -40,7 +40,11 @@ def test_checksum_manifest_is_present_and_covers_wade_R():
     assert SUMS.exists(), f"missing {SUMS}"
     entries = _expected()
     assert "wade.R" in entries
-    assert len(entries) == 8, f"expected 8 checksummed files, found {len(entries)}"
+    # The cfRNA consumer layer was pruned once the port was verified; the
+    # manifest tracks what remains. wade.R is the entry that matters — it is
+    # the oracle the golden fixtures were generated from.
+    assert not any(e.startswith("downstream/") for e in entries)
+    assert len(entries) == 5, f"expected 5 checksummed files, found {len(entries)}"
 
 
 @pytest.mark.parametrize("name", sorted(_expected()))

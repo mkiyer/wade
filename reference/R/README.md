@@ -96,10 +96,9 @@ neither worth fixing:
 - **`renv` itself** — installed (bootstrapped into the project library by
   `activate.R`) but not recorded in this lockfile. Normal for a project that
   pins only its analysis dependencies.
-- **`ggrepel`** — used but not installed. It is referenced only by
-  `downstream/wade_figures.R`, which is reference material that does not run here
-  anyway (see `downstream/README.md`). Nothing in the runnable part of this
-  sandbox needs it.
+- **`ggrepel`** — recorded in the lockfile but not installed. It was referenced
+  only by the cfRNA figure layer, which has since been removed (see
+  `CHECKSUMS.txt`). Nothing that runs here needs it.
 
 ## What each file is
 
@@ -107,7 +106,6 @@ neither worth fixing:
 | --- | --- |
 | `wade.R` | **The port's source of truth.** Byte-identical copy of the cfRNA original: normalization, the quantile-area statistic, the permutation loop with GPD tail refinement, the driver, the rank scores, and the per-gene detail function. Do not edit. |
 | `validation_sims_v7.R` | The three method-validation simulations from the v7 notebook's §9.6, as a standalone runnable script — null calibration, subset-vs-bulk discrimination, and power against the combinatorial permutation floor. Writes a three-panel PNG and two CSVs. Runs in about 95 s on one core. |
-| `downstream/` | `wade_contrasts.R`, `wade_figures.R`, `control_strata.R` — the cfRNA layers that consumed the WADE API, as evidence of what a caller needs and what the statistic looks like plotted. **Not porting targets**, and they do not run standalone here. See `downstream/README.md`. |
 | `CHECKSUMS.txt` | Byte-identity record: digests, source paths, cfRNA git SHA, and an explicit list of what is *not* a verbatim copy and why. |
 | `sha256sums.txt` | The same digests, digest-only, for `shasum -a 256 -c`. |
 | `renv.lock` | The 31-package dependency closure, versions and hashes copied verbatim from the cfRNA lockfile. |

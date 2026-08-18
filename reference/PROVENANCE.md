@@ -405,3 +405,26 @@ repository depends on them.
 `reference/R/downstream/` were staged by the R track; their contents and
 provenance are that track's to describe, and the four R source files it copied
 are inventoried above with checksums verified independently here.
+
+
+---
+
+## Pruned after the port was verified (2026-08-18)
+
+`reference/` was staged as substrate for building the Python port. With the port
+complete and verified — 610 parity comparisons against `wade.R`, four layers
+bit-for-bit identical, and golden fixtures committed so the suite runs with no R
+present — the material that had served its purpose was removed:
+
+| removed | why |
+|---|---|
+| `reference/docs/` | The source `.qmd` chunks and notebook extracts the specifications were written from. Fully distilled into `docs/`; two errors they contain (the nine-function count, the unqualified `diff.mean` identity) are corrected there and should not be reintroduced. |
+| `reference/R/downstream/` | The cfRNA consumer layer. Explicitly never a porting target; its API lessons are implemented, and it encoded an unpublished cohort's clinical vocabulary. See `reference/R/CHECKSUMS.txt` for the full record and digests. |
+| `docs/NEXT_SESSION.md` | An orientation page for a session that has since happened. |
+
+What remains is the minimum needed to keep the golden fixtures **reproducible**
+rather than merely asserted: `wade.R` itself, the renv sandbox that runs it, and
+the deterministic seam and generator in `tools/r/`. Deleting those would leave
+`tests/fixtures/` as unfalsifiable numbers.
+
+Everything removed is recoverable from git history at or before commit `ac5c49a`.

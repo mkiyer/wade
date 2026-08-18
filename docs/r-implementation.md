@@ -1,5 +1,10 @@
 # The R implementation, function by function
 
+> **Note on citations.** This document cites `reference/docs/` and
+> `reference/R/downstream/`, which were pruned once the port was verified.
+> They are quoted here as the provenance of specific claims; the full record,
+> including digests, is in [`../reference/PROVENANCE.md`](../reference/PROVENANCE.md).
+
 This document describes what [`reference/R/wade.R`](../reference/R/wade.R) actually
 does, line by line, and which of its behaviours a port must reproduce. It is a
 description of an implementation, not a specification of the method: the
@@ -45,7 +50,7 @@ verified against the file as staged.
 
 ### Correction: the count of nine is wrong
 
-[`reference/docs/WADE_REPO_SCOPE.md`](../reference/docs/WADE_REPO_SCOPE.md) opens by
+`reference/docs/WADE_REPO_SCOPE.md` opens by
 describing `wade.R` as "16 kB, 9 exported functions", and its two tables account
 for nine: seven under *What moves: the method*, plus `wade_lib_size` and
 `wade_normalize` under *What moves but should be reconsidered*. The file defines
@@ -852,7 +857,7 @@ to do with correctness.
 The returned frame has `nprobs` rows and four columns. `y1`/`y0` are the two
 quantile functions for the panel's upper plot; `cum` is the cumulative signed area
 for the lower one. The reading of that panel is recorded in
-[`reference/R/downstream/README.md`](../reference/R/downstream/README.md): a broad
+`reference/R/downstream/README.md`: a broad
 shift rises steadily, a rare high subset stays flat then climbs inside the tail
 window, and a single outlier stays flat then spikes.
 
@@ -876,7 +881,7 @@ header (lines 27-29) states this as the design intent: "Dependencies: matrixStat
 
 ## What the consumer layer implies about the API
 
-[`reference/R/downstream/README.md`](../reference/R/downstream/README.md) is
+`reference/R/downstream/README.md` is
 explicit that nothing in `reference/R/downstream/` is a porting target, and that
 the cfRNA layers are there as evidence of what a caller needs. Four points from it
 bear on the API rather than on cfRNA.

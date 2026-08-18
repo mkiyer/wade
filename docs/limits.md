@@ -1,5 +1,10 @@
 # WADE — limits and failure modes
 
+> **Note on citations.** This document cites `reference/docs/` and
+> `reference/R/downstream/`, which were pruned once the port was verified.
+> They are quoted here as the provenance of specific claims; the full record,
+> including digests, is in [`../reference/PROVENANCE.md`](../reference/PROVENANCE.md).
+
 What WADE does not do, and where it breaks down. This document exists to protect
 a port's future users from overreading its output. It is the counterweight to
 [`algorithm.md`](algorithm.md), which says what the method computes, and
@@ -34,7 +39,7 @@ Both are developed below (§3 and §4).
 ## 2. What WADE does not do
 
 Four stated limitations, taken from
-[`../reference/docs/supplement_wade.qmd`](../reference/docs/supplement_wade.qmd)
+`../reference/docs/supplement_wade.qmd`
 §S7.6, plus a fifth established while checking the algorithm this session. Each
 is a live constraint, not a hypothetical.
 
@@ -85,7 +90,7 @@ The source project measured the correlation and reported every statistic at two
 units — all libraries, and one library per patient — treating the patient-level
 unit as the one that decides feasibility. The measured within-patient versus
 same-disease-different-patient correlation values are inline-computed in
-[`../reference/docs/section4_wade_setup.qmd`](../reference/docs/section4_wade_setup.qmd)
+`../reference/docs/section4_wade_setup.qmd`
 and are **not resolvable from this repository** (the `r ...` expressions are
 unevaluated and the cohort data are not present), so no number is quoted here.
 The qualitative finding recorded in the narrative is that within-patient library
@@ -116,9 +121,9 @@ way. Measured on the source cohort, the two correct sequencing-depth dependence
 comparably — the residual Spearman correlation of per-library mean abundance
 against on-target yield was reported as materially better than uncorrected for
 both, and similar between them (the specific values are inline-computed in
-[`../reference/docs/section4_wade_setup.qmd`](../reference/docs/section4_wade_setup.qmd)
+`../reference/docs/section4_wade_setup.qmd`
 and unevaluated there; the prior analysis in
-[`../reference/docs/WADE_REPO_SCOPE.md`](../reference/docs/WADE_REPO_SCOPE.md)
+`../reference/docs/WADE_REPO_SCOPE.md`
 records $\rho = 0.41$ for WADE's internal TPM against $\rho = 0.36$ for the
 house normalizer and $\rho = 0.79$ uncorrected, on the all-panels cohort). So on
 that cohort this is a **redundancy rather than a defect** — but it is a
@@ -209,7 +214,7 @@ The grid has $m = \min(n_0, n_1)$ points and the tail window is
 $k = \max(1, \lceil q_{\text{tail}} m \rceil)$ of them
 ([`algorithm.md`](algorithm.md) §2.3). The subset axis therefore needs enough
 order statistics to exist. Reproduced from
-[`../reference/docs/supplement_wade.qmd`](../reference/docs/supplement_wade.qmd)
+`../reference/docs/supplement_wade.qmd`
 §S7.5, with the $k$ values re-derived in the sandbox:
 
 | smaller group | grid points | tail window | subset axis |
@@ -294,11 +299,11 @@ a single-outlier gene cannot post a small p-value.
 
 ### 4.2 What the source documents claim, and why it is not tight
 
-[`../reference/docs/supplement_wade.qmd`](../reference/docs/supplement_wade.qmd)
+`../reference/docs/supplement_wade.qmd`
 line 161 states — as do
-[`../reference/docs/notebook_sections/v8_S7_wade_method_supplement.md`](../reference/docs/notebook_sections/v8_S7_wade_method_supplement.md)
+`../reference/docs/notebook_sections/v8_S7_wade_method_supplement.md`
 line 178 and the v7 narrative and figure caption
-([`../reference/docs/notebook_sections/v7_section9_wade_discovery.md`](../reference/docs/notebook_sections/v7_section9_wade_discovery.md)
+(`../reference/docs/notebook_sections/v7_section9_wade_discovery.md`
 lines 592 and 640):
 
 > Below roughly 5% of cases, a shuffled null reproduces the signal and **no
@@ -422,7 +427,7 @@ Across all contrast runs in the source project (both cohorts), **exactly one gen
 reached FDR < 0.10 on either axis**: a gene on the subset axis of the
 pancreatic-precursor contrast. It should not be read as a discovery, for three
 reasons that compound. From
-[`../reference/docs/supplement_wade.qmd`](../reference/docs/supplement_wade.qmd)
+`../reference/docs/supplement_wade.qmd`
 §S7.4:
 
 1. **Its p-value sat exactly at the GPD extrapolation floor**
@@ -441,7 +446,7 @@ reasons that compound. From
 name, the p-value, the adjusted p-value, the gene count, the smaller-group size,
 and the patient count as inline `r ...` expressions computed from the live cohort
 in
-[`../reference/docs/section4_wade_setup.qmd`](../reference/docs/section4_wade_setup.qmd)
+`../reference/docs/section4_wade_setup.qmd`
 (lines 293–337). **Those expressions are unevaluated in this repository and the
 cohort data are not present, so none of those specific values can be quoted.**
 What is verifiable here is the structure of the argument and the constants: at
