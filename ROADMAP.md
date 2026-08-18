@@ -76,16 +76,18 @@ become indistinguishable. This is the same grid resolution `docs/limits.md`
 already documents, surfacing honestly instead of being absorbed by a
 `max(1, ceil(·))`.
 
-### Step 1 is open: the detector — PROTOTYPE NEXT
+### Step 1: the detector — RESOLVED, see docs/method.md section 3
 
 Removing the window removes `tail_mean`, which was the subset-sensitive test.
 Detecting a signal confined to a few percent of the curve is a sparse-signal
 detection problem, where L2-type omnibus statistics lose power badly because the
 signal is diluted across the region that did not move.
 
-**Prototype three detectors and measure power**, at planted affected fractions
-of 1, 2, 5, 10, 25, 50 and 100%, across the geometries that matter (77 v 18,
-100 v 100, 500 v 500):
+Prototyped in `prototypes/` and resolved. Higher Criticism and max-Z lost
+decisively — HC is built for *scattered* sparse signals while WADE's
+alternative is a contiguous block at a known end of an ordered grid. A plain
+mean test proved not to be dominated, being the best single detector for weak
+diffuse effects, which is why it remains stage 1. The three considered:
 
 1. **Scan statistic** — max over `k` of the standardized partial sum from the
    top of the grid, calibrated by permutation. Threshold-free by *maximization*

@@ -56,6 +56,8 @@ from .permutation import draw_perms, null_statistics
 from .pvalues import GPDFit, bh_adjust, gpd_tail_p, perm_pvalues
 from .quantiles import probability_grid, tail_window_size, type7_quantiles
 from .scores import dense_rank_desc, ecdf_values, wade_score
+from .shape import (ShapeResult, affected_fraction, bridge, log_ratio_curve,
+                    shape_test, up_share)
 from .stats import DEFAULT_TAIL_Q, WadeStats, wade_stats
 
 __version__ = "0.1.0.dev0"
@@ -68,6 +70,12 @@ __all__ = [
     "GeneDetail",
     "WadeResult",
     "WadeStats",
+    "up_share",
+    "shape_test",
+    "log_ratio_curve",
+    "bridge",
+    "affected_fraction",
+    "ShapeResult",
     "bh_adjust",
     "cpm",
     "dense_rank_desc",

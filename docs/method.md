@@ -12,10 +12,11 @@ shifted 2× in all of them can produce the same mean difference, and a
 first-moment test cannot tell them apart. Nothing here requires the user to
 declare in advance which they are looking for.
 
-> **Status.** Sections 1–3 and 6–8 describe what is implemented and verified
-> against the R reference. Sections 4–5 describe the agreed redesign of the
-> subset machinery, prototyped and measured but **not yet implemented**. Where
-> the two differ it is marked. `ROADMAP.md` tracks the work.
+> **Status.** All of this is implemented. Sections 1–2 and 6–8 are additionally
+> verified against the R reference; sections 3–5 are new work with no R
+> counterpart, validated against planted ground truth in `tests/test_shape.py`.
+> Section 7 records the superseded machinery, still present because the parity
+> fixtures pin it. `ROADMAP.md` tracks what remains.
 
 ---
 
@@ -82,7 +83,7 @@ that it adds sensitivity the mean test lacks for strong concentrated effects
 
 ## 3. Stage 2 — the shape test
 
-**PLANNED.** Replaces the fixed tail window described in §7.
+Replaces the fixed tail window described in §7.
 
 If the difference were a pure global shift, the running total of $R$ would grow
 *proportionally* — the top 20% of quantiles would carry 20% of it. Measure the
@@ -100,7 +101,14 @@ The statistic scans every window width and takes the most surprising one:
 
 $$T = \max_k \frac{B_k - \mu_k}{\sigma_k}$$
 
-with $\mu_k, \sigma_k$ the null moments of $B_k$. **Threshold-free by
+with $\mu_k, \sigma_k$ the null moments of $B_k$. ($B_m \equiv 0$ carries no
+information, so the scan runs over $k < m$.) The **argmax** is exposed as a
+diagnostic but is *not* a fraction estimate: it tracks the affected fraction
+when the subset is shifted multiplicatively and underestimates it several-fold
+when the subset's values are replaced outright, because the log-ratio curve then
+declines steeply across the affected region and the cumulative departure peaks
+before it ends. Measured total absolute error against planted fractions across
+both signal shapes: 0.315 for the argmax against 0.084 for $\hat\pi$. **Threshold-free by
 maximization rather than by choosing.** This is the direct answer to COPA's
 defect: COPA required a percentile cutoff, so it had to be run at several and
 left the user holding several answers. The scan runs at all of them and the
@@ -157,7 +165,7 @@ higher", and the difference is documented rather than hidden:
 
 ## 4. Characterization
 
-**PLANNED.** Two bounded, parameter-free numbers, both read off $R$.
+Two bounded, parameter-free numbers, both read off $R$.
 
 ### The effective affected fraction
 
@@ -195,6 +203,24 @@ Together the pair is a complete description. Measured at 500 v 500:
 A symmetric variance change and a one-sided 30% subset both give
 $\hat{\pi} \approx 0.3$ and are separated by `up_share` (0.50 against ~1.0).
 
+### Composition moves both, and that is not a defect
+
+Library-size normalization couples genes. A matrix in which a substantial
+fraction of genes are strongly up in cases inflates the case libraries, which
+pushes every *other* gene down — and because the offset is systematic while the
+sampling noise is not, at large $n$ it takes very little signal to dominate.
+Measured at 400 v 400, five strongly-up genes among 205 were enough to move the
+null genes' `up_share` from ~0.5 to near 0.
+
+Consequences to keep in view when reading a characterization: null genes
+acquire a small consistent fold change, so their $\hat\pi$ drifts toward 1
+(they genuinely *are* globally shifted, relative to the library) and their
+`up_share` collapses toward 0 or 1. **The shape test itself is unaffected** —
+the bridge is invariant to exactly this kind of global offset — but the two
+descriptive statistics are not. This is a property of normalized data that
+affects any differential method, not something WADE introduces, and it is
+asserted in `tests/test_shape.py` so it cannot be forgotten.
+
 ### Resolution limit, stated rather than hidden
 
 The grid has $m$ points, so **no fraction finer than $1/m$ is resolvable.**
@@ -215,8 +241,6 @@ instead of being absorbed by a rounding rule.
 ---
 
 ## 5. Reading the output
-
-**PLANNED.**
 
 | `p_shift` | `p_shape` | interpretation |
 |---|---|---|
@@ -345,6 +369,7 @@ The R reference had two different permutation defaults (1000 in the driver,
 empirical floor $1/(B+1)$ and the extrapolation floor $1/(B n_{\text{tail}})$ —
 it changes every small p-value, not just the runtime.
 
-After §3–4 land, $q_{\text{tail}}$ and the `tail.conc` guard factor disappear
-from this table entirely. **No parameter in the redesign asks the user what
-shape of difference to look for.**
+$q_{\text{tail}}$ and the `tail.conc` guard factor appear nowhere in §3–4.
+**No parameter in the shape test or the characterization asks the user what
+shape of difference to look for.** They survive only in the superseded
+machinery of §7, which the parity fixtures pin.

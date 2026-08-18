@@ -10,6 +10,7 @@ anyway and says plainly what it costs.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from dataclasses import replace as _dc_replace
 
 import numpy as np
 
@@ -22,6 +23,7 @@ from .pvalues import (
     perm_pvalues,
 )
 from .scores import wade_score
+from .shape import ShapeResult, shape_test
 from .stats import DEFAULT_TAIL_Q, WadeStats, split_groups, tail_concentration, wade_stats
 
 __all__ = ["WadeResult", "wade", "wade_from_matrix", "wade_contrast", "DEFAULT_NPERMS",
@@ -85,6 +87,72 @@ class WadeResult:
 
     scores: dict | None = None
 
+    #: The shape test and the characterization (docs/method.md sections 3-4).
+    #: None when nperms == 0, when the shape test is switched off, or when
+    #: min(n_case, n_ctrl) < 3 and the bridge has no interior.
+    shape: ShapeResult | None = None
+    p_shape: np.ndarray | None = None
+    padj_shape: np.ndarray | None = None
+
+    @property
+    def mean_shift(self) -> np.ndarray:
+        """The ordinary mean-difference test — WADE's stage 1.
+
+        Same array as ``diff_mean``, under the name ``docs/method.md`` uses.
+        When the groups are equal-sized this is *exactly* the difference of
+        the two sample means; on unequal groups it is a grid quadrature that
+        over-weights the larger group's extremes.
+
+        Named plainly because that is what it is: the test any conventional
+        DE method already performs, and measurably the best detector for weak
+        diffuse effects. WADE's claim is to add sensitivity it lacks, not to
+        improve on it.
+        """
+        return self.diff_mean
+
+    @property
+    def p_shift(self) -> np.ndarray:
+        """Stage 1 p-value: is there a difference at all?"""
+        return self.p_diff
+
+    @property
+    def padj_shift(self) -> np.ndarray:
+        return self.padj_diff
+
+    @property
+    def pi_hat(self) -> np.ndarray | None:
+        """Effective affected fraction; 1.0 means a global change."""
+        return None if self.shape is None else self.shape.pi_hat
+
+    @property
+    def up_share(self) -> np.ndarray | None:
+        """Share of distributional movement that is upward, in [0, 1]."""
+        return None if self.shape is None else self.shape.up_share
+
+    def interpret(self, alpha: float = 0.05) -> np.ndarray:
+        """The 2x2 of ``docs/method.md`` section 5, as a label per gene.
+
+        =========  =========  ================================================
+        p_shift    p_shape    label
+        =========  =========  ================================================
+        sig        --         ``global`` -- an ordinary DE method finds this
+        sig        sig        ``subset`` -- concentrated; pi_hat says how much
+        --         sig        ``shape-only`` -- no net mean shift
+        --         --         ``none``
+        =========  =========  ================================================
+        """
+        g = self.diff_mean.shape[0]
+        out = np.full(g, "none", dtype=object)
+        if self.p_diff is None:
+            return out
+        shift = np.nan_to_num(self.p_diff, nan=1.0) <= alpha
+        shape = (np.zeros(g, bool) if self.p_shape is None
+                 else np.nan_to_num(self.p_shape, nan=1.0) <= alpha)
+        out[shift & ~shape] = "global"
+        out[shift & shape] = "subset"
+        out[~shift & shape] = "shape-only"
+        return out
+
     @property
     def nprobs(self) -> int:
         """The quantile-grid resolution, ``min(n_case, n_ctrl)``.
@@ -101,7 +169,7 @@ class WadeResult:
 
     def columns(self) -> dict[str, np.ndarray]:
         """The result frame as a plain dict of equal-length arrays."""
-        return {
+        cols = {
             "gene": self.gene,
             "diff_mean": self.diff_mean,
             "diff_frac": self.diff_frac,
@@ -117,8 +185,17 @@ class WadeResult:
             "p_tail": self.p_tail,
             "padj_diff": self.padj_diff,
             "padj_tail": self.padj_tail,
-            **(self.scores or {}),
         }
+        if self.shape is not None:
+            cols.update({
+                "shape_stat": self.shape.statistic,
+                "p_shape": self.p_shape,
+                "padj_shape": self.padj_shape,
+                "pi_hat": self.shape.pi_hat,
+                "up_share": self.shape.up_share,
+            })
+        cols.update(self.scores or {})
+        return cols
 
     def to_pandas(self):
         """Optional convenience. pandas is not a dependency of this package."""
@@ -195,6 +272,7 @@ def _run(
     gene_names,
     compute_scores: bool,
     backend: str,
+    shape: bool,
     jitter: np.ndarray,
     tpm: np.ndarray,
 ) -> WadeResult:
@@ -229,6 +307,16 @@ def _run(
         ref_d = np.zeros(g, dtype=bool)
         ref_t = np.zeros(g, dtype=bool)
 
+    sh = p_shape = padj_shape = None
+    if nperms > 0 and shape and obs.nprobs >= 3:
+        sh = shape_test(x, cond, perms, backend=backend)
+        p_shape, _, _ = perm_pvalues(
+            sh.statistic, sh.null, n_exc_min=n_exc_min, n_tail=n_tail
+        )
+        padj_shape = bh_adjust(p_shape)
+        if not keep_null:
+            sh = _dc_replace(sh, null=None)
+
     tconc, tconc_ok = tail_concentration(
         obs.tail_num, obs.tail_den, tail_conc_max_factor, np.abs(obs.D).sum(axis=1)
     )
@@ -259,6 +347,7 @@ def _run(
         perms=perms,
         null_diff=null_d if keep_null else None,
         null_tail=null_t if keep_null else None,
+        shape=sh, p_shape=p_shape, padj_shape=padj_shape,
         params=dict(
             nperms=nperms, tail_q=tail_q, log2_scale=log2_scale, weight=weight,
             n_exc_min=n_exc_min, n_tail=n_tail,
@@ -297,6 +386,7 @@ def wade(
     keep_null: bool = False,
     compute_scores: bool = False,
     backend: str = "auto",
+    shape: bool = True,
 ) -> WadeResult:
     """Run WADE on a raw count matrix. The primary entry point.
 
@@ -381,7 +471,7 @@ def wade(
         tail_conc_max_factor=tail_conc_max_factor,
         allow_single_sample_group=allow_single_sample_group, keep_null=keep_null,
         gene_names=gene_names, compute_scores=compute_scores, backend=backend,
-        jitter=jitter, tpm=tpm,
+        shape=shape, jitter=jitter, tpm=tpm,
     )
 
 
@@ -403,6 +493,7 @@ def wade_from_matrix(
     keep_null: bool = False,
     compute_scores: bool = False,
     backend: str = "auto",
+    shape: bool = True,
 ) -> WadeResult:
     """Run WADE on a matrix that is **already on a comparable scale**.
 
@@ -437,7 +528,7 @@ def wade_from_matrix(
         tail_conc_max_factor=tail_conc_max_factor,
         allow_single_sample_group=allow_single_sample_group, keep_null=keep_null,
         gene_names=gene_names, compute_scores=compute_scores, backend=backend,
-        jitter=np.zeros_like(x), tpm=x,
+        shape=shape, jitter=np.zeros_like(x), tpm=x,
     )
 
 

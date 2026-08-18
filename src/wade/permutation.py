@@ -34,7 +34,7 @@ except ImportError:                     # pragma: no cover
     _rust = None
 
 __all__ = ["draw_perms", "validate_perms", "null_statistics", "available_backends",
-           "HAVE_RUST_KERNEL"]
+           "shape_null_backend", "HAVE_RUST_KERNEL"]
 
 #: Whether the compiled kernel was built and imported. The package is fully
 #: functional without it — the NumPy path is the correctness baseline and the
@@ -172,3 +172,60 @@ def null_statistics(
         tail[:, b] = d[:, :k].mean(axis=1)
 
     return diff, tail
+
+
+def _shape_null_numpy(xs, b_obs, perms, q):
+    """Two passes over the permutations, on the shift-corrected matrix.
+
+    Pass 1 estimates the null moments of the bridge at every width; pass 2
+    needs them in order to standardize before maximizing, so it has to
+    recompute. Storing every permutation's bridge instead would cost
+    ``B * g * m`` doubles, which at realistic sizes is far larger than the
+    two-pass recomputation is slow.
+    """
+    from .shape import _bridge_from
+
+    g, m = b_obs.shape
+    n_perms = perms.shape[0]
+
+    s1 = np.zeros((g, m))
+    s2 = np.zeros((g, m))
+    for b in range(n_perms):
+        bb = _bridge_from(xs, perms[b], q)
+        s1 += bb
+        s2 += bb * bb
+    mu = s1 / n_perms
+    sd = np.sqrt(np.maximum(s2 / n_perms - mu * mu, 0.0))
+
+    # B_m is identically zero, so its width carries no information and its
+    # null spread is zero; excluding it keeps the maximum honest.
+    usable = sd > 0
+    usable[:, -1] = False
+    safe = np.where(usable, sd, np.inf)
+
+    null = np.empty((g, n_perms), dtype=np.float64)
+    for b in range(n_perms):
+        z = (_bridge_from(xs, perms[b], q) - mu) / safe
+        null[:, b] = z.max(axis=1)
+
+    z_obs = (b_obs - mu) / safe
+    return z_obs.max(axis=1), null, mu, sd, z_obs.argmax(axis=1) + 1
+
+
+def shape_null_backend(xs, b_obs, perms, q, *, backend="auto"):
+    """Dispatch the shape test's permutation work. Returns
+    ``(statistic, null, mu, sd, argmax_k)``."""
+    if backend not in ("auto", "numpy", "rust"):
+        raise ValueError(f"backend must be 'auto', 'numpy' or 'rust'; got {backend!r}")
+    if backend == "rust" and _rust is None:
+        raise RuntimeError(
+            "the compiled kernel is not available; build it with "
+            "`pip install -e .` (needs cargo/rustc), or use backend='numpy'"
+        )
+    xs = np.ascontiguousarray(xs, dtype=np.float64)
+    if backend != "numpy" and _rust is not None and hasattr(_rust, "shape_null"):
+        stat, null, mu, sd, argmax = _rust.shape_null(
+            xs, np.ascontiguousarray(b_obs), np.ascontiguousarray(perms, dtype=np.int64), q
+        )
+        return stat, null.T, mu, sd, argmax
+    return _shape_null_numpy(xs, b_obs, perms, q)
