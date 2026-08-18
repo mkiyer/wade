@@ -3,7 +3,7 @@
 Every WADE statistic is a function of two quantile grids, so the quantile
 convention is part of the specification and not an implementation detail:
 a different type changes every number the method returns and raises
-nothing (``docs/porting-hazards.md`` hazard 1).
+nothing (``docs/implementation-notes.md`` hazard 1).
 
 Type 7 is pinned here explicitly rather than inherited from a library
 default. It is also implemented directly rather than delegated to
@@ -43,7 +43,7 @@ def probability_grid(nprobs: int) -> np.ndarray:
     first ``k`` positions are the upper tail where a rare high-expressing
     subset lives. An ascending grid with the same ``[:k]`` slice computes a
     lower-tail statistic and calls it ``tail_mean``, with no error
-    (``docs/porting-hazards.md`` hazard 9).
+    (``docs/implementation-notes.md`` hazard 9).
 
     ``nprobs = 1`` gives the single probability 1.0, matching R, which
     ``seq(1, 0, length.out = 1)`` returns.

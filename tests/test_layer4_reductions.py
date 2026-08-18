@@ -146,7 +146,7 @@ def test_diff_mean_is_not_the_difference_of_sample_means_on_unequal_groups():
     uniform — the two extremes each carry ``1/m`` against the sample
     mean's ``1/n``.
 
-    The worked example from ``algorithm.md`` section 2.7 pins both halves
+    The worked example from ``method.md`` section 2.7 pins both halves
     at once: gene ``gA``'s case values are not linear in rank so the
     identity fails (11.5 against 9.4), while ``gB``'s are an arithmetic
     sequence so it holds exactly (11.0 = 11.0).

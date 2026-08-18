@@ -4,7 +4,7 @@ Inference is by exchangeability of the labels: draw a uniform permutation
 of the condition vector, recompute the two axes for every gene, repeat.
 
 Two properties of the construction are load-bearing
-(``docs/algorithm.md`` section 4.1):
+(``docs/method.md`` section 4.1):
 
 * **Both axes are tested on the same shuffles.** ``diff_mean`` and
   ``tail_mean`` each get their own null distribution and their own
@@ -163,7 +163,7 @@ def null_statistics(
         if weight != 1.0:
             # Applied by condition, so the WEIGHTED group changes membership
             # every iteration. That is the reference's behaviour; whether it
-            # is intended is open (docs/design-decisions.md O5).
+            # is intended is open (ROADMAP.md O5).
             xb = x * np.where(cb == 0, weight, 1.0)[None, :]
         if log2_scale:
             xb = np.log2(xb + 1.0)

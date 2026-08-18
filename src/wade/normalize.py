@@ -1,11 +1,11 @@
 """Normalizers: raw counts to a comparable scale, with the continuity jitter.
 
 These are separate, individually callable functions rather than part of
-the statistic (``docs/design-decisions.md`` S3): a normalizer produces a
+the statistic (``ROADMAP.md`` S3): a normalizer produces a
 matrix, the statistic consumes one, and :func:`wade.wade` composes them.
 A new normalizer can be added without touching the test.
 
-Why the entry point takes raw counts (``docs/design-decisions.md`` S2)
+Why the entry point takes raw counts (``ROADMAP.md`` S2)
 -----------------------------------------------------------------------
 The continuity jitter is applied **at count precision, before division**.
 In :func:`tpm_like` the jitter is added to the counts and a matching
@@ -18,7 +18,7 @@ still exactly equal — see :func:`wade.wade_from_matrix`, which says so.
 
 The jitter is drawn **once**, before any permutation. Inference is then
 conditional on that one realised draw, which is what makes a given seed
-reproduce a given result exactly (``docs/algorithm.md`` section 4.4). It
+reproduce a given result exactly (``docs/method.md`` section 4.4). It
 must never be re-drawn inside the permutation loop.
 """
 
@@ -51,7 +51,7 @@ def _broadcast_normalizer(normalizer, shape: tuple[int, int]) -> np.ndarray:
     R divides ``counts / normalizer`` and relies on recycling, which has no
     length check: passing a per-*sample* vector where a per-*gene* vector
     belongs recycles cleanly whenever ``g * n`` is divisible by ``n`` and
-    returns wrong numbers with no diagnostic (``docs/r-implementation.md``
+    returns wrong numbers with no diagnostic (``docs/implementation-notes.md``
     section 1). That is the one input error in the R file that produces
     plausible output, so this raises instead.
     """
@@ -101,7 +101,7 @@ def draw_jitter(
 
     Note this cannot reproduce R's draw for the same integer seed, and is
     not meant to: R's Mersenne-Twister and NumPy's PCG64 are different
-    algorithms (``docs/porting-hazards.md`` hazard 2). Exact cross-language
+    algorithms (``docs/implementation-notes.md`` hazard 2). Exact cross-language
     agreement requires passing the realised matrix in as ``jitter=``.
     """
     if noise < 0:
@@ -120,7 +120,7 @@ def _resolve_jitter(jitter, shape, noise, seed, rng) -> np.ndarray:
             f"supplied jitter must be genes x samples {shape}, got {jitter.shape}. "
             f"Pass a 2-D array, never a flat vector plus dimensions — the two "
             f"languages fill a flat vector in opposite orders "
-            f"(docs/porting-hazards.md hazard 8)."
+            f"(docs/implementation-notes.md hazard 8)."
         )
     if not np.all(np.isfinite(jitter)):
         raise ValueError("supplied jitter must be finite")
@@ -140,7 +140,7 @@ def library_sizes(counts: np.ndarray, normalizer) -> np.ndarray:
     Note this depends on which genes are in the matrix: change the gene set
     and every normalized value changes. That is a real reproducibility
     surface, matching R's ``wade_run()``, which sizes libraries on the
-    subset matrix (``docs/design-decisions.md`` S2).
+    subset matrix (``ROADMAP.md`` S2).
     """
     counts = _as_counts(counts)
     norm = _broadcast_normalizer(normalizer, counts.shape)
@@ -193,7 +193,7 @@ def tpm_like(
       ``norm_factor``, and so does every gene in an all-zero sample, where
       numerator and denominator are equal. That is an artefact of the
       algebra, not a sensible value for an empty library; see
-      ``docs/r-implementation.md`` section 2.
+      ``docs/implementation-notes.md`` section 2.
 
     Parameters
     ----------
@@ -271,7 +271,7 @@ def rle(
     ``-inf`` in logs) for a gene with any zero. **The continuity jitter
     interacts with that restriction and the interaction is not inherited
     from anywhere**, so it is stated rather than defaulted
-    (``docs/design-decisions.md`` S3):
+    (``ROADMAP.md`` S3):
 
     Jitter is added at count precision first, which makes every entry
     strictly positive, so the reference would technically be defined for

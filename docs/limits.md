@@ -1,14 +1,16 @@
 # WADE — limits and failure modes
 
 > **Note on citations.** This document cites `reference/docs/` and
-> `reference/R/downstream/`, which were pruned once the port was verified.
-> They are quoted here as the provenance of specific claims; the full record,
-> including digests, is in [`../reference/PROVENANCE.md`](../reference/PROVENANCE.md).
+> `reference/R/downstream/`, pruned once the port was verified; the record with
+> digests is in [`../reference/PROVENANCE.md`](../reference/PROVENANCE.md). It
+> also predates the redesign in [`method.md`](method.md) §3–4 — the sample-size
+> and combinatorial-floor limits below are unchanged by it, but references to
+> the fixed tail window describe the superseded machinery of `method.md` §7.
 
 What WADE does not do, and where it breaks down. This document exists to protect
 a port's future users from overreading its output. It is the counterweight to
-[`algorithm.md`](algorithm.md), which says what the method computes, and
-[`rationale.md`](rationale.md), which says why.
+[`method.md`](method.md), which says what the method computes, and
+[`method.md`](method.md), which says why.
 
 Two constraints in here are **hard**: they are properties of the experimental
 design, and no implementation choice, permutation count, or model improvement
@@ -19,7 +21,7 @@ An honest summary before the detail. WADE is a two-group, one-sided,
 non-covariate-adjusted test whose resolution is set by the size of the *smaller*
 group, and whose ability to detect a subset signal at all is bounded by a
 combinatorial floor determined by group sizes before any data are collected.
-Within those bounds it is well calibrated ([`rationale.md`](rationale.md) §9).
+Within those bounds it is well calibrated ([`method.md`](method.md) §9).
 Outside them it returns numbers that look like results.
 
 ---
@@ -102,7 +104,7 @@ Two notes for a port:
 - The practical mitigation is to **select one sample per subject** before
   calling the test. That is a caller's responsibility and belongs in the
   documentation, not in the method.
-- The validation simulations of [`rationale.md`](rationale.md) §9 use fully
+- The validation simulations of [`method.md`](method.md) §9 use fully
   independent samples. They therefore establish calibration under an assumption
   the source application violates, and must not be cited as evidence that
   p-values are calibrated on multi-sample-per-subject data.
@@ -111,7 +113,7 @@ Two notes for a port:
 
 The reference `wade()` applies a (count, normalizer) TPM-like scaling internally,
 with a seeded continuity jitter, rather than consuming an already-normalized
-matrix ([`algorithm.md`](algorithm.md) §8). Two distinct problems, which the
+matrix ([`method.md`](method.md) §8). Two distinct problems, which the
 source separates carefully:
 
 **It is a second normalization decision living inside a test.** The source
@@ -134,7 +136,7 @@ matrix**, which is the common case for anyone with an existing pipeline. That is
 an interface problem rather than a statistical one, and the prior analysis
 recommends the entry point take a matrix already on a comparable scale with the
 normalization shipped as an optional layer. The decision is
-[`design-decisions.md`](design-decisions.md)'s.
+[`../ROADMAP.md`](../ROADMAP.md)'s.
 
 What a user must know either way: **the jitter is not optional in effect.** If a
 caller supplies an already-normalized matrix and skips the jitter, tied values in
@@ -149,7 +151,7 @@ Two separate one-sidednesses compound, and it is worth separating them because
 they have different remedies.
 
 **The p-values are one-sided upward.** Every permutation p-value is
-$\Pr(\text{null} \ge \text{observed})$ ([`algorithm.md`](algorithm.md) §4.2). A
+$\Pr(\text{null} \ge \text{observed})$ ([`method.md`](method.md) §4.2). A
 gene *depleted* in cases gets a negative statistic and a p-value near 1 — not a
 small p-value with a negative effect size. Confirmed in the sandbox this session:
 a gene constructed to be strongly down in cases returned `p.diff` = 1.000 and
@@ -174,7 +176,7 @@ rather than let a user infer symmetry that is not there.
 ### 2.5 `diff.mean` is a grid quadrature, not the mean difference, when groups are unbalanced
 
 Established and measured this session; developed in full in
-[`algorithm.md`](algorithm.md) §2.1.1. Summarised here because it is a limit on
+[`method.md`](method.md) §2.1.1. Summarised here because it is a limit on
 *interpretation*.
 
 Every prose source in this repository states
@@ -212,7 +214,7 @@ change the statistic and the null together.
 
 The grid has $m = \min(n_0, n_1)$ points and the tail window is
 $k = \max(1, \lceil q_{\text{tail}} m \rceil)$ of them
-([`algorithm.md`](algorithm.md) §2.3). The subset axis therefore needs enough
+([`method.md`](method.md) §2.3). The subset axis therefore needs enough
 order statistics to exist. Reproduced from
 `../reference/docs/supplement_wade.qmd`
 §S7.5, with the $k$ values re-derived in the sandbox:
@@ -243,7 +245,7 @@ Three consequences:
    was to report the window size per contrast and carry a flag for whether the
    subset axis is usable — falling back to bulk-axis-only nomination below a
    smaller-group size of 20. Those thresholds
-   ([`algorithm.md`](algorithm.md) §9.1) are cohort decisions, but their
+   ([`method.md`](method.md) §9.1) are cohort decisions, but their
    *rationale* is arithmetic on WADE's own parameters and generalizes: 10 gives a
    1-point window and is the floor for running at all; 20 gives 2 points and is
    the threshold for believing the subset axis; 30 gives 3.
@@ -261,8 +263,8 @@ mean something quite different from what their column names suggest.
 At $m = 1$ the reference is additionally **wrong** on multi-gene input — it
 returns one value that the driver recycles across every gene, silently and with
 the correct output shape (verified in the sandbox this session; diagnosed in
-[`r-implementation.md`](r-implementation.md) and
-[`porting-hazards.md`](porting-hazards.md)). Since a one-sample group has no
+[`implementation-notes.md`](implementation-notes.md) and
+[`implementation-notes.md`](implementation-notes.md)). Since a one-sample group has no
 quantile function worth comparing, refusing $m = 1$ is the better behaviour for a
 port, and refusing loudly is better than the reference's silence.
 
@@ -294,7 +296,7 @@ null's support. It is a **property of the design**, computable before any data
 exist.
 
 The floor also has a favourable reading, which is the mechanism of
-[`rationale.md`](rationale.md) §7: at $k^{*} = 1$ it equals $n_1/N$, which is why
+[`method.md`](method.md) §7: at $k^{*} = 1$ it equals $n_1/N$, which is why
 a single-outlier gene cannot post a small p-value.
 
 ### 4.2 What the source documents claim, and why it is not tight
@@ -345,7 +347,7 @@ rows.
 
 [`../reference/R/validation_sims_v7.R`](../reference/R/validation_sims_v7.R)
 measured power **0 at every swept fraction through 20%, and 1 from 35% on**
-([`rationale.md`](rationale.md) §9.3). Compare that against the last column of
+([`method.md`](method.md) §9.3). Compare that against the last column of
 the table above: the transition sits exactly where the floor crosses the BH
 threshold. The power curve and the floor arithmetic agree; they are two views of
 the same constraint.
@@ -482,7 +484,7 @@ exact misreading.
 
 The tail refinement did what it was designed to do: extrapolate where the
 empirical resolution ran out, and floor the answer honestly rather than returning
-machine epsilon ([`rationale.md`](rationale.md) §6.2). Without the floor the same
+machine epsilon ([`method.md`](method.md) §6.2). Without the floor the same
 gene would have received something like $10^{-15}$, would have survived BH by a
 much wider margin, and would have been *harder* to diagnose as an artefact —
 because nothing about the number would have signalled that it was extrapolated.
@@ -497,9 +499,9 @@ transformation addresses any of them.
 ## 6. `tail.conc` is numerically unsound as written
 
 A live defect with a measured magnitude, not a hypothetical. The statistic's
-definition and the exact mechanism are in [`algorithm.md`](algorithm.md) §2.5;
+definition and the exact mechanism are in [`method.md`](method.md) §2.5;
 the port's obligation is in
-[`porting-hazards.md`](porting-hazards.md). What belongs here is why it is a
+[`implementation-notes.md`](implementation-notes.md). What belongs here is why it is a
 failure mode and why the obvious fix is wrong.
 
 ### 6.1 The defect
@@ -551,8 +553,8 @@ about the denominator's adequacy rather than about the ratio's range: report
 `tail.conc` only when $\big|\sum D\big|$ is large enough relative to
 $\sum |D|$ for the ratio to be meaningful, and return `NA` otherwise. The
 specific criterion is a port decision and belongs in
-[`porting-hazards.md`](porting-hazards.md) and
-[`design-decisions.md`](design-decisions.md).
+[`implementation-notes.md`](implementation-notes.md) and
+[`../ROADMAP.md`](../ROADMAP.md).
 
 ### 6.3 Why the source did not fix it in place
 
@@ -598,4 +600,4 @@ number of subgroups or the mixing fraction in advance; and the combinatorial
 floor for the subset size you care about clears your significance threshold.
 Within that envelope it is calibrated at nominal on both axes and it separates
 minority-subset signal from whole-group shifts
-([`rationale.md`](rationale.md) §9).
+([`method.md`](method.md) §9).

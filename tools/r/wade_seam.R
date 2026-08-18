@@ -9,7 +9,7 @@
 #
 # Exact cross-language parity is impossible without this: R's
 # Mersenne-Twister and NumPy's PCG64 cannot be made to agree on a shared
-# seed (docs/porting-hazards.md, hazard 2). The fixtures must therefore
+# seed (docs/implementation-notes.md, hazard 2). The fixtures must therefore
 # carry the realised jitter matrix and permutation matrix as data.
 #
 # HOW THE INJECTION WORKS, and why it does not touch wade.R or any

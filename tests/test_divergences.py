@@ -34,7 +34,7 @@ def test_the_components_are_parity_targets_even_though_the_ratio_is_not(name):
     """Assert numerator and denominator, never the ratio.
 
     This is the cleanest of the three options in
-    ``docs/porting-hazards.md`` hazard 5, and it generalizes: comparing a
+    ``docs/implementation-notes.md`` hazard 5, and it generalizes: comparing a
     ratio's components separately localizes any disagreement in the ratio,
     and it lets the guard be tested against its own specification rather
     than against R's.
@@ -123,7 +123,7 @@ def test_a_clamp_to_zero_one_would_be_the_wrong_fix():
     When the lower quantiles' differences are negative they cancel part of
     the tail's contribution, the denominator shrinks below the numerator,
     and the tail genuinely carries more than the net total. The worked
-    construction from ``docs/algorithm.md`` section 2.5: a gene below
+    construction from ``docs/method.md`` section 2.5: a gene below
     controls across the bulk and above them in the top 2 nodes gives a
     tail sum of 674 against a total of 512, so ``tail_conc = 1.316``.
     """

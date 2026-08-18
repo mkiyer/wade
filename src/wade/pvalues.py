@@ -36,7 +36,7 @@ def exceedance_counts(obs: np.ndarray, null: np.ndarray) -> np.ndarray:
     and it only raises when the number of genes differs from the number of
     permutations. On a square fixture it silently compares gene ``i``'s
     null draw ``j`` against gene ``j``'s observed value
-    (``docs/porting-hazards.md`` hazard 7). Hence the explicit
+    (``docs/implementation-notes.md`` hazard 7). Hence the explicit
     ``obs[:, None]``, and hence every parity fixture being non-square.
     """
     obs = np.asarray(obs, dtype=np.float64)
@@ -115,7 +115,7 @@ def gpd_tail_p(
       divisor can flip the branch. The measured ``xi`` values from
       ordinary nulls include +0.031 and -0.133, so the boundary sits at
       the operating point and is crossed by noise
-      (``docs/porting-hazards.md`` hazard 6).
+      (``docs/implementation-notes.md`` hazard 6).
     * **The rescaling uses the nominal ``n_tail / B``, not
       ``len(exc) / B``.** When ties reduce the exceedance count below
       ``n_tail`` those differ; the reference uses the nominal one.

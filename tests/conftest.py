@@ -1,7 +1,7 @@
 """Fixture loading and the deviation ledger for the parity suite.
 
 The suite is built **inside-out**, layer 0 through layer 9, on the design
-at the end of ``docs/porting-hazards.md``. The organizing principle:
+at the end of ``docs/implementation-notes.md``. The organizing principle:
 intermediate quantities localize a disagreement, endpoint quantities only
 detect one. If ``padj_tail`` differs, the cause could be the quantile
 type, the tail window, the grid orientation, the exceedance broadcast,
@@ -18,7 +18,7 @@ Two things this suite refuses to do:
   ``numpy.sum`` (pairwise) and a hand-written loop legitimately differ in
   the last bits. Merely reversing a summation order changes about two
   thirds of genes at a relative magnitude of 1e-14
-  (``docs/porting-hazards.md`` hazard 10).
+  (``docs/implementation-notes.md`` hazard 10).
 * **The R is not the oracle for ``tail_conc`` or for a one-sample
   group.** In both cases a correct port disagrees with ``wade.R``, and a
   suite that enforces agreement enforces the bug. Those live in
@@ -266,5 +266,5 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     )
     tr.write_line(
         "  Reference: 1e-12 relative is a real bug; 1e-14 is summation order "
-        "(porting-hazards.md hazard 10)."
+        "(implementation-notes.md hazard 10)."
     )

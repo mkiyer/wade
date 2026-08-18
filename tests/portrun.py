@@ -4,7 +4,7 @@ Everything goes through :func:`wade.wade` — the production entry point —
 with the fixture's jitter and permutation matrices passed on the ordinary
 argument path. That is the whole point of accepting them there: a fixture
 path that bypassed production code would validate a code path users never
-run (``docs/porting-hazards.md`` hazard 2).
+run (``docs/implementation-notes.md`` hazard 2).
 """
 
 from __future__ import annotations

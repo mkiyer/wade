@@ -22,7 +22,7 @@ WADE was prototyped in R inside a cell-free RNA analysis project. The laboratory
 is moving from R to Python, so WADE is being rebuilt as a Python package with a
 Rust-backed core for the permutation loop. The R in `reference/` is the source of
 truth to port *from* and to validate *against*; it is not shipped and will not be
-maintained. See [`docs/design-decisions.md`](docs/design-decisions.md).
+maintained. See [`ROADMAP.md`](ROADMAP.md).
 
 | | |
 |---|---|
@@ -37,7 +37,7 @@ maintained. See [`docs/design-decisions.md`](docs/design-decisions.md).
 **9.2e-15** across 610 comparisons. The normalized matrix, the quantile grids,
 the permutation null matrices and the rank scores are **bit-for-bit identical**
 to R. Full breakdown, and the two places a correct port must *disagree* with the
-R, in [`docs/port-status.md`](docs/port-status.md).
+R, in [`docs/implementation-notes.md`](docs/implementation-notes.md).
 
 ## Layout
 
@@ -87,26 +87,14 @@ accepts one anyway and documents what that costs.
 
 ## Reading order
 
-Start with the theory, then the implementation detail:
-
-1. [`docs/algorithm.md`](docs/algorithm.md) — the mathematical specification.
-   Implementable without reading any R; this is the contract.
-2. [`docs/rationale.md`](docs/rationale.md) — why this statistic exists and why
-   each design choice was made. Section 7, on what the permutation p-value is
-   actually protecting against, is the one to read if you only read one.
-3. [`docs/limits.md`](docs/limits.md) — what WADE does not do, and the two hard
+1. [`docs/method.md`](docs/method.md) — what WADE computes and why. The
+   contract; implementable without reading any R.
+2. [`docs/limits.md`](docs/limits.md) — what it does not do, and the two hard
    constraints that decide whether it can answer your question at all.
-4. [`docs/r-implementation.md`](docs/r-implementation.md) — the ten R functions,
-   line by line, with the conventions a port must reproduce.
-5. [`docs/porting-hazards.md`](docs/porting-hazards.md) — eleven places two
-   implementations will silently disagree, each with a test, plus a layered
-   parity-suite design.
-6. [`docs/design-decisions.md`](docs/design-decisions.md) — what is settled and
-   what is deliberately open.
-7. [`docs/port-status.md`](docs/port-status.md) — what the port measures against
-   the reference, and the decisions taken while building it.
-8. [`ROADMAP.md`](ROADMAP.md) — the ordered work queue.
-
+3. [`docs/implementation-notes.md`](docs/implementation-notes.md) — parity with
+   the reference, where two implementations silently disagree, and the Rust
+   kernel's boundary.
+4. [`ROADMAP.md`](ROADMAP.md) — the work queue and the open questions.
 
 ## Running the R reference
 

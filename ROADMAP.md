@@ -17,7 +17,7 @@ The Python package with a Rust-backed core, ported from `reference/R/wade.R`.
 
 Four layers — the normalized matrix, the quantile grids, the permutation null
 matrices and the rank scores — are **bit-for-bit** identical to the reference.
-The details are in `docs/port-status.md`.
+The details are in `docs/implementation-notes.md`.
 
 That established the *machinery* is correct. It did not establish that the
 statistic on top of it is the right one, which is what the rest of this file is
@@ -111,8 +111,8 @@ Report power curves, not verdicts. Then agree a plan before implementing.
    around the new statistic), `docs/limits.md`, `docs/implementation-notes.md`
    (the cross-language hazards that still bite — quantile convention, broadcast
    axis, summation order, R's non-round-tripping parser — plus the parity
-   result). `r-implementation.md`, `porting-hazards.md`, `design-decisions.md`
-   and `port-status.md` fold into those and are deleted.
+   result). `implementation-notes.md`, `implementation-notes.md`, `ROADMAP.md`
+   and `implementation-notes.md` fold into those and are deleted.
 
 ---
 

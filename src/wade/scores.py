@@ -10,7 +10,7 @@ analysis used.
 
 They live in their own module for the same reason: offering ``score``
 next to ``padj_diff`` without comment invites a reader to treat a
-heuristic rank as inference (``docs/design-decisions.md`` O3).
+heuristic rank as inference (``ROADMAP.md`` O3).
 
 A documented asymmetry, since the R's own header describes the two scores
 as the same construction with one term swapped and they are not:

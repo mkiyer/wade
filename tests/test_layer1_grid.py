@@ -71,7 +71,7 @@ def test_grid_orientation_is_descending(name):
 
 
 def test_tail_window_arithmetic_matches_the_documented_table():
-    """``k = max(1, ceil(0.10 * m))`` at the values worked in algorithm.md."""
+    """``k = max(1, ceil(0.10 * m))`` at the values worked in method.md."""
     table = {5: 1, 10: 1, 18: 2, 20: 2, 22: 3, 33: 4, 34: 4, 60: 6, 100: 10}
     for m, k in table.items():
         assert wade.tail_window_size(m, 0.10) == k
@@ -90,7 +90,7 @@ def test_nprobs_is_set_by_the_smaller_group():
     only the larger group is interpolated. ``m = min(n0, n1)`` is the
     largest grid on which at least one group is exact.
 
-    **Refinement of the claim in algorithm.md section 1.1**, which states
+    **Refinement of the claim in method.md section 1.1**, which states
     the coincidence as exact. It is exact in real arithmetic and only to
     floating point in practice: ``1 + (m - 1) * q`` does not always land
     on an integer. Measured at ``m = 8``, the indices come out as

@@ -36,7 +36,7 @@
 #    distinction a port is being tested on.
 #
 # 3. Every 2-D array carries "shape": [nrow, ncol] and is nested as row
-#    arrays. docs/porting-hazards.md hazard 8 is precisely the failure
+#    arrays. docs/implementation-notes.md hazard 8 is precisely the failure
 #    of shipping a flat vector plus dimensions and letting two languages
 #    disagree about fill order; nested rows cannot be silently
 #    transposed.

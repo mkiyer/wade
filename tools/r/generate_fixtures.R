@@ -14,7 +14,7 @@
 #
 # WHAT IS EMITTED, AND WHY INTERMEDIATES
 # --------------------------------------
-# docs/porting-hazards.md: "intermediate quantities localize a
+# docs/implementation-notes.md: "intermediate quantities localize a
 # disagreement; endpoint quantities only detect one." So each scenario
 # carries the whole computation, not just the result frame:
 #
@@ -396,7 +396,7 @@ cat("emitting scenarios\n")
   counts <- mk_counts(5, 4, 22, 606)
   rownames(counts) <- paste0("s", 1:5)
   emit_scenario("onesample",
-    "5 genes x 4 samples, 1 case vs 3 controls: nprobs=1. THE R IS WRONG HERE — rowQuantiles drops to a length-5 vector, the guard reshapes it to 1x5, and wade() recycles a single value across all five genes. A correct port MUST disagree. See docs/porting-hazards.md hazard 11.",
+    "5 genes x 4 samples, 1 case vs 3 controls: nprobs=1. THE R IS WRONG HERE — rowQuantiles drops to a length-5 vector, the guard reshapes it to 1x5, and wade() recycles a single value across all five genes. A correct port MUST disagree. See docs/implementation-notes.md hazard 11.",
     counts, mk_norm_mat(5, 4, 606), c(1L, 0L, 0L, 0L), nperms = 7L,
     notes = "DO NOT assert parity on the statistics here. This fixture records a defect.")
 }
@@ -442,7 +442,7 @@ cat("emitting scenarios\n")
   emit_scenario("weighted",
     "10 genes x 15 samples, 8 vs 7, weight = 2.0. Controls are multiplied by 2 before quantiles, which drops wade() off the lean permutation path onto full wade_stats() per permutation.",
     counts, nm, cd, nperms = 13L, weight = 2.0,
-    notes = "Under permutation the WEIGHTED group changes membership each iteration; see design-decisions.md O5.")
+    notes = "Under permutation the WEIGHTED group changes membership each iteration; see ROADMAP.md O5.")
   emit_scenario("log2scaled",
     "10 genes x 15 samples, 8 vs 7, log2_scale = TRUE. log2(x+1) applied after weighting; also the non-lean path.",
     counts, nm, cd, nperms = 13L, log2_scale = TRUE)
@@ -456,7 +456,7 @@ cat("emitting scenarios\n")
   emit_scenario("zerolib",
     "6 genes x 8 samples with sample 3 entirely zero. lib_sizes[3] = 0 makes numerator and denominator equal, so EVERY gene normalizes to exactly 1e6 in that column — an artefact of the algebra, not a sensible value.",
     counts, mk_norm_mat(6, 8, 1212), c(rep(1L,4), rep(0L,4)), nperms = 11L,
-    notes = "A port should refuse or document this; see docs/r-implementation.md section 2.")
+    notes = "A port should refuse or document this; see docs/implementation-notes.md section 2.")
 }
 
 # --- 13. nonames: rownames(counts) is NULL -> tibble drops the gene column
@@ -483,7 +483,7 @@ cat("emitting scenarios\n")
   counts <- round(counts)
   rownames(counts) <- paste0("t", 1:g)
   emit_scenario("tailconc",
-    "200 genes x 22 samples, 11 vs 11 (nprobs = 11, k = 2), constructed so the lower quantiles partially cancel the upper ones. Many genes have |tail.conc| well above 1. THE RATIO ITSELF IS NOT A PARITY TARGET — assert tail_num and tail_den separately. See docs/porting-hazards.md hazard 5.",
+    "200 genes x 22 samples, 11 vs 11 (nprobs = 11, k = 2), constructed so the lower quantiles partially cancel the upper ones. Many genes have |tail.conc| well above 1. THE RATIO ITSELF IS NOT A PARITY TARGET — assert tail_num and tail_den separately. See docs/implementation-notes.md hazard 5.",
     counts, mk_norm_vec(g, 1414), c(rep(1L, n1), rep(0L, n0)), nperms = 17L,
     notes = "The R's guard (|diff.mean * nprobs| < 1e-8) will NA out essentially none of these.")
 }
@@ -509,7 +509,7 @@ cat("emitting scenarios\n")
 cat("\nemitting unit fixtures\n")
 
 # --- .gpd_tail_p, all six branches, at the constructions documented in
-#     docs/porting-hazards.md hazard 4.
+#     docs/implementation-notes.md hazard 4.
 {
   cat("  gpd_branches     "); flush(stdout())
   cases <- list()
@@ -612,7 +612,7 @@ cat("\nemitting unit fixtures\n")
   cat("ok\n")
 }
 
-# --- the algorithm.md section 2.7 worked example, straight from wade_stats
+# --- the method.md section 2.7 worked example, straight from wade_stats
 {
   cat("  worked_example   "); flush(stdout())
   X <- rbind(gA = c(10, 12, 14, 16, 60, 10, 12, 14, 16),
@@ -621,7 +621,7 @@ cat("\nemitting unit fixtures\n")
   st <- env$wade_stats(X, cond)
   json <- j_obj(
     name = .j_str("worked_example"),
-    description = .j_str("The deterministic fixture from docs/algorithm.md section 2.7: 2 genes, 5 cases vs 4 controls, no jitter and no normalization — wade_stats() called directly on the values. nprobs=4, q=(1,2/3,1/3,0), k=1."),
+    description = .j_str("The deterministic fixture from docs/method.md section 2.7: 2 genes, 5 cases vs 4 controls, no jitter and no normalization — wade_stats() called directly on the values. nprobs=4, q=(1,2/3,1/3,0), k=1."),
     X = j_dbl_mat(X, "X"), cond = j_int_vec(cond),
     nprobs = j_int(st$nprobs), k = j_int(st$k),
     q = j_dbl_vec(st$q, "q"),

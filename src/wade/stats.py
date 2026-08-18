@@ -2,7 +2,7 @@
 
 Port of R's ``wade_stats()``. Written for clarity — this is the
 correctness baseline the Rust kernel will later be validated against, so
-it follows ``docs/algorithm.md`` term for term rather than being clever.
+it follows ``docs/method.md`` term for term rather than being clever.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ def split_groups(cond: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     labelled anything else — 2, ``NA``, -1 — is silently dropped from
     *both* groups, which changes ``nprobs``, which changes the quantile
     grid, which changes every number, with no diagnostic
-    (``docs/r-implementation.md`` section 3). This raises instead: the
+    (``docs/implementation-notes.md`` section 3). This raises instead: the
     labels must partition the columns.
     """
     cond = np.asarray(cond)
@@ -113,7 +113,7 @@ def wade_stats(
         raise the bar a case group must clear); ``log2_scale`` applies
         ``log2(x + 1)`` *after* weighting. Neither is used at any call site
         in the reference material, and both are open questions
-        (``docs/design-decisions.md`` O5). Note that ``weight`` is applied
+        (``ROADMAP.md`` O5). Note that ``weight`` is applied
         by condition, so under label permutation the weighted group changes
         membership each iteration.
     allow_single_sample_group
@@ -132,7 +132,7 @@ def wade_stats(
     probability instead, so a length-``g`` vector gets reshaped to
     ``1 x g``, genes become probabilities, and ``wade()`` returns a
     ``g``-row frame in which every gene reports the same number. No error,
-    no warning, right shape, wrong answer (``docs/porting-hazards.md``
+    no warning, right shape, wrong answer (``docs/implementation-notes.md``
     hazard 11). Refusing loudly is better than the R's silence; passing
     ``allow_single_sample_group=True`` computes the mathematically correct
     answer, which is still not the R's.
@@ -164,7 +164,7 @@ def wade_stats(
             "one-sample group has no quantile function worth comparing. Pass "
             "allow_single_sample_group=True to compute it anyway. Note the R "
             "reference is WRONG here and returns one recycled value for every "
-            "gene (docs/porting-hazards.md hazard 11), so agreement with R is "
+            "gene (docs/implementation-notes.md hazard 11), so agreement with R is "
             "not available at nprobs == 1 either way."
         )
 
@@ -215,7 +215,7 @@ def tail_concentration(
     ``tail_conc = sum(D over the tail) / sum(D)`` is the share of the total
     signed area that falls in the upper-tail window. **This is the one
     statistic where the port deliberately disagrees with the R**, and the
-    disagreement is the fix working (``docs/porting-hazards.md`` hazard 5).
+    disagreement is the fix working (``docs/implementation-notes.md`` hazard 5).
 
     The problem is structural. The denominator is the total signed area,
     which vanishes whenever the lower quantiles' differences cancel the

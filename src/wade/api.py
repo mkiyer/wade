@@ -1,7 +1,7 @@
 """The driver: normalize, observe, permute, refine, adjust.
 
 The entry point takes **raw counts**, not a normalized matrix
-(``docs/design-decisions.md`` S2). The continuity jitter is applied at
+(``ROADMAP.md`` S2). The continuity jitter is applied at
 count precision before division, so a pre-normalized matrix cannot
 reproduce it; :func:`wade_from_matrix` exists for callers who have one
 anyway and says plainly what it costs.
@@ -41,7 +41,7 @@ DEFAULT_NPERMS = 2000
 #: ``|tail_conc| <= F`` — the threshold and the guarantee are the same
 #: number, which is why it is a documented promise rather than a tuning
 #: knob, and why raising it later widens what users were told to expect.
-#: See ``docs/design-decisions.md`` O1; this default is a starting
+#: See ``ROADMAP.md`` O1; this default is a starting
 #: position, not a measurement on real data.
 DEFAULT_TAIL_CONC_MAX_FACTOR = 3.0
 
@@ -163,7 +163,7 @@ def _resolve_gene_names(gene_names, g: int) -> np.ndarray:
     rather than erroring — so the frame silently loses its identifier
     while every other column is present and correct, and anything
     downstream that joins on it breaks somewhere else
-    (``docs/r-implementation.md`` section 7).
+    (``docs/implementation-notes.md`` section 7).
     """
     if gene_names is None:
         return np.array([f"gene{i}" for i in range(g)], dtype=object)
@@ -329,7 +329,7 @@ def wade(
         achievable by passing the realised matrices as data. They are
         accepted here, and not on a separate test-only path, because a
         fixture path that bypasses production code validates code nobody
-        runs (``docs/porting-hazards.md`` hazard 2).
+        runs (``docs/implementation-notes.md`` hazard 2).
     seed
         Seeds the jitter and the permutations on **separate, independent
         streams** (via ``SeedSequence.spawn``), mirroring the reference's
