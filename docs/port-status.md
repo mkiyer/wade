@@ -18,7 +18,7 @@ suite in the conda environment `wade`.
 |---|---|---|
 | R 4.6.1 sandbox | present, offline `renv` closure restored | unchanged |
 | `reference/` byte-identity | 8 of 8 files `OK` | 8 of 8 files `OK`, now asserted by the test suite |
-| conda env `wade` | **empty** — no Python | Python 3.12.13, NumPy 2.5.2, SciPy 1.18.0, pytest, hatchling, maturin |
+| conda env `wade` | **empty** — no Python | Python 3.12.13, NumPy 2.5.2, SciPy 1.18.0, pytest 9.1.1, maturin 1.14.1 — declared in `mamba_env.yaml` |
 | `cargo` / `rustc` | **absent** — no `rustup`, no `~/.cargo` | cargo 1.97.1, rustc 1.97.1, maturin 1.14.1, installed **via conda into `wade`** |
 
 The Rust toolchain was genuinely missing, as `ROADMAP.md` §5 warned it
@@ -27,6 +27,15 @@ rather than via `rustup`, so it lives inside the environment like every
 other dependency and does not touch the base environment or the user's
 home directory. `crates.io` is reachable from this environment; `pyo3`
 0.27, `numpy` 0.27 and `rayon` 1.12 resolved and built.
+
+The whole environment is declared in [`../mamba_env.yaml`](../mamba_env.yaml)
+so it can be rebuilt elsewhere with `mamba env create -f mamba_env.yaml`. R is
+deliberately absent from it: the reference sandbox restores offline from a
+read-only `renv` cache against system R 4.6.1, which conda cannot reproduce —
+there are no R 4.6 arm64 binaries on CRAN and the Posit mirrors are unreachable
+here. Declaring `r-base` would stand up a *second*, different R and invite
+someone to regenerate fixtures against it. R is needed only to regenerate
+`tests/fixtures/`; those are committed, so the suite passes without it.
 
 ## 2. What exists
 

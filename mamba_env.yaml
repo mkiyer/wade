@@ -1,0 +1,48 @@
+name: wade
+channels:
+  - conda-forge
+dependencies:
+  # Core Python. requires-python in pyproject.toml is >=3.10. Left
+  # unpinned: the full parity suite has been run green on both 3.12 and
+  # 3.14, and the worst-case deviation against the R reference was
+  # identical to the digit on both, so nothing here is version-sensitive.
+  - python>=3.10
+  - pip
+  # Runtime. Keep in sync with the `dependencies` list in pyproject.toml.
+  # NumPy 2.x is what the port is developed against; note that the suite
+  # uses np.ptp(arr, axis=...) rather than the ndarray method, which 2.0
+  # removed.
+  - numpy>=1.24
+  # Build toolchain for the Rust permutation kernel (rust/src/lib.rs).
+  #
+  # The kernel is OPTIONAL: without cargo/rustc the package still installs
+  # and runs on the NumPy path, which is the correctness baseline the
+  # kernel is validated against — just 18-22x slower on the permutation
+  # loop. Drop these two lines if you want a pure-Python environment.
+  #
+  # Installed via conda rather than rustup on purpose, so the toolchain
+  # lives inside the environment like every other dependency.
+  # maturin is pinned to match the `requires` in pyproject.toml's
+  # build-system table; rust >=1.75 covers pyo3 0.27's MSRV with margin.
+  - rust>=1.75
+  - maturin>=1.5,<2
+  # Test-only. scipy is used by ONE thing: the Kolmogorov-Smirnov test in
+  # the ported null-calibration simulation (tests/test_layer9_validation.py).
+  # It is not a runtime dependency of the package and the statistic does
+  # not need it.
+  - pytest>=7
+  - scipy>=1.10
+
+# NOT DECLARED HERE, DELIBERATELY: R.
+#
+# reference/R/ is the parity oracle and it runs against system R 4.6.1 at
+# /usr/local/bin/R, restoring its 31-package closure offline by symlinking
+# from a pre-existing read-only renv cache. That is not reproducible through
+# conda — there are no R 4.6 arm64 binaries on CRAN and the Posit mirrors
+# are unreachable from this environment, so there is no install path at all.
+# Adding r-base here would create a SECOND, different R and quietly invite
+# someone to regenerate fixtures against it.
+#
+# You only need R to regenerate tests/fixtures/*.json. The committed
+# fixtures are what the parity suite reads, so the full suite passes with
+# no R present. See reference/R/README.md for the sandbox invocation.

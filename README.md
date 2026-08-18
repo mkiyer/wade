@@ -59,11 +59,17 @@ on the NumPy path, which is the correctness baseline the kernel is validated
 against.
 
 ```bash
-conda create -n wade -c conda-forge python=3.12 numpy scipy pytest maturin rust
+mamba env create -f mamba_env.yaml
 conda activate wade
 pip install -e . --no-build-isolation
 pytest                    # the full parity suite, ~2 s
 ```
+
+`mamba_env.yaml` declares the runtime, the Rust build toolchain and the test
+dependencies. It deliberately does **not** declare R: the reference sandbox runs
+against a system R 4.6.1 restoring offline from a read-only `renv` cache, which
+conda cannot reproduce. You need R only to regenerate `tests/fixtures/`, and the
+fixtures are committed — the parity suite passes with no R present.
 
 ```python
 import numpy as np
