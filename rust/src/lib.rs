@@ -11,7 +11,7 @@
 //!
 //! # What crosses the boundary, and why it matters more than what is behind it
 //!
-//! This kernel returns the **full null matrices**, not p-values. That is a
+//! This kernel returns the **full null matrix**, not p-values. That is a
 //! deliberate testability decision: asserting the two `g × nperms` nulls
 //! elementwise against the R's serial loop is the only place a kernel bug
 //! is cleanly separable from a p-value bug. A kernel that returned only
@@ -28,7 +28,7 @@
 //!
 //! # Numerical contract
 //!
-//! Two choices here are about matching R rather than about speed, and
+//! Two choices here are about numerical fidelity rather than speed, and
 //! neither should be "optimized" away:
 //!
 //! * **Type-7 quantiles are reimplemented here** rather than delegated,
@@ -96,22 +96,17 @@ fn sort_ascending(buf: &mut [f64]) {
     buf.sort_unstable_by(|a, b| a.partial_cmp(b).expect("non-finite value in kernel input"));
 }
 
-#[allow(clippy::too_many_arguments)]
 fn one_permutation(
     x: &ArrayView2<'_, f64>,
     labels: &[i64],
     probs: &[f64],
-    k: usize,
-    weight: f64,
-    log2_scale: bool,
     idx1: &mut Vec<usize>,
     idx0: &mut Vec<usize>,
     buf1: &mut Vec<f64>,
     buf0: &mut Vec<f64>,
     q1: &mut Vec<f64>,
     q0: &mut Vec<f64>,
-    out_diff: &mut [f64],
-    out_tail: &mut [f64],
+    out: &mut [f64],
 ) {
     idx1.clear();
     idx0.clear();
@@ -124,32 +119,19 @@ fn one_permutation(
     }
 
     let nprobs = probs.len();
-    let g = x.nrows();
-
     buf1.resize(idx1.len(), 0.0);
     buf0.resize(idx0.len(), 0.0);
     q1.resize(nprobs, 0.0);
     q0.resize(nprobs, 0.0);
 
-    for gene in 0..g {
+    for gene in 0..x.nrows() {
         let row = x.row(gene);
-
-        // The two optional pre-transformations, applied exactly where the
-        // reference applies them: `weight` scales the CONTROL columns only,
-        // and log2 is applied afterwards, so the two compose
-        // multiplicatively-then-logarithmically rather than commuting.
-        // Because `weight` keys on the condition vector, the weighted group
-        // changes membership on every permutation — that is the reference's
-        // behaviour, reproduced deliberately.
         for (slot, &j) in buf1.iter_mut().zip(idx1.iter()) {
-            let v = row[j];
-            *slot = if log2_scale { (v + 1.0).log2() } else { v };
+            *slot = row[j];
         }
         for (slot, &j) in buf0.iter_mut().zip(idx0.iter()) {
-            let v = if weight != 1.0 { row[j] * weight } else { row[j] };
-            *slot = if log2_scale { (v + 1.0).log2() } else { v };
+            *slot = row[j];
         }
-
         sort_ascending(buf1);
         sort_ascending(buf0);
         type7_sorted(buf1, probs, q1);
@@ -157,41 +139,29 @@ fn one_permutation(
 
         // Sequential accumulation, matching R's rowSums association.
         let mut total = 0.0_f64;
-        let mut tail = 0.0_f64;
         for i in 0..nprobs {
-            let d = q1[i] - q0[i];
-            if i < k {
-                tail += d;
-            }
-            total += d;
+            total += q1[i] - q0[i];
         }
-        out_diff[gene] = total / nprobs as f64;
-        out_tail[gene] = tail / k as f64;
+        out[gene] = total / nprobs as f64;
     }
 }
 
-/// Compute both null matrices for a supplied set of label permutations.
+/// The mean-shift null for a supplied set of label permutations.
 ///
-/// Returns `(diff, tail)`, each shaped `(n_perms, n_genes)`. The Python
-/// wrapper transposes these to the `(genes, permutations)` orientation the
-/// rest of the package uses; transposing a view is free, and building
-/// permutation-major here keeps each permutation's writes contiguous,
-/// which is what makes the parallel loop cheap.
+/// Returns a `(n_perms, n_genes)` matrix. The Python wrapper transposes it to
+/// the `(genes, permutations)` orientation the rest of the package uses;
+/// transposing a view is free, and building permutation-major here keeps each
+/// permutation's writes contiguous, which is what makes the parallel loop cheap.
 #[pyfunction]
-#[pyo3(signature = (x, perms, probs, k, weight=1.0, log2_scale=false))]
 fn null_statistics<'py>(
     py: Python<'py>,
     x: PyReadonlyArray2<'py, f64>,
     perms: PyReadonlyArray2<'py, i64>,
     probs: PyReadonlyArray1<'py, f64>,
-    k: usize,
-    weight: f64,
-    log2_scale: bool,
-) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>)> {
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let xv = x.as_array();
     let pv = perms.as_array();
-    let probs_v = probs.as_array();
-    let probs_slice: Vec<f64> = probs_v.iter().copied().collect();
+    let probs_slice: Vec<f64> = probs.as_array().iter().copied().collect();
 
     let g = xv.nrows();
     let n = xv.ncols();
@@ -208,22 +178,15 @@ fn null_statistics<'py>(
     if nprobs == 0 {
         return Err(PyValueError::new_err("probs must be non-empty"));
     }
-    if k == 0 || k > nprobs {
-        return Err(PyValueError::new_err(format!(
-            "k must lie in 1..={}, got {}",
-            nprobs, k
-        )));
-    }
     if !xv.iter().all(|v| v.is_finite()) {
         return Err(PyValueError::new_err(
             "the normalized matrix contains non-finite values",
         ));
     }
 
-    // Group sizes are preserved by label exchange, so nprobs is a constant
-    // of the run. Verify it against the first permutation rather than
-    // assuming it, since a malformed matrix would otherwise index past the
-    // end of a quantile buffer.
+    // Group sizes are preserved by label exchange, so nprobs is a constant of
+    // the run. Verified rather than assumed: a malformed matrix would
+    // otherwise index past the end of a quantile buffer.
     for (b, row) in pv.rows().into_iter().enumerate() {
         let mut n1 = 0usize;
         let mut n0 = 0usize;
@@ -249,8 +212,7 @@ fn null_statistics<'py>(
         }
     }
 
-    let mut diff = vec![0.0_f64; n_perms * g];
-    let mut tail = vec![0.0_f64; n_perms * g];
+    let mut out = vec![0.0_f64; n_perms * g];
 
     py.detach(|| {
         let labels: Vec<Vec<i64>> = pv
@@ -259,42 +221,23 @@ fn null_statistics<'py>(
             .map(|r| r.iter().copied().collect())
             .collect();
 
-        diff.par_chunks_mut(g)
-            .zip(tail.par_chunks_mut(g))
-            .enumerate()
-            .for_each(|(b, (d_chunk, t_chunk))| {
-                // Scratch buffers are per-permutation, so no allocation
-                // happens inside the per-gene loop.
-                let mut idx1 = Vec::with_capacity(n);
-                let mut idx0 = Vec::with_capacity(n);
-                let mut buf1 = Vec::with_capacity(n);
-                let mut buf0 = Vec::with_capacity(n);
-                let mut q1 = Vec::with_capacity(nprobs);
-                let mut q0 = Vec::with_capacity(nprobs);
-                one_permutation(
-                    &xv,
-                    &labels[b],
-                    &probs_slice,
-                    k,
-                    weight,
-                    log2_scale,
-                    &mut idx1,
-                    &mut idx0,
-                    &mut buf1,
-                    &mut buf0,
-                    &mut q1,
-                    &mut q0,
-                    d_chunk,
-                    t_chunk,
-                );
-            });
+        out.par_chunks_mut(g).enumerate().for_each(|(b, chunk)| {
+            let mut idx1 = Vec::with_capacity(n);
+            let mut idx0 = Vec::with_capacity(n);
+            let mut buf1 = Vec::with_capacity(n);
+            let mut buf0 = Vec::with_capacity(n);
+            let mut q1 = Vec::with_capacity(nprobs);
+            let mut q0 = Vec::with_capacity(nprobs);
+            one_permutation(
+                &xv, &labels[b], &probs_slice, &mut idx1, &mut idx0, &mut buf1,
+                &mut buf0, &mut q1, &mut q0, chunk,
+            );
+        });
     });
 
-    let diff_arr = Array2::from_shape_vec((n_perms, g), diff)
+    let arr = Array2::from_shape_vec((n_perms, g), out)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let tail_arr = Array2::from_shape_vec((n_perms, g), tail)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok((diff_arr.into_pyarray(py), tail_arr.into_pyarray(py)))
+    Ok(arr.into_pyarray(py))
 }
 
 /// Type-7 quantiles, exposed so the kernel's own implementation can be

@@ -1,51 +1,40 @@
 """WADE — Wasserstein Area Differential Expression.
 
-A two-group differential-*distribution* test for per-gene abundance data,
-built to detect genes altered in only a fraction of the case group.
+A two-group differential-*distribution* test that answers two questions
+ordinary differential expression collapses into one:
 
-For each gene WADE compares the two groups' empirical quantile functions
-on a shared grid of ``min(n_case, n_ctrl)`` probabilities and reports two
-axes:
+1. **Is there a difference?** — ``p_mean_shift``, the ordinary
+   mean-difference test.
+2. **What kind of difference is it?** — ``p_subset`` asks whether a global
+   shift is an inadequate explanation, and ``affected_fraction`` and
+   ``direction`` say what the difference looks like.
 
-* ``diff_mean`` — the **bulk** axis, the signed area between the quantile
-  functions. A whole-group location shift moves it.
-* ``tail_mean`` — the **subset** axis, the mean quantile difference over
-  the upper-tail window. A gene elevated in a minority of cases has a
-  small ``diff_mean`` and a large ``tail_mean``.
-
-Inference is by label permutation on both axes independently, with a
-Generalized Pareto refinement where the empirical resolution runs out,
-then BH-FDR per axis.
-
-**WADE is one-sided upward throughout.** Every statistic is signed
-case-minus-control and every p-value is an upper-tail probability. Genes
-*depleted* in cases carry negative statistics and p-values near 1. That
-is a design property, not an oversight.
+A gene altered in 5% of cases and a gene shifted 2x in all of them can produce
+the same mean difference, and a first-moment test cannot tell them apart.
+**Nothing here asks the user to declare in advance which they are looking
+for** — there is no percentile cutoff, no window width and no guard factor.
 
 Quick start
 -----------
 >>> import numpy as np
 >>> from wade import wade
 >>> rng = np.random.default_rng(0)
->>> counts = rng.poisson(20, size=(50, 24)).astype(float)
->>> counts[0, :6] *= 30                      # a rare high-expressing subset
->>> normalizer = rng.uniform(1, 5, size=(50, 24))
->>> cond = np.r_[np.ones(12, int), np.zeros(12, int)]
->>> res = wade(counts, normalizer, cond, nperms=200)
->>> res.nprobs, res.k                        # grid resolution and tail window
-(12, 2)
+>>> counts = rng.poisson(20, size=(50, 200)).astype(float)
+>>> counts[0, :5] *= 30                       # 5% of cases, sharply elevated
+>>> cond = np.r_[np.ones(100, int), np.zeros(100, int)]
+>>> res = wade(counts, np.ones(50), cond, nperms=500)
+>>> res.nprobs                                # what the design resolves
+100
 
-The entry point takes **raw counts**, not a normalized matrix: the
-continuity jitter that breaks ties in sparse data is applied at count
-precision before division, so a pre-normalized matrix cannot reproduce
-it. :func:`wade_from_matrix` accepts one anyway and documents the cost.
+The entry point takes **raw counts**: the continuity jitter that breaks ties
+in sparse data is applied at count precision before division, so a
+pre-normalized matrix cannot reproduce it. :func:`wade_from_matrix` accepts
+one anyway and documents the cost.
 """
 
 from .api import (
     DEFAULT_NPERMS,
-    DEFAULT_TAIL_CONC_MAX_FACTOR,
     WadeResult,
-    tail_window_report,
     wade,
     wade_contrast,
     wade_from_matrix,
@@ -53,49 +42,48 @@ from .api import (
 from .diagnostics import GeneDetail, wade_gene
 from .normalize import cpm, draw_jitter, library_sizes, rle, tpm_like
 from .permutation import draw_perms, null_statistics
-from .pvalues import GPDFit, bh_adjust, gpd_tail_p, perm_pvalues
-from .quantiles import probability_grid, tail_window_size, type7_quantiles
-from .scores import dense_rank_desc, ecdf_values, wade_score
-from .shape import (ShapeResult, affected_fraction, bridge, log_ratio_curve,
-                    shape_test, up_share)
-from .stats import DEFAULT_TAIL_Q, WadeStats, wade_stats
+from .pvalues import ALTERNATIVES, GPDFit, bh_adjust, gpd_tail_p, perm_pvalues
+from .quantiles import probability_grid, type7_quantiles
+from .stats import WadeStats, wade_stats
+from .subset import (
+    SubsetResult,
+    affected_fraction,
+    bridge,
+    direction,
+    log_ratio_curve,
+    subset_test,
+)
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.2.0.dev0"
 
 __all__ = [
+    "ALTERNATIVES",
     "DEFAULT_NPERMS",
-    "DEFAULT_TAIL_CONC_MAX_FACTOR",
-    "DEFAULT_TAIL_Q",
     "GPDFit",
     "GeneDetail",
+    "SubsetResult",
     "WadeResult",
     "WadeStats",
-    "up_share",
-    "shape_test",
-    "log_ratio_curve",
-    "bridge",
     "affected_fraction",
-    "ShapeResult",
     "bh_adjust",
+    "bridge",
     "cpm",
-    "dense_rank_desc",
+    "direction",
     "draw_jitter",
     "draw_perms",
-    "ecdf_values",
     "gpd_tail_p",
     "library_sizes",
+    "log_ratio_curve",
     "null_statistics",
     "perm_pvalues",
     "probability_grid",
     "rle",
-    "tail_window_report",
-    "tail_window_size",
+    "subset_test",
     "tpm_like",
     "type7_quantiles",
     "wade",
     "wade_contrast",
     "wade_from_matrix",
     "wade_gene",
-    "wade_score",
     "wade_stats",
 ]

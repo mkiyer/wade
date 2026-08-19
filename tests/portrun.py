@@ -1,10 +1,14 @@
 """Run the port over a fixture's inputs, once per session.
 
-Everything goes through :func:`wade.wade` — the production entry point —
-with the fixture's jitter and permutation matrices passed on the ordinary
-argument path. That is the whole point of accepting them there: a fixture
-path that bypassed production code would validate a code path users never
-run (``docs/implementation-notes.md`` hazard 2).
+Everything goes through :func:`wade.wade` — the production entry point — with
+the fixture's jitter and permutation matrices passed on the ordinary argument
+path.
+
+**Parity runs use ``alternative="greater"``.** The R reference is one-sided
+upward; WADE now defaults to two-sided. Comparing the port's default against a
+one-sided oracle would be comparing two different tests, so the parity suite
+pins the orientation R used and ``test_subset.py`` covers the two-sided
+behaviour on its own terms.
 """
 
 from __future__ import annotations
@@ -35,24 +39,20 @@ def run_port(name: str):
         fx["normalizer"]["data"],
         fx["cond"],
         nperms=nperms,
-        tail_q=scalar(p["tail_q"]),
         noise=scalar(p["noise"]),
         norm_factor=scalar(p["norm_factor"]),
         jitter=fx["jitter"],
         perms=fx["perms"] if nperms > 0 else None,
-        log2_scale=bool(p["log2_scale"]),
-        weight=scalar(p["weight"]),
         gene_names=fx["gene_names"],
         n_exc_min=int(p["n_exc_min"]),
         n_tail=int(p["n_tail"]),
+        alternative="greater",
         keep_null=True,
-        compute_scores=True,
-        # Pinned to the NumPy path on purpose. Layers 0-8 exist to validate the
-        # readable reference implementation against the R; if they silently ran
-        # the compiled kernel once it was built, a disagreement would have two
-        # candidate causes again — which is precisely the ordering constraint
-        # ROADMAP.md is built around. The kernel is held to the same fixtures
-        # separately, in test_kernel.py.
+        subset=False,
+        # Layers 0-7 validate the readable NumPy path against the R. If they
+        # silently ran the compiled kernel once it was built, a disagreement
+        # would have two candidate causes again. The kernel is held to the
+        # same fixtures separately, in test_kernel.py.
         backend="numpy",
     )
     return fx, result

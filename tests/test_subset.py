@@ -1,4 +1,4 @@
-"""The shape test and the characterization statistics — docs/method.md sections 3-4.
+"""The subset test and the characterization statistics — docs/method.md sections 3-4.
 
 These are new work with no R counterpart, so there is nothing to be in parity
 *with*. They are validated on their own terms, against planted ground truth,
@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 import wade
-from wade.shape import bridge, log_ratio_curve, shape_test
+from wade.subset import bridge, log_ratio_curve, subset_test
 
 N1 = N0 = 400
 COND = np.r_[np.ones(N1, int), np.zeros(N0, int)]
@@ -142,33 +142,35 @@ def test_pi_hat_resolution_limit_is_one_over_m():
 
 
 # ---------------------------------------------------------------------
-# up_share -- direction
+# direction -- direction
 # ---------------------------------------------------------------------
 
-def test_up_share_separates_direction_and_symmetry():
-    """The pair (pi_hat, up_share) is the whole characterization."""
+def test_direction_separates_orientation_and_symmetry():
+    """The pair (pi_hat, direction) is the whole characterization."""
     rng = np.random.default_rng(16)
-    expect = {("global", 2.0): 1.0, ("global", 0.5): 0.0,
-              ("up", 0.05): 0.96, ("down", 0.05): 0.03,
-              ("var", 1.6): 0.50, ("both", 0.05): 0.50}
+    expect = {("global", 2.0): +1.00, ("global", 0.5): -1.00,
+              ("up", 0.05): +0.92, ("down", 0.05): -0.93,
+              ("var", 1.6): 0.00, ("both", 0.05): 0.00}
     for (kind, arg), want in expect.items():
         _, r = _curve(rng, kind, arg)
-        got = np.median(wade.up_share(r))
-        assert abs(got - want) < 0.08, f"{kind}({arg}): up_share {got:.3f}, expected ~{want}"
+        got = float(np.median(wade.direction(r)))
+        assert abs(got - want) < 0.12, (
+            f"{kind}({arg}): direction {got:+.3f}, expected ~{want:+.2f}"
+        )
 
 
-def test_up_share_is_bounded():
+def test_direction_is_bounded():
     rng = np.random.default_rng(17)
     for kind, arg in (("up", 0.1), ("down", 0.1), ("var", 2.0), ("global", 0.25)):
         _, r = _curve(rng, kind, arg, rep=40)
-        v = wade.up_share(r)
-        assert np.all((v >= -1e-12) & (v <= 1 + 1e-12))
+        v = wade.direction(r)
+        assert np.all((v >= -1.0 - 1e-12) & (v <= 1.0 + 1e-12))
 
 
 def test_variance_change_and_one_sided_subset_are_distinguishable():
-    """Both give pi_hat ~ 0.3; only up_share tells them apart.
+    """Both give pi_hat ~ 0.3; only direction tells them apart.
 
-    This is the caveat that made up_share necessary: the shape test's claim is
+    This is the caveat that made direction necessary: the subset test's claim is
     'a global shift does not explain this', which a variance change satisfies.
     """
     rng = np.random.default_rng(18)
@@ -176,18 +178,18 @@ def test_variance_change_and_one_sided_subset_are_distinguishable():
     _, r_sub = _curve(rng, "up", 0.30)
     pi_var, pi_sub = np.median(wade.affected_fraction(r_var)), np.median(wade.affected_fraction(r_sub))
     assert abs(pi_var - pi_sub) < 0.15, "the two should be similar on pi_hat alone"
-    assert abs(np.median(wade.up_share(r_var)) - 0.5) < 0.08
-    assert np.median(wade.up_share(r_sub)) > 0.90
+    assert abs(np.median(wade.direction(r_var))) < 0.15
+    assert np.median(wade.direction(r_sub)) > 0.80
 
 
 # ---------------------------------------------------------------------
-# The shape test
+# The subset test
 # ---------------------------------------------------------------------
 
 def _rates(rng, kind, arg, rep=120, n_perms=300, alpha=0.05):
     x = np.array([_mk(rng, kind, arg) for _ in range(rep)])
     perms = wade.draw_perms(COND, n_perms, seed=7)
-    res = shape_test(x, COND, perms)
+    res = subset_test(x, COND, perms)
     p = (1 + (res.null >= res.statistic[:, None]).sum(1)) / (n_perms + 1)
     return float(np.mean(p <= alpha)), res
 
@@ -208,7 +210,7 @@ def test_shape_test_is_SILENT_on_a_genuine_global_fold_change(fc):
     """
     rng = np.random.default_rng(22)
     rate, _ = _rates(rng, "global", fc)
-    assert rate < 0.12, f"fold change {fc}x fires the shape test at {rate:.3f}"
+    assert rate < 0.12, f"fold change {fc}x fires the subset test at {rate:.3f}"
 
 
 def test_shape_test_detects_a_small_subset():
@@ -222,7 +224,7 @@ def test_shape_test_sees_downward_subsets_the_mean_test_cannot():
     rng = np.random.default_rng(24)
     rate, res = _rates(rng, "down", 0.10)
     assert rate > 0.70
-    assert np.median(res.up_share) < 0.15, "direction must report these as downward"
+    assert np.median(res.direction) < -0.7, "direction must report these as downward"
 
 
 def test_the_shift_correction_is_what_delivers_specificity():
@@ -233,7 +235,7 @@ def test_the_shift_correction_is_what_delivers_specificity():
     positive rate on real fold changes several-fold. This pins the difference so
     the correction cannot be removed as a 'simplification'.
     """
-    from wade.permutation import _shape_null_numpy
+    from wade.permutation import _subset_null_numpy
     from wade.quantiles import probability_grid
 
     rng = np.random.default_rng(25)
@@ -245,11 +247,11 @@ def test_the_shift_correction_is_what_delivers_specificity():
     b_obs = bridge(r_obs)
 
     def rate(matrix):
-        stat, null, *_ = _shape_null_numpy(matrix, b_obs, perms, q)
+        stat, null, *_ = _subset_null_numpy(matrix, b_obs, perms, q, 'two-sided')
         p = (1 + (null >= stat[:, None]).sum(1)) / 301
         return float(np.mean(p <= 0.05))
 
-    corrected = wade.shape.shift_correct(x, COND, r_obs)
+    corrected = wade.subset.shift_correct(x, COND, r_obs)
     assert rate(corrected) < 0.12, "the corrected null must hold nominal level"
     assert rate(x) > rate(corrected), (
         "permuting the raw data must be measurably worse — that is why the "
@@ -262,7 +264,7 @@ def test_shape_test_refuses_a_grid_too_small_to_have_a_bridge():
     cond = np.r_[np.ones(6, int), np.zeros(2, int)]
     x = rng.lognormal(3, 0.6, size=(4, 8))
     with pytest.raises(ValueError, match="at least 3 grid points"):
-        shape_test(x, cond, wade.draw_perms(cond, 10, seed=1))
+        subset_test(x, cond, wade.draw_perms(cond, 10, seed=1))
 
 
 def test_pi_hat_is_robust_to_signal_shape_and_the_scan_argmax_is_not():
@@ -289,10 +291,10 @@ def test_pi_hat_is_robust_to_signal_shape_and_the_scan_argmax_is_not():
     for shape in ("multiply", "replace"):
         for frac in (0.05, 0.10, 0.25):
             x = np.array([gen(shape, frac) for _ in range(60)])
-            res = shape_test(x, COND, perms)
+            res = subset_test(x, COND, perms)
             err["argmax"] += abs(float(np.median(res.scan_fraction)) - frac)
-            err["pi_hat"] += abs(float(np.median(res.pi_hat)) - frac)
-            assert abs(float(np.median(res.pi_hat)) - frac) < max(0.04, 0.2 * frac), (
+            err["pi_hat"] += abs(float(np.median(res.affected_fraction)) - frac)
+            assert abs(float(np.median(res.affected_fraction)) - frac) < max(0.04, 0.2 * frac), (
                 f"pi_hat must track {frac:.0%} under a {shape} signal"
             )
     assert err["pi_hat"] < 0.5 * err["argmax"], (
@@ -314,25 +316,32 @@ def test_wade_reports_the_two_stages_and_the_characterization():
     x = np.array(rows); lab = np.array(lab)
     res = wade.wade(x, np.full(x.shape[0], 4.0), COND, nperms=300)
 
-    for name in ("shape_stat", "p_shape", "padj_shape", "pi_hat", "up_share"):
+    for name in ("subset_stat", "p_subset", "padj_subset", "affected_fraction", "direction"):
         assert name in res.columns()
-    assert res.mean_shift is res.diff_mean
-    assert res.p_shift is res.p_diff
+    assert res.mean_shift is not None
 
-    assert np.mean(res.p_shape[lab == "global"] <= 0.05) < 0.15
-    assert np.median(res.pi_hat[lab == "global"]) > 0.85
-    assert np.mean(res.p_shape[lab == "up"] <= 0.05) > 0.5
-    labels = set(res.interpret())
-    assert labels <= {"none", "global", "subset", "shape-only"}
-    assert "global" in set(res.interpret()[lab == "global"])
+    assert np.mean(res.p_subset[lab == "global"] <= 0.05) < 0.15
+    assert np.median(res.affected_fraction[lab == "global"]) > 0.85
+    assert np.mean(res.p_subset[lab == "up"] <= 0.05) > 0.5
+    # A global change and a subset are told apart by the characterization, not
+    # by a categorical label: no threshold turns these into classes.
+    assert np.median(res.affected_fraction[lab == "global"]) > 0.85
+    assert np.median(res.affected_fraction[lab == "up"]) < 0.25
+    # Compared against the null genes rather than against an absolute value:
+    # this matrix contains 40 globally-up genes, which inflate the case
+    # libraries and drag every other gene's direction downward (see
+    # test_composition_shifts_the_characterization_and_this_is_real). The
+    # ordering survives that; an absolute threshold would not.
+    assert (np.median(res.direction[lab == "up"])
+            > np.median(res.direction[lab == "null"]) + 0.1)
 
 
-def test_shape_can_be_switched_off_and_is_skipped_without_permutations():
+def test_subset_can_be_switched_off_and_is_skipped_without_permutations():
     rng = np.random.default_rng(32)
     x = rng.lognormal(3, 0.6, size=(20, N1 + N0))
-    assert wade.wade(x, np.full(20, 4.0), COND, nperms=0).shape is None
-    assert wade.wade(x, np.full(20, 4.0), COND, nperms=50, shape=False).shape is None
-    assert wade.wade(x, np.full(20, 4.0), COND, nperms=50).shape is not None
+    assert wade.wade(x, np.full(20, 4.0), COND, nperms=0).subset is None
+    assert wade.wade(x, np.full(20, 4.0), COND, nperms=50, subset=False).subset is None
+    assert wade.wade(x, np.full(20, 4.0), COND, nperms=50).subset is not None
 
 
 def test_composition_shifts_the_characterization_and_this_is_real():
@@ -340,27 +349,27 @@ def test_composition_shifts_the_characterization_and_this_is_real():
 
     Library-size normalization couples genes: a matrix where a large fraction of
     genes are strongly up in cases inflates the case libraries, which pushes
-    every *other* gene down. That moves up_share for null genes well away from
+    every *other* gene down. That moves direction for null genes well away from
     0.5 and is a property of normalized data, not a defect — but it will mislead
     anyone reading the characterization off a signal-saturated matrix.
     """
     rng = np.random.default_rng(33)
 
-    def null_gene_up_share(n_signal):
+    def null_gene_direction(n_signal):
         rows = [_mk(rng, "null") for _ in range(200)]
         rows += [_mk(rng, "up", 0.5) for _ in range(n_signal)]
         x = np.array(rows)
-        r = wade.wade(x, np.full(x.shape[0], 4.0), COND, nperms=0, shape=False)
+        r = wade.wade(x, np.full(x.shape[0], 4.0), COND, nperms=0, subset=False)
         st = wade.wade_stats(r.tpm, COND)
-        return float(np.median(wade.up_share(log_ratio_curve(st.Q1, st.Q0))[:200]))
+        return float(np.median(wade.direction(log_ratio_curve(st.Q1, st.Q0))[:200]))
 
-    none, some, saturated = (null_gene_up_share(n) for n in (0, 5, 300))
+    none, some, saturated = (null_gene_direction(n) for n in (0, 5, 300))
 
     # With no signal at all the null genes sit where they should.
-    assert abs(none - 0.5) < 0.25, f"no-signal baseline {none:.3f} should be near 0.5"
+    assert abs(none) < 0.5, f"no-signal baseline {none:+.3f} should be near 0"
     # Adding signal drags every OTHER gene the opposite way, monotonically, and
     # at large n it takes very little: the systematic offset quickly dominates
-    # the sampling noise that would otherwise keep up_share near 0.5.
-    assert some < none, f"5 signal genes already shift the nulls ({some:.3f} vs {none:.3f})"
-    assert saturated < some, f"saturation shifts them further ({saturated:.3f})"
-    assert saturated < 0.2
+    # the sampling noise that would otherwise keep direction near 0.5.
+    assert some < none, f"5 signal genes already shift the nulls ({some:+.3f} vs {none:+.3f})"
+    assert saturated < some, f"saturation shifts them further ({saturated:+.3f})"
+    assert saturated < -0.6

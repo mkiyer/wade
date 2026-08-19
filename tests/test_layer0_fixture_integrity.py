@@ -44,7 +44,6 @@ def test_shapes_are_self_consistent(name):
     g = int(fx["shapes"]["g"])
     n = int(fx["shapes"]["n"])
     m = int(fx["shapes"]["nprobs"])
-    k = int(fx["shapes"]["k"])
     n1 = int(fx["shapes"]["n1"])
     n0 = int(fx["shapes"]["n0"])
     B = int(fx["shapes"]["B"])
@@ -59,7 +58,6 @@ def test_shapes_are_self_consistent(name):
 
     assert n1 + n0 == n
     assert m == min(n1, n0)
-    assert k == max(1, int(np.ceil(float(np.asarray(fx["params"]["tail_q"])[0]) * m)))
 
     norm = fx["normalizer"]
     if norm["form"] == "matrix":
@@ -169,12 +167,6 @@ def test_suite_covers_the_refinement_gate_on_both_sides():
         for n in above
     )
     assert refined_somewhere, "no fixture actually exercises the GPD refinement"
-
-
-def test_tail_window_collapses_to_one_point_somewhere():
-    """At nprobs <= 10 the 'tail mean' is a single order statistic."""
-    assert any(int(load_fixture(n)["shapes"]["k"]) == 1 for n in PARITY_SCENARIOS)
-    assert any(int(load_fixture(n)["shapes"]["k"]) > 1 for n in PARITY_SCENARIOS)
 
 
 @pytest.mark.parametrize("name", ALL_SCENARIOS)

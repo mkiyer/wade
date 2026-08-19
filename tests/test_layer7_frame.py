@@ -29,8 +29,8 @@ LAYER = "layer 7 BH and frame"
 @pytest.mark.parametrize("name", PARITY_SCENARIOS)
 def test_adjusted_pvalues(name):
     fx, res = run_port(name)
-    assert_close(res.padj_diff, fx["frame"]["padj.diff"], TOL_BH, f"{name}: padj.diff", LAYER)
-    assert_close(res.padj_tail, fx["frame"]["padj.tail"], TOL_BH, f"{name}: padj.tail", LAYER)
+    assert_close(res.padj_mean_shift, fx["frame"]["padj.diff"], TOL_BH,
+                 f"{name}: padj.diff", LAYER)
 
 
 @pytest.mark.parity
@@ -79,19 +79,26 @@ def test_bh_enforces_monotonicity_and_shares_values_across_ties():
 
 
 @pytest.mark.parity
-def test_the_two_axes_are_adjusted_separately():
-    """Not pooled into one family of 2G tests.
+def test_each_stage_gets_its_own_FDR_family():
+    """The mean-shift and subset stages are adjusted separately, not pooled.
 
-    Asserted by construction: adjusting the concatenation of the two axes
-    would use n = 2G and produce systematically larger values.
+    Asserted by construction: pooling would use n = 2G and produce
+    systematically larger adjusted values.
     """
     _, res = run_port("main")
-    g = res.p_diff.size
-    pooled = wade.bh_adjust(np.concatenate([res.p_diff, res.p_tail]))
-    assert not np.allclose(pooled[:g], res.padj_diff), (
-        "pooling the axes must give a different answer from adjusting each"
-    )
-    assert np.all(pooled[:g] >= res.padj_diff - 1e-12)
+    # Each stage's adjustment uses only its own p-values.
+    assert np.allclose(res.padj_mean_shift, wade.bh_adjust(res.p_mean_shift),
+                       rtol=0, atol=0, equal_nan=True)
+
+    # Pooling genuinely differs: two stages with different p-values adjusted
+    # together use n = 2G, which is systematically more conservative.
+    rng = np.random.default_rng(0)
+    a = rng.uniform(size=40) ** 3
+    b = rng.uniform(size=40)
+    separate = wade.bh_adjust(a)
+    pooled = wade.bh_adjust(np.concatenate([a, b]))[:40]
+    assert np.all(pooled >= separate - 1e-12)
+    assert not np.allclose(pooled, separate)
 
 
 # ---------------------------------------------------------------------
@@ -111,11 +118,9 @@ def test_frame_shape_and_columns(name):
 def test_nperms_zero_returns_effect_sizes_with_missing_pvalues():
     """A supported mode, not an error."""
     fx, res = run_port("nperms0")
-    assert np.all(np.isnan(res.p_diff))
-    assert np.all(np.isnan(res.p_tail))
-    assert np.all(np.isnan(res.padj_diff))
-    assert np.all(np.isnan(res.padj_tail))
-    assert np.all(np.isfinite(res.diff_mean))
+    assert np.all(np.isnan(res.p_mean_shift))
+    assert np.all(np.isnan(res.padj_mean_shift))
+    assert np.all(np.isfinite(res.mean_shift))
     assert np.all(np.isfinite(res.w1))
 
 
@@ -152,5 +157,5 @@ def test_named_genes_are_carried_through(name):
 
 def test_result_reports_the_design_without_running_anything():
     _, res = run_port("main")
-    assert res.nprobs == 12 and res.k == 2
+    assert res.nprobs == 12
     assert res.params["n1"] == 15 and res.params["n0"] == 12

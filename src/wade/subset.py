@@ -1,11 +1,11 @@
-"""The shape test and the characterization statistics.
+"""The subset test and the characterization statistics.
 
 Implements ``docs/method.md`` sections 3 and 4.
 
 WADE asks two questions, and this module answers the second one:
 
 1. Is there a difference?  ->  :mod:`wade.stats`, the mean-shift test.
-2. **Is a global shift an inadequate explanation?**  -> here.
+2. **Is the difference confined to a subset of samples?**  -> here.
 
 Everything is read off the **log-ratio curve**
 
@@ -36,10 +36,10 @@ __all__ = [
     "log_ratio_curve",
     "bridge",
     "affected_fraction",
-    "up_share",
+    "direction",
     "shift_correct",
-    "ShapeResult",
-    "shape_test",
+    "SubsetResult",
+    "subset_test",
 ]
 
 
@@ -81,7 +81,7 @@ def bridge(r: np.ndarray) -> np.ndarray:
       re-testing the mean shift. Measured correlation with the log fold change
       under the null: +0.02.
 
-    ``B_m`` is identically zero and carries no information; :func:`shape_test`
+    ``B_m`` is identically zero and carries no information; :func:`subset_test`
     scans ``k = 1 .. m-1``.
     """
     r = np.asarray(r, dtype=np.float64)
@@ -123,31 +123,42 @@ def affected_fraction(r: np.ndarray) -> np.ndarray:
         return np.where(s4 > 0, s2 * s2 / (m * s4), np.nan)
 
 
-def up_share(r: np.ndarray) -> np.ndarray:
-    """The share of total distributional movement that is **upward**, in [0, 1].
+def direction(r: np.ndarray) -> np.ndarray:
+    """Which way the difference goes, as a signed score in ``[-1, +1]``.
 
-    The direction indicator, and what separates a one-sided subset from a
-    symmetric change. Together with :func:`affected_fraction` it is a complete
-    description — measured at 500 v 500:
+    .. math::
+        \\texttt{direction} = \\frac{\\sum_p R(p)}{\\sum_p |R(p)|}
 
-    ==========================  ========  ==========
-    gene                        pi_hat    up_share
-    ==========================  ========  ==========
-    global fold change 2x       0.978     1.000
-    global fold change 0.5x     0.979     0.000
-    variance x1.6               0.316     0.495
-    subset 5% up                0.053     0.958
-    subset 5% down              0.053     0.031
-    subset 5% up + 5% down      0.095     0.495
-    ==========================  ========  ==========
+    ``+1`` means every part of the distribution moved up, ``-1`` every part
+    moved down, and ``0`` means upward and downward movement exactly balance —
+    a two-sided change such as a variance increase, or a subset raised and an
+    equal subset lowered.
+
+    It is the *coherence* of the direction, not its size: a gene shifted 1.01x
+    everywhere and one shifted 8x everywhere both score ``+1``. Magnitude lives
+    in ``mean_shift`` and ``log2_fc``.
+
+    Together with :func:`affected_fraction` it is the whole characterization.
+    Measured at 500 v 500:
+
+    ==========================  ====================  ============
+    gene                        affected_fraction     direction
+    ==========================  ====================  ============
+    global fold change 2x       0.978                 +1.000
+    global fold change 0.5x     0.979                 -1.000
+    variance x1.6               0.316                 -0.010
+    subset 5% up                0.053                 +0.916
+    subset 5% down              0.053                 -0.928
+    subset 5% up + 5% down      0.095                 -0.006
+    ==========================  ====================  ============
 
     A symmetric variance change and a one-sided 30% subset both give
-    ``pi_hat ~ 0.3`` and are told apart by this.
+    ``affected_fraction ~ 0.3``; only this tells them apart.
     """
     r = np.asarray(r, dtype=np.float64)
     total = np.abs(r).sum(axis=1)
     with np.errstate(divide="ignore", invalid="ignore"):
-        return np.where(total > 0, np.maximum(r, 0.0).sum(axis=1) / total, np.nan)
+        return np.where(total > 0, r.sum(axis=1) / total, np.nan)
 
 
 def shift_correct(x: np.ndarray, cond: np.ndarray, r: np.ndarray) -> np.ndarray:
@@ -181,15 +192,15 @@ def shift_correct(x: np.ndarray, cond: np.ndarray, r: np.ndarray) -> np.ndarray:
 
 
 @dataclass(frozen=True)
-class ShapeResult:
-    """Everything the shape test produces."""
+class SubsetResult:
+    """Everything the subset test produces."""
 
     statistic: np.ndarray     # (g,)   max_k standardized bridge
     null: np.ndarray | None   # (g, B) the permutation null
     r: np.ndarray             # (g, m) the log-ratio curve
     b: np.ndarray             # (g, m) the bridge
-    pi_hat: np.ndarray        # (g,)   effective affected fraction
-    up_share: np.ndarray      # (g,)   direction, in [0, 1]
+    affected_fraction: np.ndarray  # (g,) effective fraction of samples that differ
+    direction: np.ndarray          # (g,) -1 all down .. +1 all up
     argmax_k: np.ndarray      # (g,)   width at which the scan peaked
     shift: np.ndarray         # (g,)   the fold change divided out to build the null
 
@@ -207,7 +218,7 @@ class ShapeResult:
         fraction:
 
         ===========  ======  ============  ==========
-        signal       true    argmax / m    pi_hat
+        signal       true    argmax / m    affected_fraction
         ===========  ======  ============  ==========
         multiply     0.05    0.050         0.054
         multiply     0.25    0.299         0.283
@@ -216,7 +227,7 @@ class ShapeResult:
         ===========  ======  ============  ==========
 
         Total absolute error over that grid: 0.315 for the argmax against 0.084
-        for ``pi_hat``. Exposed for diagnostics only.
+        for ``affected_fraction``. Exposed for diagnostics only.
         """
         return self.argmax_k / self.r.shape[1]
 
@@ -227,14 +238,18 @@ def _bridge_from(x: np.ndarray, cond: np.ndarray, q: np.ndarray) -> np.ndarray:
                                   type7_quantiles(x[:, i0], q)))
 
 
-def shape_test(
+def subset_test(
     x: np.ndarray,
     cond: np.ndarray,
     perms: np.ndarray,
     *,
+    alternative: str = "two-sided",
     backend: str = "auto",
-) -> ShapeResult:
+) -> SubsetResult:
     """Scan the bridge over every window width, against a global-shift null.
+
+    Answers **"is the difference confined to a subset of samples?"** — stated
+    precisely, "a global shift does not explain this".
 
     .. math::
         T = \\max_{k<m} \\frac{B_k - \\mu_k}{\\sigma_k}
@@ -248,11 +263,17 @@ def shape_test(
     ``mu_k`` and ``sigma_k``, which the second needs in order to standardize
     before maximizing. Both run on the shift-corrected matrix.
 
-    What the test claims is **"a global shift does not explain this"**, which is
-    broader than "a subset is higher". A pure variance increase fires it, and so
-    does a downward subset — the first is a real finding about heterogeneity,
-    the second is signal the mean test cannot see at all. ``up_share``
-    distinguishes them.
+    ``alternative`` selects which end of the distribution the concentration
+    must sit at. ``"two-sided"`` (the default) scans ``|Z_k|`` and detects
+    concentration anywhere; ``"greater"`` requires the difference to be
+    top-heavy, which is the classic cancer-outlier case of a subset with
+    *elevated* expression; ``"less"`` requires it to be bottom-heavy.
+
+    What the test claims is **"a global shift does not explain this"**, which
+    is broader than "a subset is higher". A pure variance increase fires it,
+    and so does a downward subset — the first is a real finding about
+    heterogeneity, the second is signal the mean test cannot see at all.
+    :func:`direction` distinguishes them.
     """
     x = np.asarray(x, dtype=np.float64)
     cond = np.asarray(cond)
@@ -260,7 +281,7 @@ def shape_test(
     m = min(i1.size, i0.size)
     if m < 3:
         raise ValueError(
-            f"the shape test needs at least 3 grid points to have a bridge with "
+            f"the subset test needs at least 3 grid points to have a bridge with "
             f"any interior; min(n_case, n_ctrl) = {m}. Use the mean-shift test alone."
         )
     q = probability_grid(m)
@@ -275,11 +296,13 @@ def shape_test(
     xs = x.copy()
     xs[:, i1] /= shift[:, None]
 
-    from .permutation import shape_null_backend
+    from .permutation import subset_null_backend
 
-    stat, null, mu, sd, argmax = shape_null_backend(xs, b_obs, perms, q, backend=backend)
-    return ShapeResult(
+    stat, null, mu, sd, argmax = subset_null_backend(
+        xs, b_obs, perms, q, alternative=alternative, backend=backend
+    )
+    return SubsetResult(
         statistic=stat, null=null, r=r_obs, b=b_obs,
-        pi_hat=affected_fraction(r_obs), up_share=up_share(r_obs),
+        affected_fraction=affected_fraction(r_obs), direction=direction(r_obs),
         argmax_k=argmax, shift=shift,
     )

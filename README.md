@@ -32,12 +32,13 @@ maintained. See [`ROADMAP.md`](ROADMAP.md).
 | Python package | implemented |
 | Parity suite | layers 0–9, passing |
 | Rust kernel | implemented (PyO3 + rayon), 18–22× faster than the NumPy path |
+| Subset test and characterization | implemented; replaces the fixed tail window |
 
 **Parity, measured:** worst-case relative deviation against the R reference is
-**9.2e-15** across 610 comparisons. The normalized matrix, the quantile grids,
-the permutation null matrices and the rank scores are **bit-for-bit identical**
-to R. Full breakdown, and the two places a correct port must *disagree* with the
-R, in [`docs/implementation-notes.md`](docs/implementation-notes.md).
+**9.2e-15** across 325 comparisons. The normalized matrix, the quantile grids and
+the permutation null are **bit-for-bit identical** to R. The fixtures now pin
+the shared machinery underneath the statistic rather than the statistic itself,
+which has been replaced — see [`docs/method.md`](docs/method.md) §7.
 
 ## Layout
 
@@ -74,11 +75,18 @@ fixtures are committed — the parity suite passes with no R present.
 import numpy as np
 from wade import wade
 
-res = wade(counts, normalizer, cond, nperms=2000)   # raw counts, genes x samples
-res.nprobs, res.k                                   # what the design actually resolves
-res.diff_mean, res.tail_mean                        # the bulk and subset axes
-res.padj_tail                                       # BH-adjusted, per axis
+res = wade(counts, normalizer, cond, nperms=2000)  # raw counts, genes x samples
+
+res.p_mean_shift       # is average expression different?
+res.p_subset           # is the difference confined to a subset of samples?
+res.affected_fraction  # what fraction of samples differ (1.0 = all of them)
+res.direction          # -1 all down .. +1 all up
 ```
+
+The second question is the point. A gene altered in 5% of cases and a gene
+shifted 2x in all of them can produce the same mean difference, and a
+first-moment test cannot tell them apart. **Nothing asks you to declare in
+advance which you are looking for** — no percentile cutoff, no window width.
 
 The entry point takes **raw counts**, not a normalized matrix. The continuity
 jitter that breaks ties in sparse data is applied at count precision *before*
@@ -121,13 +129,12 @@ hypothetical. Full treatment in [`docs/limits.md`](docs/limits.md).
   confound can be detected but not removed.
 - **No repeated-measures handling.** Samples are assumed exchangeable; libraries
   from the same subject are not.
-- **One-sided upward.** The test and the rank scores reward up-in-case genes.
-  Genes lost in cases are visible in the bulk statistic but are not what the
-  ranking surfaces.
-- **The subset axis needs order statistics to exist.** The quantile grid has
-  `min(n_case, n_ctrl)` points and the tail window is the top 10% of them, so
-  below roughly 20 in the smaller group the "tail mean" is one or two order
-  statistics wearing the name of an average.
+- **Two-sided by default**, with `alternative="greater"` or `"less"` if you
+  only care about one direction.
+- **The affected fraction cannot resolve finer than `1/min(n_case, n_ctrl)`.**
+  Quantitative above about 100 per group, degrading through 50, and below that
+  only qualitative — global still separates from concentrated, but 2% and 5% do
+  not separate from each other.
 - **A combinatorial floor limits subset detection**, and it binds harder than the
   original write-up suggested. If `k` samples carry a signal, label shuffling
   places all of them in the case group with probability

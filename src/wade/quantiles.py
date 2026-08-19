@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["probability_grid", "tail_window_size", "type7_quantiles"]
+__all__ = ["probability_grid", "type7_quantiles"]
 
 
 def probability_grid(nprobs: int) -> np.ndarray:
@@ -53,19 +53,6 @@ def probability_grid(nprobs: int) -> np.ndarray:
     if nprobs == 1:
         return np.array([1.0])
     return np.linspace(1.0, 0.0, nprobs)
-
-
-def tail_window_size(nprobs: int, tail_q: float) -> int:
-    """``k = max(1, ceil(tail_q * nprobs))`` — the upper-tail window.
-
-    The ceiling and the floor of 1 together mean the statistic is always
-    computable, including in regimes where it should not be believed: at
-    ``nprobs <= 10`` and the default ``tail_q = 0.10`` the "tail mean" is a
-    single order statistic. See ``docs/limits.md`` section 3.
-    """
-    if not (0.0 < tail_q <= 1.0):
-        raise ValueError(f"tail_q must lie in (0, 1], got {tail_q}")
-    return max(1, int(np.ceil(tail_q * nprobs)))
 
 
 def type7_quantiles(x: np.ndarray, probs: np.ndarray) -> np.ndarray:

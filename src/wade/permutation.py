@@ -4,11 +4,11 @@ Inference is by exchangeability of the labels: draw a uniform permutation
 of the condition vector, recompute the two axes for every gene, repeat.
 
 Two properties of the construction are load-bearing
-(``docs/method.md`` section 4.1):
+(``docs/method.md`` section 6):
 
-* **Both axes are tested on the same shuffles.** ``diff_mean`` and
-  ``tail_mean`` each get their own null distribution and their own
-  p-value. Neither gates the other and they are not combined.
+* **Both stages are tested on the same shuffles.** The mean-shift test and
+  the subset test each get their own null and their own p-value. Neither
+  gates the other and they are not combined.
 * **One shuffle serves all genes.** Within permutation ``b`` the same
   label vector is applied to every gene, so the null preserves the
   gene-gene correlation structure of the data. An implementation drawing
@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .quantiles import probability_grid, tail_window_size, type7_quantiles
+from .quantiles import probability_grid, type7_quantiles
 from .stats import split_groups
 
 try:                                    # pragma: no cover - build-dependent
@@ -34,7 +34,7 @@ except ImportError:                     # pragma: no cover
     _rust = None
 
 __all__ = ["draw_perms", "validate_perms", "null_statistics", "available_backends",
-           "shape_null_backend", "HAVE_RUST_KERNEL"]
+           "subset_null_backend", "HAVE_RUST_KERNEL"]
 
 #: Whether the compiled kernel was built and imported. The package is fully
 #: functional without it — the NumPy path is the correctness baseline and the
@@ -99,32 +99,18 @@ def validate_perms(perms: np.ndarray, cond: np.ndarray, n_perms: int) -> np.ndar
 def null_statistics(
     x: np.ndarray,
     perms: np.ndarray,
-    tail_q: float,
-    log2_scale: bool = False,
-    weight: float = 1.0,
     *,
     backend: str = "auto",
-) -> tuple[np.ndarray, np.ndarray]:
-    """Null matrices for both axes. Returns ``(diff_mean, tail_mean)``, each ``(g, B)``.
+) -> np.ndarray:
+    """The mean-shift null. Returns a ``(genes, permutations)`` matrix.
 
-    Only ``diff_mean`` and ``tail_mean`` are needed for the p-values, so
-    this computes the two quantile grids, their difference, and those two
-    reductions — not ``w1``, ``tail_conc``, ``fc`` or the auxiliary means.
-    The grid, ``nprobs`` and ``k`` are fixed by the group sizes, which
-    permutation preserves, so they are computed once and reused. That is a
-    performance specialisation with no effect on the numbers: the
-    expressions are the same expressions the observed path uses, computed
-    in the same order, so observed and null statistics are commensurable
-    in the strict sense.
-
-    Parameters
-    ----------
-    backend
-        ``"auto"`` uses the compiled kernel when it is available and the
-        NumPy loop otherwise; ``"numpy"`` and ``"rust"`` force one. The
-        two are held to elementwise agreement by the parity suite, so the
-        choice is a performance decision only — and having both selectable
-        is what makes that assertion possible.
+    Only the signed grid area is needed, so this computes the two quantile
+    grids, their difference and that one reduction. The grid and ``nprobs``
+    are fixed by the group sizes, which permutation preserves, so they are
+    computed once. The expressions are the ones the observed path uses,
+    evaluated in the same order, so observed and null values are strictly
+    commensurable — which matters because a gene whose observed value ties a
+    null draw would otherwise fall on either side of the comparison.
     """
     x = np.ascontiguousarray(x, dtype=np.float64)
     perms = np.asarray(perms)
@@ -134,7 +120,6 @@ def null_statistics(
     i1_0, i0_0 = split_groups(perms[0])
     nprobs = min(i1_0.size, i0_0.size)
     q = probability_grid(nprobs)
-    k = tail_window_size(nprobs, tail_q)
 
     if backend not in ("auto", "numpy", "rust"):
         raise ValueError(f"backend must be 'auto', 'numpy' or 'rust'; got {backend!r}")
@@ -144,37 +129,23 @@ def null_statistics(
             "`pip install -e .` (needs cargo/rustc), or use backend='numpy'"
         )
     if backend != "numpy" and _rust is not None:
-        d, t = _rust.null_statistics(
-            x, np.ascontiguousarray(perms, dtype=np.int64), q, k, float(weight),
-            bool(log2_scale),
+        d = _rust.null_statistics(
+            x, np.ascontiguousarray(perms, dtype=np.int64), q
         )
-        # The kernel builds permutation-major so each permutation's writes stay
+        # Permutation-major inside the kernel keeps each permutation's writes
         # contiguous; transposing to the (genes, permutations) contract is a
-        # view, so this costs nothing and — importantly at 3.2 GB — copies nothing.
-        return d.T, t.T
+        # view, so it copies nothing.
+        return d.T
 
-    diff = np.empty((g, n_perms), dtype=np.float64)
-    tail = np.empty((g, n_perms), dtype=np.float64)
-
+    out = np.empty((g, n_perms), dtype=np.float64)
     for b in range(n_perms):
-        cb = perms[b]
-        i1, i0 = split_groups(cb)
-        xb = x
-        if weight != 1.0:
-            # Applied by condition, so the WEIGHTED group changes membership
-            # every iteration. That is the reference's behaviour; whether it
-            # is intended is open (ROADMAP.md O5).
-            xb = x * np.where(cb == 0, weight, 1.0)[None, :]
-        if log2_scale:
-            xb = np.log2(xb + 1.0)
-        d = type7_quantiles(xb[:, i1], q) - type7_quantiles(xb[:, i0], q)
-        diff[:, b] = d.sum(axis=1) / nprobs
-        tail[:, b] = d[:, :k].mean(axis=1)
-
-    return diff, tail
+        i1, i0 = split_groups(perms[b])
+        d = type7_quantiles(x[:, i1], q) - type7_quantiles(x[:, i0], q)
+        out[:, b] = d.sum(axis=1) / nprobs
+    return out
 
 
-def _shape_null_numpy(xs, b_obs, perms, q):
+def _subset_null_numpy(xs, b_obs, perms, q, alternative):
     """Two passes over the permutations, on the shift-corrected matrix.
 
     Pass 1 estimates the null moments of the bridge at every width; pass 2
@@ -183,7 +154,7 @@ def _shape_null_numpy(xs, b_obs, perms, q):
     ``B * g * m`` doubles, which at realistic sizes is far larger than the
     two-pass recomputation is slow.
     """
-    from .shape import _bridge_from
+    from .subset import _bridge_from
 
     g, m = b_obs.shape
     n_perms = perms.shape[0]
@@ -203,18 +174,31 @@ def _shape_null_numpy(xs, b_obs, perms, q):
     usable[:, -1] = False
     safe = np.where(usable, sd, np.inf)
 
+    def reduce(z):
+        if alternative == "greater":
+            pass
+        elif alternative == "less":
+            z = -z
+        else:
+            z = np.abs(z)
+        return z
+
     null = np.empty((g, n_perms), dtype=np.float64)
     for b in range(n_perms):
-        z = (_bridge_from(xs, perms[b], q) - mu) / safe
+        z = reduce((_bridge_from(xs, perms[b], q) - mu) / safe)
         null[:, b] = z.max(axis=1)
 
-    z_obs = (b_obs - mu) / safe
+    z_obs = reduce((b_obs - mu) / safe)
     return z_obs.max(axis=1), null, mu, sd, z_obs.argmax(axis=1) + 1
 
 
-def shape_null_backend(xs, b_obs, perms, q, *, backend="auto"):
-    """Dispatch the shape test's permutation work. Returns
+def subset_null_backend(xs, b_obs, perms, q, *, alternative="two-sided", backend="auto"):
+    """Dispatch the subset test's permutation work. Returns
     ``(statistic, null, mu, sd, argmax_k)``."""
+    from .pvalues import ALTERNATIVES
+
+    if alternative not in ALTERNATIVES:
+        raise ValueError(f"alternative must be one of {ALTERNATIVES}; got {alternative!r}")
     if backend not in ("auto", "numpy", "rust"):
         raise ValueError(f"backend must be 'auto', 'numpy' or 'rust'; got {backend!r}")
     if backend == "rust" and _rust is None:
@@ -223,9 +207,4 @@ def shape_null_backend(xs, b_obs, perms, q, *, backend="auto"):
             "`pip install -e .` (needs cargo/rustc), or use backend='numpy'"
         )
     xs = np.ascontiguousarray(xs, dtype=np.float64)
-    if backend != "numpy" and _rust is not None and hasattr(_rust, "shape_null"):
-        stat, null, mu, sd, argmax = _rust.shape_null(
-            xs, np.ascontiguousarray(b_obs), np.ascontiguousarray(perms, dtype=np.int64), q
-        )
-        return stat, null.T, mu, sd, argmax
-    return _shape_null_numpy(xs, b_obs, perms, q)
+    return _subset_null_numpy(xs, b_obs, perms, q, alternative)

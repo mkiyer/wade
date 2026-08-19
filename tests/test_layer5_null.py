@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from conftest import PARITY_SCENARIOS, TOL_NULL, assert_close, load_fixture
-from portrun import run_port, scalar
+from portrun import run_port
 
 import wade
 
@@ -26,20 +26,11 @@ WITH_PERMS = [n for n in PARITY_SCENARIOS if int(load_fixture(n)["shapes"]["B"])
 
 @pytest.mark.parity
 @pytest.mark.parametrize("name", WITH_PERMS)
-def test_null_diff_matrix_elementwise(name):
+def test_null_matrix_elementwise(name):
     fx, res = run_port(name)
-    assert res.null_diff.shape == fx["null"]["perm_dm"].shape
-    assert_close(res.null_diff, fx["null"]["perm_dm"], TOL_NULL,
-                 f"{name}: null diff.mean ({res.null_diff.size} cells)", LAYER)
-
-
-@pytest.mark.parity
-@pytest.mark.parametrize("name", WITH_PERMS)
-def test_null_tail_matrix_elementwise(name):
-    fx, res = run_port(name)
-    assert res.null_tail.shape == fx["null"]["perm_tm"].shape
-    assert_close(res.null_tail, fx["null"]["perm_tm"], TOL_NULL,
-                 f"{name}: null tail.mean ({res.null_tail.size} cells)", LAYER)
+    assert res.null_mean_shift.shape == fx["null"]["perm_dm"].shape
+    assert_close(res.null_mean_shift, fx["null"]["perm_dm"], TOL_NULL,
+                 f"{name}: mean-shift null ({res.null_mean_shift.size} cells)", LAYER)
 
 
 @pytest.mark.parity
@@ -63,11 +54,10 @@ def test_null_and_observed_paths_agree_on_the_identity_permutation():
     x = rng.lognormal(3, 1, size=(30, 21))
     cond = np.r_[np.ones(11, int), np.zeros(10, int)]
 
-    obs = wade.wade_stats(x, cond, tail_q=0.10)
-    d, t = wade.null_statistics(x, cond[None, :], tail_q=0.10)
+    obs = wade.wade_stats(x, cond)
+    d = wade.null_statistics(x, cond[None, :])
 
-    assert np.array_equal(d[:, 0], obs.diff_mean)
-    assert np.array_equal(t[:, 0], obs.tail_mean)
+    assert np.array_equal(d[:, 0], obs.mean_shift)
 
 
 def test_one_shuffle_serves_all_genes():
@@ -85,7 +75,7 @@ def test_one_shuffle_serves_all_genes():
     cond = np.r_[np.ones(10, int), np.zeros(9, int)]
     perms = wade.draw_perms(cond, 40, seed=17)
 
-    d, _ = wade.null_statistics(x, perms, tail_q=0.10)
+    d = wade.null_statistics(x, perms)
     assert np.allclose(d[1], 2.0 * d[0], rtol=1e-12)
     assert np.allclose(d[2], 0.5 * d[0], rtol=1e-12)
 
@@ -111,7 +101,7 @@ def test_a_malformed_permutation_matrix_is_rejected():
 
 @pytest.mark.parity
 def test_null_memory_footprint_is_as_documented():
-    """Two g x nperms float64 matrices, allocated together.
+    """The null matrix, allocated up front.
 
     About 71 MB at the cfRNA production scale (2,219 genes, 2,000
     permutations) and 3.2 GB at 20,000 genes and 10,000 permutations,
@@ -120,10 +110,10 @@ def test_null_memory_footprint_is_as_documented():
     refined gene's **full** null vector, so it must either retain rows for
     candidate genes or make two passes.
     """
-    assert 2 * 2219 * 2000 * 8 / 1e6 == pytest.approx(71.0, rel=0.02)
-    assert 2 * 20000 * 10000 * 8 / 1e9 == pytest.approx(3.2, rel=0.02)
+    assert 2219 * 2000 * 8 / 1e6 == pytest.approx(35.5, rel=0.02)
+    assert 20000 * 10000 * 8 / 1e9 == pytest.approx(1.6, rel=0.02)
 
     _, res = run_port("main")
-    assert res.null_diff.dtype == np.float64
-    assert res.null_diff.shape == (int(load_fixture("main")["shapes"]["g"]),
-                                   int(load_fixture("main")["shapes"]["B"]))
+    assert res.null_mean_shift.dtype == np.float64
+    assert res.null_mean_shift.shape == (int(load_fixture("main")["shapes"]["g"]),
+                                         int(load_fixture("main")["shapes"]["B"]))

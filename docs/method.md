@@ -12,11 +12,10 @@ shifted 2× in all of them can produce the same mean difference, and a
 first-moment test cannot tell them apart. Nothing here requires the user to
 declare in advance which they are looking for.
 
-> **Status.** All of this is implemented. Sections 1–2 and 6–8 are additionally
-> verified against the R reference; sections 3–5 are new work with no R
-> counterpart, validated against planted ground truth in `tests/test_shape.py`.
-> Section 7 records the superseded machinery, still present because the parity
-> fixtures pin it. `ROADMAP.md` tracks what remains.
+> **Status.** All of this is implemented. Sections 1–2 and 6, 8 are
+> additionally verified against the R reference; sections 3–5 are new work with
+> no R counterpart, validated against planted ground truth in
+> `tests/test_subset.py`. `ROADMAP.md` tracks what remains.
 
 ---
 
@@ -108,7 +107,7 @@ when the subset is shifted multiplicatively and underestimates it several-fold
 when the subset's values are replaced outright, because the log-ratio curve then
 declines steeply across the affected region and the cumulative departure peaks
 before it ends. Measured total absolute error against planted fractions across
-both signal shapes: 0.315 for the argmax against 0.084 for $\hat\pi$. **Threshold-free by
+both signal shapes: 0.315 for the argmax against 0.084 for `affected_fraction`. **Threshold-free by
 maximization rather than by choosing.** This is the direct answer to COPA's
 defect: COPA required a percentile cutoff, so it had to be run at several and
 left the user holding several answers. The scan runs at all of them and the
@@ -167,7 +166,7 @@ higher", and the difference is documented rather than hidden:
 
 Two bounded, parameter-free numbers, both read off $R$.
 
-### The effective affected fraction
+### `affected_fraction` — how much of the group differs
 
 $$\boxed{\;\hat{\pi} = \frac{\left(\sum_p R(p)^2\right)^2}{m \sum_p R(p)^4}\;}$$
 
@@ -183,25 +182,25 @@ at 1.0, but its unaffected quantiles carry enough sampling noise to swamp a 2%
 signal; the quartic form suppresses that floor and keeps the anchor. Measured,
 the second-moment version reads a 2% subset as 0.23 and this one as 0.025.
 
-### The direction
+### `direction` — which way
 
 $$\boxed{\;\texttt{up\_share} = \frac{\sum_p \max(R(p), 0)}{\sum_p |R(p)|}\;}$$
 
-The share of total distributional movement that is upward. Bounded $[0,1]$.
+Bounded $[-1, +1]$: $+1$ every part moved up, $-1$ every part moved down, $0$ upward and downward movement exactly balancing.
 
 Together the pair is a complete description. Measured at 500 v 500:
 
-| gene | $\hat{\pi}$ | `up_share` | reads as |
+| gene | `affected_fraction` | `direction` | reads as |
 |---|---|---|---|
-| global fc = 2 | 0.978 | 1.000 | everything, up |
-| global fc = 0.5 | 0.979 | 0.000 | everything, down |
-| variance × 1.6 | 0.316 | 0.495 | two-sided spread |
-| subset 5% up | 0.053 | 0.958 | 5% of cases, up |
-| subset 5% down | 0.053 | 0.031 | 5% of cases, down |
-| subset 5% up + 5% down | 0.095 | 0.495 | 10% total, split |
+| global fc = 2 | 0.978 | +1.000 | everything, up |
+| global fc = 0.5 | 0.979 | −1.000 | everything, down |
+| variance × 1.6 | 0.316 | −0.010 | two-sided spread |
+| subset 5% up | 0.053 | +0.916 | 5% of cases, up |
+| subset 5% down | 0.053 | −0.928 | 5% of cases, down |
+| subset 5% up + 5% down | 0.095 | −0.006 | 10% total, split |
 
 A symmetric variance change and a one-sided 30% subset both give
-$\hat{\pi} \approx 0.3$ and are separated by `up_share` (0.50 against ~1.0).
+$\hat{\pi} \approx 0.3$ and are separated by `direction` (0.50 against ~1.0).
 
 ### Composition moves both, and that is not a defect
 
@@ -210,12 +209,12 @@ fraction of genes are strongly up in cases inflates the case libraries, which
 pushes every *other* gene down — and because the offset is systematic while the
 sampling noise is not, at large $n$ it takes very little signal to dominate.
 Measured at 400 v 400, five strongly-up genes among 205 were enough to move the
-null genes' `up_share` from ~0.5 to near 0.
+null genes' `direction` from ~0.5 to near 0.
 
 Consequences to keep in view when reading a characterization: null genes
-acquire a small consistent fold change, so their $\hat\pi$ drifts toward 1
+acquire a small consistent fold change, so their `affected_fraction` drifts toward 1
 (they genuinely *are* globally shifted, relative to the library) and their
-`up_share` collapses toward 0 or 1. **The shape test itself is unaffected** —
+`direction` collapses toward 0 or 1. **The shape test itself is unaffected** —
 the bridge is invariant to exactly this kind of global offset — but the two
 descriptive statistics are not. This is a property of normalized data that
 affects any differential method, not something WADE introduces, and it is
@@ -242,10 +241,14 @@ instead of being absorbed by a rounding rule.
 
 ## 5. Reading the output
 
-| `p_shift` | `p_shape` | interpretation |
+There is **no categorical label**. These are continuous statistics and turning
+them into classes would need thresholds, which is exactly what the redesign
+removed. The table is how to read them, not a function the package provides.
+
+| `p_mean_shift` | `p_subset` | interpretation |
 |---|---|---|
 | significant | — | global shift; an ordinary DE method finds this too |
-| significant | significant | concentrated in a subset strong enough to move the mean — $\hat\pi$ says how much, `up_share` which way |
+| significant | significant | concentrated in a subset strong enough to move the mean — `affected_fraction` says how much, `direction` which way |
 | — | significant | distributional change with no net mean shift: a balanced subset, or a variance change |
 | — | — | not differential |
 
@@ -293,35 +296,37 @@ small $n$ and is the single most important thing to check before running.
 
 ---
 
-## 7. What the subset machinery is today
+## 7. What was retired, and why
 
-**IMPLEMENTED, and superseded by §3–4.** Recorded because it is what the code
-currently does and what the parity fixtures pin.
+The subset machinery used to be a fixed tail window,
+``k = max(1, ceil(q_tail * m))`` with ``q_tail = 0.10``, giving `tail.mean`
+and `tail.conc`. It is gone, along with `q_tail`, the guard factor `F`, and
+the rank scores that consumed it.
 
-The tail window is $k = \max(1, \lceil q_{\text{tail}} \cdot m \rceil)$ with
-$q_{\text{tail}} = 0.10$, giving `tail.mean` (the mean of $D$ over the top $k$
-nodes) and `tail.conc` (its share of the total signed area).
-
-Why it is being replaced: three stacked heuristics — a fraction, a rounding
-rule, and a floor — plus a fourth to guard the ratio they produce. It forces the
-user to declare what they are looking for, and $k$ is an integer window on a
-grid whose size is set by the design, so the realized tail fraction sawtooths
-between 0.100 and 0.182 as group size varies and jumps discontinuously
-($m = 20 \to 21$ moves it from 10.0% to 14.3% on one extra sample). `tail.mean`
-is therefore not comparable across contrasts of different sizes.
+Three stacked heuristics — a fraction, a rounding rule and a floor — plus a
+fourth to guard the ratio they produced. It forced the user to declare what
+they were looking for, which is the defect that made COPA require re-running
+at every percentile cutoff. And `k` was an integer window on a grid whose size
+is set by the design, so the realized tail fraction sawtoothed between 0.100
+and 0.182 as group size varied and jumped discontinuously ($m = 20 \to 21$
+moved it from 10.0% to 14.3% on one extra sample) — making `tail.mean`
+incomparable across contrasts of different sizes.
 
 Measured, the replacement matches it in power and beats it wherever the signal
-is not concentrated near 10% — at 77 v 18 with a weak global change, 0.975
+is not concentrated near 10%: at 77 v 18 with a weak global change, 0.975
 against 0.830.
 
-`tail.conc` additionally has a **pole**: its denominator is a signed sum, so it
-diverges whenever the bulk cancels the tail. Measured on a realistic simulation,
-the largest $|$`tail.conc`$|$ among genes with *no signal at all* was 3,483. The
-R reference guards it at $|$`diff.mean`$\cdot m| < 10^{-8}$, roughly nine orders
-of magnitude tighter than the cases that occur, which catches none of them. §4's
-$\hat\pi$ has no pole and needs no guard.
+`tail.conc` additionally had a **pole**, its denominator being a signed sum
+that vanishes whenever the bulk cancels the tail. On a realistic simulation the
+largest $|$`tail.conc`$|$ among genes with *no signal at all* was 3,483. §4's
+`affected_fraction` has no pole and needs no guard.
 
----
+**What the parity fixtures still pin.** They were generated to validate the
+port against `reference/R/wade.R`, and parity on the retired statistics no
+longer tests anything that runs. What they still pin is the shared machinery
+underneath — normalization, the type-7 quantile grids, the permutation null,
+the GPD refinement and BH — which §1–6 use unchanged and where a silent
+cross-language disagreement would do the most damage.
 
 ## 8. Normalization
 
@@ -358,6 +363,7 @@ use consistent library sizes.
 | parameter | default | role |
 |---|---|---|
 | $B$ (permutations) | 2000 | null resolution; sets both p-value floors |
+| `alternative` | `two-sided` | detect differences in either direction; `greater` / `less` restrict it |
 | $\nu$ (jitter) | 0.01 | continuity jitter width, at count precision |
 | $\kappa$ | 1e6 | TPM-like scale factor |
 | seed | 1 | jitter and permutations on separate streams |

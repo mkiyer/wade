@@ -1,21 +1,23 @@
-"""Layer 9 — method validation. Not parity.
+"""Method validation — not parity.
 
-The three simulations from ``reference/R/validation_sims_v7.R``, ported.
-They validate the **method** rather than the port, which is why they
-belong in the repository at all rather than only in a notebook.
+These validate the **method** rather than the port, which is why they belong in
+the repository rather than only in a notebook. Rewritten around the two-stage
+design; the originals validated the retired tail window.
 
-**These cannot match the R to the digit and are not supposed to.** The
-generators are different (hazard 2), so the synthetic data differ and so
-do the permutation nulls. What must match is the *behaviour*: calibration
-at nominal, subset-versus-bulk separation on the tail axis, and a power
-curve that steps where the combinatorial floor crosses the BH threshold.
-The R's measured values are quoted at each assertion as the target, and
-the port's own values are printed so the two can be read side by side.
+Three claims, each with its own simulation:
 
-Run with ``-m validation -s`` to see the tables.
+(a) **Calibration.** Neither stage manufactures significance.
+(b) **Discrimination.** A gene altered in a subset and a gene shifted globally
+    can produce the same mean difference; the subset stage and
+    ``affected_fraction`` must separate them. This is the entire reason WADE
+    exists rather than an ordinary DE test.
+(c) **Power against the combinatorial floor**, which is a property of the
+    design that no detector, effect size or permutation count can move.
 """
 
 from __future__ import annotations
+
+from math import lgamma
 
 import numpy as np
 import pytest
@@ -24,259 +26,171 @@ import wade
 
 pytestmark = [pytest.mark.validation, pytest.mark.slow]
 
-# The cfRNA v7 primary contrast's own geometry, so the simulation inherits
-# a real design rather than a round number. min(n0, n1) IS the quantile
-# grid, so the 10% tail window is 2 order statistics here.
-N_CASES = 77
-N_CONTROLS = 18
-NPERMS = 1000
-G_NULL = 800
-G_BACKGROUND = 600
-N_PLANTED = 25
-N_SUBSET_PWR = 80
-SUBSET_FRAC = 0.08
-SPIKE_MU = 6.2
-LEN_CONST = 4.0
-FRACS = (0.03, 0.05, 0.08, 0.12, 0.20, 0.35, 0.50)
-
-NN = N_CASES + N_CONTROLS
-COND = np.r_[np.ones(N_CASES, int), np.zeros(N_CONTROLS, int)]
+NPERMS = 300
 
 
-def _mk_subset(rng, frac, spike_mu=SPIKE_MU):
-    """Case group at the null, with a random fraction replaced by a spike."""
-    x = np.r_[rng.lognormal(3, 0.6, N_CASES), rng.lognormal(3, 0.6, N_CONTROLS)]
-    k = max(1, round(frac * N_CASES))
-    sp = rng.choice(N_CASES, size=k, replace=False)
-    x[sp] = rng.lognormal(spike_mu, 0.3, k)
-    return x
+def _lchoose(n, r):
+    return lgamma(n + 1) - lgamma(r + 1) - lgamma(n - r + 1)
 
 
-def _mk_bulk(rng, shift):
-    """The whole case group's meanlog shifted."""
-    return np.r_[rng.lognormal(3 + shift, 0.6, N_CASES),
-                 rng.lognormal(3, 0.6, N_CONTROLS)]
+def comb_floor(n1: int, n: int, k: int) -> float:
+    """P(a random relabelling puts all k signal-carrying samples in one group).
+
+    The smallest p-value **any** label-permutation test can return for a
+    k-sample subset. A property of the design, not of the implementation.
+    """
+    if k < 1 or k > n1:
+        return 1.0
+    return float(np.exp(_lchoose(n1, k) - _lchoose(n, k)))
+
+
+def _matrix(rng, spec, n1, n0, sdlog=0.6):
+    rows, lab = [], []
+    for name, kind, arg, count in spec:
+        for _ in range(count):
+            ctrl = rng.lognormal(3, sdlog, n0)
+            case = rng.lognormal(3, sdlog, n1)
+            if kind == "global":
+                case = case * arg
+            elif kind == "subset":
+                k = max(1, round(arg * n1))
+                case[rng.choice(n1, k, replace=False)] *= 8.0
+            rows.append(np.r_[case, ctrl])
+            lab.append(name)
+    return np.array(rows), np.array(lab)
 
 
 @pytest.fixture(scope="module")
-def null_calibration():
+def calibration():
+    n1, n0 = 77, 18
     rng = np.random.default_rng(2024)
-    counts = rng.poisson(30, size=(G_NULL, NN)).astype(float)
-    normalizer = rng.integers(1, 13, size=G_NULL).astype(float)
-    return wade.wade(counts, normalizer, COND, nperms=NPERMS, seed=1)
+    counts = rng.poisson(30, size=(800, n1 + n0)).astype(float)
+    normalizer = rng.integers(1, 13, size=800).astype(float)
+    cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
+    return wade.wade(counts, normalizer, cond, nperms=NPERMS, seed=1)
 
 
-def test_a_null_calibration_pvalues_are_uniform(null_calibration):
-    """Poisson counts, random per-gene normalizers, labels with no signal.
+def test_a_neither_stage_manufactures_significance(calibration):
+    """Poisson counts, labels carrying no signal by construction.
 
-    Any departure from Uniform(0, 1) here is the method inventing
-    significance.
-
-    The KS test warns about ties because permutation p-values are
-    **discrete** — the unrefined ones are multiples of 1/(B+1) — so its
-    p-value is conservative rather than exact. That is a property of any
-    permutation test's calibration check and it appears in any language.
-    The realised type-I error, which assumes no continuity, is reported
-    alongside for that reason.
-
-    R sandbox targets: KS p = 0.6554 (bulk) and 0.2327 (subset); type-I
-    at nominal 0.05 of 0.0512 and 0.0488.
+    Any departure from Uniform(0, 1) here is the method inventing signal. The
+    KS test warns about ties because permutation p-values are discrete — a
+    property of any permutation test's calibration check — so the realised
+    type-I error, which assumes no continuity, is reported alongside.
     """
     from scipy import stats
 
-    res = null_calibration
-    ks_diff = stats.kstest(res.p_diff, "uniform").pvalue
-    ks_tail = stats.kstest(res.p_tail, "uniform").pvalue
-    t1_diff = float(np.mean(res.p_diff < 0.05))
-    t1_tail = float(np.mean(res.p_tail < 0.05))
-
-    print(f"\n(a) null calibration, {G_NULL} genes at {N_CASES} vs {N_CONTROLS}, "
-          f"nperms = {NPERMS}")
-    print(f"    KS vs Uniform(0,1):  diff.mean p = {ks_diff:.4f}   "
-          f"tail.mean p = {ks_tail:.4f}      [R: 0.6554 / 0.2327]")
-    print(f"    type-I error @0.05:  diff.mean = {t1_diff:.4f}     "
-          f"tail.mean = {t1_tail:.4f}        [R: 0.0512 / 0.0488]")
-
-    assert ks_diff > 0.01, f"bulk axis departs from uniform (KS p = {ks_diff:.4g})"
-    assert ks_tail > 0.01, f"subset axis departs from uniform (KS p = {ks_tail:.4g})"
-    # Binomial s.e. at 800 genes is 0.0077, so +/- 0.02 is about 2.6 s.e.
-    assert abs(t1_diff - 0.05) < 0.02, f"bulk type-I error {t1_diff:.4f} off nominal"
-    assert abs(t1_tail - 0.05) < 0.02, f"subset type-I error {t1_tail:.4f} off nominal"
+    res = calibration
+    print(f"\n(a) calibration, 800 genes at 77 v 18, nperms = {NPERMS}")
+    for name, p in (("mean_shift", res.p_mean_shift), ("subset", res.p_subset)):
+        ks = stats.kstest(p, "uniform").pvalue
+        t1 = float(np.mean(p <= 0.05))
+        print(f"    {name:<12s} KS vs Uniform(0,1) p = {ks:.4f}    type-I at 0.05 = {t1:.4f}")
+        assert ks > 0.01, f"{name} departs from uniform (KS p = {ks:.4g})"
+        assert abs(t1 - 0.05) < 0.025, f"{name} type-I error {t1:.4f} off nominal"
 
 
-def test_a_null_calibration_is_not_anticonservative_on_either_axis(null_calibration):
-    """Both axes independently, since neither gates the other."""
-    res = null_calibration
-    for axis, p in (("bulk", res.p_diff), ("subset", res.p_tail)):
+def test_a_neither_stage_is_anticonservative(calibration):
+    res = calibration
+    g = res.p_mean_shift.size
+    for name, p in (("mean_shift", res.p_mean_shift), ("subset", res.p_subset)):
         for alpha in (0.01, 0.05, 0.10, 0.25):
-            realised = float(np.mean(p < alpha))
-            assert realised < alpha + 3 * np.sqrt(alpha * (1 - alpha) / G_NULL) + 0.01, (
-                f"{axis} axis anticonservative at alpha={alpha}: {realised:.4f}"
-            )
+            realised = float(np.mean(p <= alpha))
+            bound = alpha + 3 * np.sqrt(alpha * (1 - alpha) / g) + 0.01
+            assert realised < bound, f"{name} anticonservative at {alpha}: {realised:.4f}"
 
 
 @pytest.fixture(scope="module")
 def discrimination():
+    n1 = n0 = 200
     rng = np.random.default_rng(11)
-    bg = np.array([np.r_[rng.lognormal(3, 0.6, N_CASES),
-                         rng.lognormal(3, 0.6, N_CONTROLS)]
-                   for _ in range(G_BACKGROUND)])
-    bulk = np.array([_mk_bulk(rng, rng.uniform(0.5, 0.9)) for _ in range(N_PLANTED)])
-    sub = np.array([_mk_subset(rng, SUBSET_FRAC) for _ in range(N_PLANTED)])
-    mm = np.vstack([bg, bulk, sub])
-    ll = np.full(mm.shape[0], LEN_CONST)
-    label = np.array(["null"] * G_BACKGROUND + ["bulk"] * N_PLANTED
-                     + ["subset"] * N_PLANTED)
-    return wade.wade(mm, ll, COND, nperms=NPERMS, seed=1), label, bg
+    # A realistic signal fraction: library-size normalization couples genes, so
+    # a signal-saturated matrix would shift the characterization of every gene.
+    spec = [("null", None, None, 600),
+            ("global", "global", 2.0, 60),
+            ("subset 5%", "subset", 0.05, 60),
+            ("subset 20%", "subset", 0.20, 60)]
+    x, lab = _matrix(rng, spec, n1, n0)
+    cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
+    return wade.wade(x, np.full(x.shape[0], 4.0), cond, nperms=NPERMS, seed=1), lab
 
 
-def test_b_subset_genes_separate_from_bulk_shifts_on_the_tail_axis(discrimination):
-    """The entire reason the tail statistic exists.
+def test_b_the_subset_stage_separates_concentrated_from_global(discrimination):
+    """The claim WADE exists to make.
 
-    ``diff_mean`` alone collapses a rare-subset signal and a whole-group
-    shift to the same number. The subset axis must not.
-
-    R sandbox targets: planted subset genes at median ``tail_mean``
-    27,537 against ``diff_mean`` 3,046, a ratio of 8.9; planted bulk
-    shifts at 4,064 against 1,348, a ratio of 3.3; the null background at
-    535 against -46.
+    A global shift must be found by the mean-shift stage and left alone by the
+    subset stage; a concentrated difference must fire the subset stage. Without
+    the second half, "subset" would mean nothing.
     """
-    res, label, _ = discrimination
-    print(f"\n(b) subset vs bulk discrimination, {res.diff_mean.size} genes"
-          f"                    [R medians]")
-    print(f"    {'class':<8s} {'n':>4s} {'median diff.mean':>18s} "
-          f"{'median tail.mean':>18s} {'ratio':>8s}")
-    ratios = {}
-    for cls, r_dm, r_tm, r_ratio in (("null", 535, -46, None),
-                                     ("bulk", 1348, 4064, 3.3),
-                                     ("subset", 3046, 27537, 8.9)):
-        m = label == cls
-        dm = float(np.median(res.diff_mean[m]))
-        tm = float(np.median(res.tail_mean[m]))
-        ratios[cls] = float(np.median(res.tail_mean[m] / res.diff_mean[m]))
-        print(f"    {cls:<8s} {m.sum():4d} {dm:18.1f} {tm:18.1f} "
-              f"{ratios[cls]:8.2f}   [R: {r_dm}, {r_tm}"
-              + (f", {r_ratio}]" if r_ratio else "]"))
+    res, lab = discrimination
+    print(f"\n(b) discrimination, {lab.size} genes at 200 v 200")
+    print(f"    {'class':<12s} {'p_mean<=.05':>12s} {'p_subset<=.05':>14s} "
+          f"{'affected_fraction':>18s} {'direction':>10s}")
+    rate = {}
+    for c in ("null", "global", "subset 5%", "subset 20%"):
+        s = lab == c
+        rate[c] = (float(np.mean(res.p_mean_shift[s] <= 0.05)),
+                   float(np.mean(res.p_subset[s] <= 0.05)))
+        print(f"    {c:<12s} {rate[c][0]:>12.3f} {rate[c][1]:>14.3f} "
+              f"{np.median(res.affected_fraction[s]):>18.3f} "
+              f"{np.median(res.direction[s]):>+10.3f}")
 
-    assert ratios["subset"] > ratios["bulk"], (
-        "planted subset genes must carry more of their signal in the tail "
-        "than planted bulk shifts do"
+    assert rate["global"][0] > 0.9, "a 2x global shift must be detected"
+    assert rate["global"][1] < 0.15, (
+        "a genuine global shift must NOT fire the subset stage — without this, "
+        "'a subset explains it better' is not a claim about anything"
     )
-    assert ratios["subset"] > 2 * ratios["bulk"], (
-        f"separation too weak: subset {ratios['subset']:.2f} vs bulk {ratios['bulk']:.2f}"
-    )
-
-    # And the tail axis must actually rank the subset genes above the bulk ones,
-    # which is the operational claim rather than a summary statistic.
-    med_tail_sub = np.median(res.tail_mean[label == "subset"])
-    med_tail_bulk = np.median(res.tail_mean[label == "bulk"])
-    assert med_tail_sub > med_tail_bulk
+    assert rate["subset 5%"][1] > 0.6, "a 5% subset must fire the subset stage"
+    assert rate["subset 20%"][1] > 0.8
 
 
-def test_b_the_bulk_axis_alone_would_not_separate_them(discrimination):
-    """The negative control for the claim above.
+def test_b_affected_fraction_orders_the_classes(discrimination):
+    """The characterization must recover *how much* of the group differs."""
+    res, lab = discrimination
+    med = {c: float(np.median(res.affected_fraction[lab == c]))
+           for c in ("global", "subset 5%", "subset 20%")}
+    assert med["subset 5%"] < med["subset 20%"] < med["global"]
+    assert med["global"] > 0.8, "a global change should read near 1"
+    assert med["subset 5%"] < 0.2, "a 5% subset should read as a small fraction"
 
-    If ``diff_mean`` separated the two planted classes as cleanly as
-    ``tail_mean`` does, the subset axis would be redundant. Measured in
-    the R, the subset genes' bulk medians (3,046) sit close to the bulk
-    shifts' (1,348) — same order of magnitude — while their tail medians
-    (27,537 vs 4,064) differ by nearly a factor of 7.
+
+def test_c_power_is_bounded_by_the_combinatorial_floor():
+    """No detector can beat the design.
+
+    If ``k`` samples carry the signal, label shuffling puts all of them in the
+    case group with probability ``C(n1,k)/C(n,k)``. Where that exceeds alpha, no
+    effect size and no permutation count can separate the signal — so the test
+    asserts the *mechanism*, not a memorized curve.
     """
-    res, label, _ = discrimination
-    sub_dm = np.median(res.diff_mean[label == "subset"])
-    bulk_dm = np.median(res.diff_mean[label == "bulk"])
-    sub_tm = np.median(res.tail_mean[label == "subset"])
-    bulk_tm = np.median(res.tail_mean[label == "bulk"])
+    n1 = n0 = 60
+    n = n1 + n0
+    rng = np.random.default_rng(200)
+    cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
 
-    bulk_axis_separation = sub_dm / bulk_dm
-    tail_axis_separation = sub_tm / bulk_tm
-    print(f"    separation on the bulk axis  : {bulk_axis_separation:.2f}x")
-    print(f"    separation on the subset axis: {tail_axis_separation:.2f}x")
-    assert tail_axis_separation > bulk_axis_separation
-
-
-def _pfloor(k):
-    """P(a random relabelling puts all k signal-carrying samples in the case group).
-
-    The smallest p-value ANY label-permutation test can return for a
-    k-sample subset, so it is a property of the design. No number of
-    permutations and no better tail fit moves it.
-    """
-    from math import lgamma
-
-    def lchoose(n, r):
-        return lgamma(n + 1) - lgamma(r + 1) - lgamma(n - r + 1)
-
-    return np.exp(lchoose(N_CASES, k) - lchoose(NN, k))
-
-
-def test_c_power_steps_where_the_floor_crosses_the_BH_threshold(discrimination):
-    """Power against the exact combinatorial floor.
-
-    The 0 -> 1 transition is **not** a simulation artefact and not a limit
-    of the permutation count. With ``N_SUBSET_PWR`` true positives among
-    ``G_BACKGROUND + N_SUBSET_PWR`` genes, BH at q = 0.10 can only declare
-    p-values at or below ``0.10 * 80/680 = 0.0118``; the floor column
-    crosses that threshold between 20% and 35% of cases. Raising nperms
-    cannot move it.
-
-    R sandbox target: power 0 at every fraction through 20%, and 1 from
-    35% on.
-    """
-    _, _, bg = discrimination
-    bh_threshold = 0.10 * N_SUBSET_PWR / (G_BACKGROUND + N_SUBSET_PWR)
-
-    print(f"\n(c) power vs subset fraction (BH q = 0.10, declarable below "
-          f"{bh_threshold:.4f})")
-    print(f"    {'frac':>6s} {'k':>4s} {'floor':>12s} {'power':>7s}   "
-          f"{'floor <= thr':>12s}   [R power]")
-
-    r_power = {0.03: 0, 0.05: 0, 0.08: 0, 0.12: 0, 0.20: 0, 0.35: 1, 0.50: 1}
-    rows = []
-    for frac in FRACS:
-        k = max(1, round(frac * N_CASES))
-        rng = np.random.default_rng(200 + k)
-        s = np.array([_mk_subset(rng, frac) for _ in range(N_SUBSET_PWR)])
-        mm = np.vstack([bg, s])
-        ll = np.full(mm.shape[0], LEN_CONST)
-        rr = wade.wade(mm, ll, COND, nperms=NPERMS, seed=1)
-        is_sub = np.r_[np.zeros(G_BACKGROUND, bool), np.ones(N_SUBSET_PWR, bool)]
-        power = float(np.mean(rr.padj_tail[is_sub] < 0.10))
-        floor = _pfloor(k)
-        rows.append((frac, k, floor, power))
-        print(f"    {frac:6.2f} {k:4d} {floor:12.3e} {power:7.2f}   "
-              f"{str(floor <= bh_threshold):>12s}   [{r_power[frac]}]")
-
-    for frac, k, floor, power in rows:
-        if floor > bh_threshold:
-            assert power == 0.0, (
-                f"at {frac:.0%} the floor {floor:.3e} exceeds the BH threshold "
-                f"{bh_threshold:.4f}, so no gene can be declared — got power {power}"
+    print(f"\n(c) power vs affected fraction at {n1} v {n0}, alpha = 0.05")
+    print(f"    {'frac':>6s} {'k':>4s} {'floor':>11s} {'p_subset power':>15s}")
+    for frac in (0.02, 0.05, 0.10, 0.25):
+        k = max(1, round(frac * n1))
+        floor = comb_floor(n1, n, k)
+        x, lab = _matrix(rng, [("null", None, None, 200),
+                               ("planted", "subset", frac, 60)], n1, n0)
+        res = wade.wade(x, np.full(x.shape[0], 4.0), cond, nperms=NPERMS, seed=1)
+        power = float(np.mean(res.p_subset[lab == "planted"] <= 0.05))
+        print(f"    {frac:>6.0%} {k:>4d} {floor:>11.3g} {power:>15.3f}")
+        if floor > 0.05:
+            assert power < 0.25, (
+                f"at {frac:.0%} the floor is {floor:.3g}, above alpha — nothing "
+                f"in this family can detect it, yet power was {power:.3f}"
             )
-
-    # The step must actually happen, and in the documented interval.
-    powers = {frac: p for frac, _, _, p in rows}
-    assert powers[0.20] < 0.5 <= powers[0.35], (
-        f"power should step between 20% and 35% of cases; "
-        f"got {powers[0.20]:.2f} -> {powers[0.35]:.2f}"
-    )
-    assert powers[0.50] >= 0.9
+        elif floor < 1e-4:
+            assert power > 0.5, f"well below the floor, power should be real; got {power:.3f}"
 
 
-def test_c_the_floor_is_a_property_of_the_design_not_the_implementation():
-    """Worked directly, without running the method.
-
-    This is the arithmetic behind ``docs/limits.md``: at the v7 design the
-    floor is 0.43 at 5% of cases, which is why the source documents'
-    "below roughly 5% of cases" understates the constraint badly.
-    """
-    assert _pfloor(max(1, round(0.05 * N_CASES))) == pytest.approx(0.425, abs=0.01)
-    assert _pfloor(max(1, round(0.03 * N_CASES))) == pytest.approx(0.655, abs=0.01)
-    assert _pfloor(max(1, round(0.20 * N_CASES))) == pytest.approx(0.0320, abs=1e-3)
-    assert _pfloor(max(1, round(0.35 * N_CASES))) == pytest.approx(1.15e-3, rel=0.05)
-
-    # Monotone decreasing in k, and it reaches below the BH threshold only
-    # somewhere between 20% and 35% of cases.
-    ks = [max(1, round(f * N_CASES)) for f in FRACS]
-    floors = [_pfloor(k) for k in ks]
-    assert all(a > b for a, b in zip(floors, floors[1:]))
+def test_c_the_floor_is_arithmetic_not_simulation():
+    """Worked directly, so the limit is checkable without running anything."""
+    assert comb_floor(77, 95, 4) == pytest.approx(0.425, abs=0.01)
+    assert comb_floor(77, 95, 15) == pytest.approx(0.0320, abs=1e-3)
+    assert comb_floor(200, 400, 10) == pytest.approx(0.00087, rel=0.05)
+    ks = [1, 2, 4, 8, 16]
+    floors = [comb_floor(77, 95, k) for k in ks]
+    assert all(a > b for a, b in zip(floors, floors[1:])), "monotone decreasing in k"

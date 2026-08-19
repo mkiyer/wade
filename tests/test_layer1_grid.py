@@ -30,7 +30,6 @@ LAYER = "layer 1 grid"
 def test_scalars_exact(name):
     fx, res = run_port(name)
     assert res.stats.nprobs == int(fx["shapes"]["nprobs"])
-    assert res.stats.k == int(fx["shapes"]["k"])
     assert res.stats.n1 == int(fx["shapes"]["n1"])
     assert res.stats.n0 == int(fx["shapes"]["n0"])
 
@@ -70,18 +69,6 @@ def test_grid_orientation_is_descending(name):
         assert np.all(np.diff(q) < 0), "the grid must run high to low"
 
 
-def test_tail_window_arithmetic_matches_the_documented_table():
-    """``k = max(1, ceil(0.10 * m))`` at the values worked in method.md."""
-    table = {5: 1, 10: 1, 18: 2, 20: 2, 22: 3, 33: 4, 34: 4, 60: 6, 100: 10}
-    for m, k in table.items():
-        assert wade.tail_window_size(m, 0.10) == k
-
-
-def test_tail_window_is_never_zero():
-    for m in range(1, 200):
-        assert wade.tail_window_size(m, 0.001) >= 1
-
-
 def test_nprobs_is_set_by_the_smaller_group():
     """The smaller group is read essentially without interpolation.
 
@@ -117,10 +104,3 @@ def test_nprobs_is_set_by_the_smaller_group():
                      "(diagnostic, not parity)")
 
 
-def test_tail_window_report_tells_a_caller_what_the_design_buys():
-    """The consumer layer needs this arithmetic *before* running the test."""
-    assert wade.tail_window_report(10, 10)["k"] == 1
-    assert wade.tail_window_report(10, 10)["single_point_tail"] is True
-    assert wade.tail_window_report(40, 20)["k"] == 2
-    assert wade.tail_window_report(40, 30)["k"] == 3
-    assert wade.tail_window_report(77, 18)["nprobs"] == 18

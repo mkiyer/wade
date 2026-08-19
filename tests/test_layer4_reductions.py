@@ -23,14 +23,15 @@ from portrun import run_port
 
 LAYER = "layer 4 reductions"
 
+#: The reductions that survive the redesign. `tail.mean`, `tail.conc`,
+#: `tot.mean` and `diff.frac` belonged to the retired tail machinery and no
+#: longer correspond to anything the port computes.
 REDUCTIONS = [
-    ("diff_mean", "diff.mean"),
+    ("mean_shift", "diff.mean"),
     ("w1", "w1"),
-    ("tail_mean", "tail.mean"),
     ("fc", "fc"),
-    ("cond1_mean", "cond1.mean"),
-    ("cond0_mean", "cond0.mean"),
-    ("tot_mean", "tot.mean"),
+    ("case_mean", "cond1.mean"),
+    ("ctrl_mean", "cond0.mean"),
 ]
 
 
@@ -46,46 +47,11 @@ def test_reduction(name, py_name, r_name):
 
 
 @pytest.mark.parity
-@pytest.mark.parametrize("name", PARITY_SCENARIOS)
-def test_diff_frac(name):
-    fx, res = run_port(name)
-    assert_close(res.diff_frac, fx["frame"]["diff.frac"],
-                 TOL_REDUCTION, f"{name}: diff.frac", LAYER)
-
-
 @pytest.mark.parity
-@pytest.mark.parametrize("name", PARITY_SCENARIOS)
-def test_tail_conc_components(name):
-    """The ratio's numerator and denominator, which ARE parity targets."""
-    fx, res = run_port(name)
-    assert_close(res.stats.tail_num, fx["stats"]["tail_num"],
-                 TOL_REDUCTION, f"{name}: sum(D over tail)", LAYER)
-    assert_close(res.stats.tail_den, fx["stats"]["tail_den"],
-                 TOL_REDUCTION, f"{name}: sum(D)", LAYER)
-
-
-# ---------------------------------------------------------------------
-# The cheap invariants. All three hold by construction, all three catch a
-# whole class of transcription error, and none costs anything.
-# ---------------------------------------------------------------------
-
-@pytest.mark.parametrize("name", PARITY_SCENARIOS)
-def test_tot_mean_is_the_sum_of_the_two_group_means(name):
-    """Not the pooled mean, and not their average — a naming trap.
-
-    Consequently ``diff_frac`` is the normalized contrast
-    ``(mu1 - mu0) / (mu1 + mu0)`` in [-1, 1], not a fraction of overall
-    abundance.
-    """
-    _, res = run_port(name)
-    assert_close(res.tot_mean, res.cond1_mean + res.cond0_mean,
-                 1e-15, f"{name}: tot_mean identity", LAYER)
-
-
 @pytest.mark.parametrize("name", PARITY_SCENARIOS)
 def test_fc_is_the_ratio_of_grid_means(name):
     _, res = run_port(name)
-    assert_close(res.fc, res.cond1_mean / res.cond0_mean,
+    assert_close(res.fc, res.case_mean / res.ctrl_mean,
                  1e-15, f"{name}: fc identity", LAYER)
 
 
@@ -94,11 +60,11 @@ def test_w1_dominates_absolute_diff_mean(name):
     """``w1 >= |diff_mean|`` by the triangle inequality, with equality
     exactly when ``D`` does not change sign."""
     _, res = run_port(name)
-    assert np.all(res.w1 >= np.abs(res.diff_mean) - 1e-12 * np.maximum(1.0, res.w1))
+    assert np.all(res.w1 >= np.abs(res.mean_shift) - 1e-12 * np.maximum(1.0, res.w1))
 
 
 @pytest.mark.parametrize("name", PARITY_SCENARIOS)
-def test_diff_mean_equals_the_difference_of_grid_means(name):
+def test_mean_shift_equals_the_difference_of_grid_means(name):
     """``diff_mean == cond1_mean - cond0_mean``, to the accuracy available.
 
     Compared against the **scale of the operands**, not of the result.
@@ -114,26 +80,13 @@ def test_diff_mean_equals_the_difference_of_grid_means(name):
     ``diff_frac`` and its magnitude from ``log2(fc)``: they always agree.
     """
     _, res = run_port(name)
-    lhs = res.diff_mean
-    rhs = res.cond1_mean - res.cond0_mean
-    scale = np.maximum(np.abs(res.tot_mean), 1.0)
+    lhs = res.mean_shift
+    rhs = res.case_mean - res.ctrl_mean
+    scale = np.maximum(np.abs((res.case_mean + res.ctrl_mean)), 1.0)
     worst = float(np.max(np.abs(lhs - rhs) / scale))
     assert worst < 1e-14, f"{name}: identity off by {worst:.3e} relative to tot_mean"
-    assert np.array_equal(np.sign(res.diff_frac), np.sign(rhs)) or np.allclose(
-        np.sign(res.diff_frac), np.sign(rhs)
-    )
 
 
-@pytest.mark.parametrize("name", PARITY_SCENARIOS)
-def test_diff_frac_lies_in_minus_one_to_one(name):
-    _, res = run_port(name)
-    ok = np.isfinite(res.diff_frac)
-    assert np.all(np.abs(res.diff_frac[ok]) <= 1.0 + 1e-12)
-
-
-# ---------------------------------------------------------------------
-# The identity that does NOT hold, and the correction that matters.
-# ---------------------------------------------------------------------
 
 @pytest.mark.parity
 def test_diff_mean_is_not_the_difference_of_sample_means_on_unequal_groups():
@@ -181,7 +134,7 @@ def test_worked_example_reproduces_algorithm_md_section_2_7():
     fx = load_fixture("worked_example")
     st = w.wade_stats(fx["X"], fx["cond"])
 
-    assert st.nprobs == 3 + 1 and st.k == 1
+    assert st.nprobs == 4
     assert_close(st.q, fx["q"], 0.0, "worked example: q", LAYER)
     assert_close(st.Q1, fx["Q1"], 1e-14, "worked example: Q1", LAYER)
     assert_close(st.Q0, fx["Q0"], 1e-14, "worked example: Q0", LAYER)
@@ -189,6 +142,4 @@ def test_worked_example_reproduces_algorithm_md_section_2_7():
         assert_close(getattr(st, py_name), fx["stats"][r_name],
                      1e-14, f"worked example: {r_name}", LAYER)
 
-    assert st.tail_mean[0] == pytest.approx(44.0)
-    assert st.tail_mean[1] == pytest.approx(12.0)
-    assert st.tail_mean[0] / st.tail_mean[1] == pytest.approx(3.6667, rel=1e-3)
+

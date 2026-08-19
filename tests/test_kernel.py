@@ -37,7 +37,7 @@ LAYER = "kernel"
 WITH_PERMS = [
     n for n in
     ["tiny", "main", "even_larger", "vecnorm", "m2", "gate_closed", "refine",
-     "weighted", "log2scaled", "zerolib", "nonames", "tailconc", "tiesheavy"]
+     "zerolib", "nonames", "tailconc", "tiesheavy"]
     if int(load_fixture(n)["shapes"]["B"]) > 0
 ]
 
@@ -60,11 +60,11 @@ def _run_backend(name: str, backend: str):
     p = fx["params"]
     return fx, wade.wade(
         fx["counts"], fx["normalizer"]["data"], fx["cond"],
-        nperms=int(p["nperms"]), tail_q=scalar(p["tail_q"]),
+        nperms=int(p["nperms"]),
         noise=scalar(p["noise"]), norm_factor=scalar(p["norm_factor"]),
         jitter=fx["jitter"], perms=fx["perms"],
-        log2_scale=bool(p["log2_scale"]), weight=scalar(p["weight"]),
         gene_names=fx["gene_names"], keep_null=True, backend=backend,
+        alternative="greater", subset=False,
     )
 
 
@@ -76,10 +76,8 @@ def _run_backend(name: str, backend: str):
 @pytest.mark.parametrize("name", WITH_PERMS)
 def test_kernel_null_matrices_match_R(name):
     fx, res = _run_backend(name, "rust")
-    assert_close(res.null_diff, fx["null"]["perm_dm"], TOL_NULL,
-                 f"{name}: kernel null diff.mean", LAYER)
-    assert_close(res.null_tail, fx["null"]["perm_tm"], TOL_NULL,
-                 f"{name}: kernel null tail.mean", LAYER)
+    assert_close(res.null_mean_shift, fx["null"]["perm_dm"], TOL_NULL,
+                 f"{name}: kernel null", LAYER)
 
 
 @pytest.mark.parity
@@ -87,12 +85,9 @@ def test_kernel_null_matrices_match_R(name):
 def test_kernel_reaches_the_same_pvalues_as_R(name):
     """The endpoint, so a kernel-only regression cannot hide behind the nulls."""
     fx, res = _run_backend(name, "rust")
-    assert np.array_equal(res.nexc_diff, fx["pvalues"]["nexc_diff"])
-    assert np.array_equal(res.nexc_tail, fx["pvalues"]["nexc_tail"])
-    assert_close(res.p_diff, fx["pvalues"]["p_diff"], 1e-12,
-                 f"{name}: kernel p.diff", LAYER)
-    assert_close(res.p_tail, fx["pvalues"]["p_tail"], 1e-12,
-                 f"{name}: kernel p.tail", LAYER)
+    assert np.array_equal(res.nexc_mean_shift, fx["pvalues"]["nexc_diff"])
+    assert_close(res.p_mean_shift, fx["pvalues"]["p_diff"], 1e-12,
+                 f"{name}: kernel p", LAYER)
 
 
 # ---------------------------------------------------------------------
@@ -103,10 +98,8 @@ def test_kernel_reaches_the_same_pvalues_as_R(name):
 def test_kernel_agrees_with_numpy_on_the_fixtures(name):
     _, rust = _run_backend(name, "rust")
     _, numpy_ = _run_backend(name, "numpy")
-    assert_close(rust.null_diff, numpy_.null_diff, 1e-15,
-                 f"{name}: rust vs numpy null diff.mean", LAYER)
-    assert_close(rust.null_tail, numpy_.null_tail, 1e-15,
-                 f"{name}: rust vs numpy null tail.mean", LAYER)
+    assert_close(rust.null_mean_shift, numpy_.null_mean_shift, 1e-15,
+                 f"{name}: rust vs numpy null", LAYER)
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
@@ -134,35 +127,10 @@ def test_kernel_agrees_with_numpy_on_random_inputs(seed):
 
     cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
     perms = wade.draw_perms(cond, 37, seed=seed + 100)
-    tail_q = float(rng.choice([0.05, 0.10, 0.25, 0.5]))
 
-    d_np, t_np = null_statistics(x, perms, tail_q=tail_q, backend="numpy")
-    d_rs, t_rs = null_statistics(x, perms, tail_q=tail_q, backend="rust")
-    assert_close(d_rs, d_np, 1e-15, f"random {seed}: diff (g={g}, {n1}v{n0})", LAYER)
-    assert_close(t_rs, t_np, 1e-15, f"random {seed}: tail (g={g}, {n1}v{n0})", LAYER)
-
-
-def test_kernel_agrees_with_numpy_on_the_pretransform_paths():
-    """``weight`` and ``log2_scale`` — the reference's non-lean path.
-
-    The reference drops off its fast path entirely when either is set. The
-    kernel implements both instead, so setting them does not silently move
-    a user from compiled code to a Python loop. That is only defensible if
-    the two paths agree, which is what this asserts.
-    """
-    rng = np.random.default_rng(9)
-    x = rng.lognormal(3, 1, size=(23, 17))
-    cond = np.r_[np.ones(9, int), np.zeros(8, int)]
-    perms = wade.draw_perms(cond, 29, seed=4)
-
-    for weight, log2_scale in ((2.0, False), (1.0, True), (0.5, True)):
-        d_np, t_np = null_statistics(x, perms, tail_q=0.10, weight=weight,
-                                     log2_scale=log2_scale, backend="numpy")
-        d_rs, t_rs = null_statistics(x, perms, tail_q=0.10, weight=weight,
-                                     log2_scale=log2_scale, backend="rust")
-        label = f"weight={weight}, log2={log2_scale}"
-        assert_close(d_rs, d_np, 1e-15, f"pretransform {label}: diff", LAYER)
-        assert_close(t_rs, t_np, 1e-15, f"pretransform {label}: tail", LAYER)
+    d_np = null_statistics(x, perms, backend="numpy")
+    d_rs = null_statistics(x, perms, backend="rust")
+    assert_close(d_rs, d_np, 1e-15, f"random {seed}: null (g={g}, {n1}v{n0})", LAYER)
 
 
 def test_kernel_type7_matches_the_numpy_implementation():
@@ -202,7 +170,7 @@ def test_kernel_rejects_a_mismatched_permutation_matrix():
     x = np.ones((4, 7))
     q = wade.probability_grid(3)
     with pytest.raises(ValueError, match="columns"):
-        _kernel.null_statistics(x, np.zeros((5, 9), dtype=np.int64), q, 1, 1.0, False)
+        _kernel.null_statistics(x, np.zeros((5, 9), dtype=np.int64), q)
 
 
 def test_kernel_rejects_labels_outside_zero_and_one():
@@ -212,7 +180,7 @@ def test_kernel_rejects_labels_outside_zero_and_one():
     q = wade.probability_grid(3)
     perms = np.array([[1, 1, 1, 0, 0, 0, 2]], dtype=np.int64)
     with pytest.raises(ValueError, match="only 0 and 1"):
-        _kernel.null_statistics(x, perms, q, 1, 1.0, False)
+        _kernel.null_statistics(x, perms, q)
 
 
 def test_kernel_rejects_a_grid_that_does_not_match_the_group_sizes():
@@ -221,19 +189,7 @@ def test_kernel_rejects_a_grid_that_does_not_match_the_group_sizes():
     x = np.ones((4, 7))
     perms = np.array([[1, 1, 1, 0, 0, 0, 0]], dtype=np.int64)   # min(n1, n0) = 3
     with pytest.raises(ValueError, match="min\\(n1, n0\\)"):
-        _kernel.null_statistics(x, perms, wade.probability_grid(5), 1, 1.0, False)
-
-
-def test_kernel_rejects_an_out_of_range_tail_window():
-    from wade import _kernel
-
-    x = np.ones((4, 7))
-    perms = np.array([[1, 1, 1, 0, 0, 0, 0]], dtype=np.int64)
-    q = wade.probability_grid(3)
-    with pytest.raises(ValueError, match="k must lie"):
-        _kernel.null_statistics(x, perms, q, 0, 1.0, False)
-    with pytest.raises(ValueError, match="k must lie"):
-        _kernel.null_statistics(x, perms, q, 4, 1.0, False)
+        _kernel.null_statistics(x, perms, wade.probability_grid(5))
 
 
 def test_kernel_rejects_non_finite_input():
@@ -243,7 +199,7 @@ def test_kernel_rejects_non_finite_input():
     x[2, 3] = np.nan
     perms = np.array([[1, 1, 1, 0, 0, 0, 0]], dtype=np.int64)
     with pytest.raises(ValueError, match="non-finite"):
-        _kernel.null_statistics(x, perms, wade.probability_grid(3), 1, 1.0, False)
+        _kernel.null_statistics(x, perms, wade.probability_grid(3))
 
 
 def test_backend_selection_is_explicit_and_validated():
@@ -252,4 +208,4 @@ def test_backend_selection_is_explicit_and_validated():
     cond = np.r_[np.ones(5, int), np.zeros(4, int)]
     perms = wade.draw_perms(cond, 7, seed=1)
     with pytest.raises(ValueError, match="backend must be"):
-        null_statistics(x, perms, tail_q=0.1, backend="fortran")
+        null_statistics(x, perms, backend="fortran")

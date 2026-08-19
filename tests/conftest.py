@@ -1,7 +1,15 @@
 """Fixture loading and the deviation ledger for the parity suite.
 
-The suite is built **inside-out**, layer 0 through layer 9, on the design
-at the end of ``docs/implementation-notes.md``. The organizing principle:
+The suite is built **inside-out** on the design in
+``docs/implementation-notes.md``.
+
+**What it is for, now that the statistic it originally validated has been
+replaced.** The tail-window machinery is gone, so parity with R on
+``tail.mean`` and ``tail.conc`` no longer tests anything that runs. What the
+fixtures still pin is the *shared machinery underneath* every statistic —
+normalization, the type-7 quantile grids, the permutation null, the GPD
+refinement and BH — which the redesign uses unchanged and which is exactly
+where a silent cross-language disagreement would do the most damage. The organizing principle:
 intermediate quantities localize a disagreement, endpoint quantities only
 detect one. If ``padj_tail`` differs, the cause could be the quantile
 type, the tail window, the grid orientation, the exceedance broadcast,
@@ -42,10 +50,12 @@ import pytest
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 #: Scenarios the port is expected to reproduce.
+#: The `weighted` and `log2scaled` fixtures exercised wade.R's `weight` and
+#: `log2_scale` pre-transforms, which no reference call site ever used and
+#: which the redesign does not carry. The fixtures remain on disk as a record.
 PARITY_SCENARIOS = [
     "tiny", "main", "even_larger", "vecnorm", "m2", "nperms0",
-    "gate_closed", "refine", "weighted", "log2scaled", "zerolib",
-    "nonames", "tailconc", "tiesheavy",
+    "gate_closed", "refine", "zerolib", "nonames", "tailconc", "tiesheavy",
 ]
 
 #: Scenarios where a correct port MUST disagree with the reference.

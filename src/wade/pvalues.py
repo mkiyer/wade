@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 
 __all__ = [
+    "ALTERNATIVES",
     "GPDFit",
     "DEFAULT_N_EXC_MIN",
     "DEFAULT_N_TAIL",
@@ -26,8 +27,36 @@ DEFAULT_N_EXC_MIN = 10
 DEFAULT_N_TAIL = 250
 
 
-def exceedance_counts(obs: np.ndarray, null: np.ndarray) -> np.ndarray:
-    """Per-gene ``#{b : null[g, b] >= obs[g]}``.
+ALTERNATIVES = ("two-sided", "greater", "less")
+
+
+def _orient(obs: np.ndarray, null: np.ndarray, alternative: str):
+    """Map an alternative onto an upper-tail comparison.
+
+    Every alternative reduces to "how often does the null reach the observed
+    value", so only the quantity being compared changes:
+
+    * ``greater`` — the statistic as it stands.
+    * ``less``    — its negation, so a gene *reduced* in cases is detected.
+    * ``two-sided`` — its magnitude, which is the permutation analogue of a
+      two-sided test and needs no doubling: the null of ``|T|`` already
+      contains both directions, so the multiplicity of looking both ways is
+      priced in rather than corrected for.
+    """
+    if alternative not in ALTERNATIVES:
+        raise ValueError(
+            f"alternative must be one of {ALTERNATIVES}; got {alternative!r}"
+        )
+    if alternative == "greater":
+        return obs, null
+    if alternative == "less":
+        return -obs, -null
+    return np.abs(obs), np.abs(null)
+
+
+def exceedance_counts(obs: np.ndarray, null: np.ndarray,
+                      alternative: str = "greater") -> np.ndarray:
+    """Per-gene ``#{b : null[g, b] >= obs[g]}``, after orienting for ``alternative``.
 
     The broadcast axis is the trap. R's ``rowSums(perm >= obs)`` recycles
     ``obs`` *down* each column, so gene ``i``'s observed value meets gene
@@ -47,6 +76,7 @@ def exceedance_counts(obs: np.ndarray, null: np.ndarray) -> np.ndarray:
         raise ValueError(
             f"obs has {obs.shape[0]} genes but the null matrix has {null.shape[0]} rows"
         )
+    obs, null = _orient(obs, null, alternative)
     return (null >= obs[:, None]).sum(axis=1)
 
 
@@ -199,6 +229,7 @@ def perm_pvalues(
     null: np.ndarray,
     n_exc_min: int = DEFAULT_N_EXC_MIN,
     n_tail: int = DEFAULT_N_TAIL,
+    alternative: str = "greater",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Empirical p-values across genes, then selective GPD refinement.
 
@@ -219,7 +250,9 @@ def perm_pvalues(
     obs = np.asarray(obs, dtype=np.float64)
     null = np.asarray(null, dtype=np.float64)
     n_perms = null.shape[1]
-    nexc = exceedance_counts(obs, null)
+    nexc = exceedance_counts(obs, null, alternative)
+    # The GPD refines the same oriented quantity the counts were taken on.
+    obs, null = _orient(obs, null, alternative)
     p = empirical_p(nexc, n_perms)
 
     refined = np.zeros(obs.shape[0], dtype=bool)

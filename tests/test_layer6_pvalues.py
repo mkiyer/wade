@@ -41,26 +41,23 @@ WITH_PERMS = [n for n in PARITY_SCENARIOS if int(load_fixture(n)["shapes"]["B"])
 def test_exceedance_counts_are_exact(name):
     """Integers, so bitwise. This is where hazard 7 shows up or does not."""
     fx, res = run_port(name)
-    assert np.array_equal(res.nexc_diff, fx["pvalues"]["nexc_diff"])
-    assert np.array_equal(res.nexc_tail, fx["pvalues"]["nexc_tail"])
+    assert np.array_equal(res.nexc_mean_shift, fx["pvalues"]["nexc_diff"])
 
 
 @pytest.mark.parity
 @pytest.mark.parametrize("name", WITH_PERMS)
 def test_pvalues(name):
     fx, res = run_port(name)
-    assert_close(res.p_diff, fx["pvalues"]["p_diff"], TOL_PVALUE, f"{name}: p.diff", LAYER)
-    assert_close(res.p_tail, fx["pvalues"]["p_tail"], TOL_PVALUE, f"{name}: p.tail", LAYER)
+    assert_close(res.p_mean_shift, fx["pvalues"]["p_diff"], TOL_PVALUE,
+                 f"{name}: p.diff", LAYER)
 
 
 @pytest.mark.parity
 @pytest.mark.parametrize("name", WITH_PERMS)
 def test_which_genes_were_refined(name):
     fx, res = run_port(name)
-    assert np.array_equal(np.flatnonzero(res.refined_diff),
+    assert np.array_equal(np.flatnonzero(res.refined_mean_shift),
                           fx["pvalues"]["refined_diff_i0"])
-    assert np.array_equal(np.flatnonzero(res.refined_tail),
-                          fx["pvalues"]["refined_tail_i0"])
 
 
 @pytest.mark.parity
@@ -76,10 +73,9 @@ def test_the_refinement_gate_is_closed_below_500_permutations():
     """
     fx, res = run_port("gate_closed")
     assert int(fx["shapes"]["B"]) == 300
-    assert res.nexc_diff.min() == 0, "the planted gene should have zero exceedances"
-    assert not res.refined_diff.any()
-    assert not res.refined_tail.any()
-    assert res.p_diff.min() == pytest.approx(1 / 301)
+    assert res.nexc_mean_shift.min() == 0, "the planted gene should have zero exceedances"
+    assert not res.refined_mean_shift.any()
+    assert res.p_mean_shift.min() == pytest.approx(1 / 301)
 
 
 @pytest.mark.parity
@@ -97,12 +93,12 @@ def test_refinement_fires_above_the_gate_and_replaces_the_empirical_value():
     """
     fx, res = run_port("refine")
     assert int(fx["shapes"]["B"]) == 501
-    assert res.refined_diff.any() and res.refined_tail.any()
+    assert res.refined_mean_shift.any()
 
     empirical_floor = 1 / 502
-    for mask, p in ((res.refined_diff, res.p_diff), (res.refined_tail, res.p_tail)):
-        idx = np.flatnonzero(mask)
-        assert np.all(res.nexc_diff[idx] < 10) or np.all(res.nexc_tail[idx] < 10)
+    idx = np.flatnonzero(res.refined_mean_shift)
+    assert np.all(res.nexc_mean_shift[idx] < 10)
+    for p in (res.p_mean_shift,):
         assert not np.any(np.isclose(p[idx], empirical_floor)), (
             "a refined gene should no longer be sitting on the empirical floor"
         )
@@ -116,9 +112,9 @@ def test_empirical_p_is_bounded_below_by_one_over_B_plus_one():
     for name in WITH_PERMS:
         fx, res = run_port(name)
         B = int(fx["shapes"]["B"])
-        unrefined = ~res.refined_diff
-        assert np.all(res.p_diff[unrefined] >= 1 / (B + 1) - 1e-15)
-        assert np.all(res.p_diff <= 1.0)
+        unrefined = ~res.refined_mean_shift
+        assert np.all(res.p_mean_shift[unrefined] >= 1 / (B + 1) - 1e-15)
+        assert np.all(res.p_mean_shift <= 1.0)
 
 
 # ---------------------------------------------------------------------
@@ -266,5 +262,5 @@ def test_the_gate_boundary_is_exactly_500():
     for B, expect in ((250, False), (499, False), (500, True), (1000, True)):
         null = rng.exponential(size=(3, B))
         obs = null.max(axis=1) * 10
-        _, _, refined = wade.perm_pvalues(obs, null)
+        _, _, refined = wade.perm_pvalues(obs, null, alternative='greater')
         assert refined.any() == expect, f"B={B}: expected refinement={expect}"
