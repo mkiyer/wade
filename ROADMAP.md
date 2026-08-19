@@ -1,157 +1,117 @@
 # Roadmap
 
-The work queue. Ordered, with the reason for the ordering stated where it is
-load-bearing. Nothing here is a schedule; it is a dependency order.
+What is planned, in dependency order, with the reason for the order stated where
+it is load-bearing. This is a work queue, not a changelog: what has been built is
+described in [`README.md`](README.md) and specified in
+[`docs/method.md`](docs/method.md).
 
-## Done — the port
-
-The Python package with a Rust-backed core, ported from `reference/R/wade.R`.
-
-| | |
-|---|---|
-| Golden fixtures from the R, through a deterministic seam | 20 fixtures, committed, R-free to consume |
-| NumPy reference implementation | complete |
-| Parity suite, layers 0–9 | 690 tests, worst relative deviation **9.155e-15** over 610 comparisons |
-| Method validation simulations, ported | all three; power table identical to the R |
-| Rust kernel (PyO3 + rayon) | 18–22× the NumPy path, null matrices bitwise identical to the R |
-
-Four layers — the normalized matrix, the quantile grids, the permutation null
-matrices and the rank scores — are **bit-for-bit** identical to the reference.
-The details are in `docs/implementation-notes.md`.
-
-That established the *machinery* is correct. It did not establish that the
-statistic on top of it is the right one, which is what the rest of this file is
-about.
+The goal that governs everything below: **a scientist should be able to load
+their data, run WADE, understand the answer, and show it to someone.** The
+statistic is done; the path from a file to a figure is not.
 
 ---
 
-## Now — replacing the tail window
+## 1. Plotting
 
-**The problem.** The subset axis is built on `k = max(1, ceil(tail_q · m))` with
-`tail_q = 0.10`: three stacked heuristics — a fraction, a rounding rule and a
-floor — plus a fourth (`F`) to guard the ratio they produce. It forces the user
-to declare what they are looking for, which is exactly the failure that made
-COPA require re-running at every percentile cutoff. And `k` is an integer window
-on a grid whose size is set by the design, so the realized tail fraction
-sawtooths between 0.100 and 0.182 as group size varies and jumps discontinuously
-— `m = 20 → 21` moves the window from 10.0% to 14.3% of the grid on one extra
-sample. `tail_mean` is therefore not comparable across contrasts.
+Blocks the notebook, and the single-gene panel is how the method is explained,
+so it comes first.
 
-**The shape of the replacement.** Two steps, neither taking a threshold:
+- **`plot_gene()`** — the log-ratio curve `R(p)` against quantile, which *is*
+  the cliff-versus-straight-line reading. A flat line is a global fold change; a
+  curve that sits at zero and then climbs is a subset. Show the two quantile
+  functions beneath it (log y) so the reader can see the raw distributions.
+  `wade_gene()` already returns `p`, `y1`, `y0`, `cum` and `r`.
+- **`plot_volcano()`** — effect size against significance, **coloured by
+  `affected_fraction`**, with `alternative` respected. Two variants, one per
+  stage. Note that `mean_shift` is in TPM-like units and spans thousands, so it
+  collapses to a vertical line if plotted like a fold change: use `log2_fc` on
+  the x axis.
+- **`plot_stages()`** — `p_mean_shift` against `p_subset`, which is the figure
+  that shows the four quadrants of the README's table directly.
 
-1. **Detect** a difference between the groups, with significance, sensitive both
-   to a global shift and to a difference confined to a small subset of one group.
-2. **Characterize** it — report *where on the spectrum* the gene sits, from a
-   global mean shift to a cliff affecting a few percent of cases.
+Design constraint: matplotlib should be an *optional* dependency, imported
+inside the plotting functions, so the statistic keeps its one-dependency
+surface.
 
-### Step 2 is solved: the effective affected fraction
+## 2. I/O with Polars
 
-On the log-ratio curve `R(p) = log2 Q_case(p) − log2 Q_ctrl(p)`, the
-participation ratio
+Goal-5 work, and quick, because Polars already handles the formats.
 
-    pi_hat = (sum_p R(p)^2)^2 / (m * sum_p R(p)^4)
+- **Readers** for a counts matrix — CSV/TSV/Parquet/IPC — returning the matrix
+  plus gene and sample names, and a loader for a sample sheet giving the
+  condition vector by sample name.
+- **Writers** for the result frame.
+- **Name-awareness throughout.** `wade_contrast()` currently takes integer
+  column indices, which no user has; it should accept sample names. This is the
+  single biggest ergonomic gap in the API.
 
-equals the affected fraction exactly for a step, and 1 exactly for a curve flat
-at `log2(FC)`. No percentile, no window, no `k`, no `F`.
+## 3. Demo notebook
 
-Measured, 500 v 500, planted fractions against the estimate:
+The deliverable that ties 1 and 2 together, and the integration test for both.
 
-| true | 1% | 2% | 5% | 10% | 25% | 50% | 80% | fc=2 | fc=8 |
-|---|---|---|---|---|---|---|---|---|---|
-| `pi_hat` | 0.018 | 0.025 | 0.058 | 0.109 | 0.278 | 0.556 | 0.850 | 0.979 | 0.998 |
+- **Synthetic data, no download** (decided). Generated in-notebook with known
+  ground truth, so every claim it makes is checkable.
+- It must show the thing that motivates the method: a planted subset and a
+  planted global shift that have **the same fold change**, told apart by
+  `p_subset` and `affected_fraction`.
+- **Method comparison.** t-test and Wilcoxon as floors, and COPA / OS / ORT /
+  MOST as the honest competitors — they share the subset-detection goal and are
+  a few lines each. This is where WADE's claim gets tested against alternatives
+  rather than against itself.
+- It should also show the failure modes on purpose: a design below the
+  combinatorial floor, and a composition-distorted characterization.
 
-Two details that are not free parameters but *derivations*, and must survive any
-reimplementation. The **log scale** is what anchors a global fold change at 1.0
-independently of its magnitude; on the raw scale a 2× shift reads 0.70 and the
-reference point drifts with each gene's own dispersion. The **fourth moment** is
-what removes the noise floor: a floor of height ε against signal h contributes
-ε/h to the second-moment form and (ε/h)² to this one, which is why the
-second-moment version reads a 2% subset as 0.23.
+## 4. A Rust kernel for the subset test
 
-**Resolution limit, stated rather than hidden.** The grid has `m = min(n0, n1)`
-points, so no fraction finer than `1/m` is resolvable. Measured: quantitative
-above m ≈ 100, degrading through m ≈ 50, and below that only qualitative —
-global (0.89–0.94) still separates from concentrated (0.12–0.27), but 2% and 5%
-become indistinguishable. This is the same grid resolution `docs/limits.md`
-already documents, surfacing honestly instead of being absorbed by a
-`max(1, ceil(·))`.
+**Now the dominant cost.** Measured at 20,000 genes, 100 v 100, B = 2000: the
+mean-shift null takes 5.4 s on the existing kernel, the subset test takes
+**302 s** on NumPy — 98% of the runtime.
 
-### Step 1: the detector — RESOLVED, see docs/method.md section 3
+- Two passes over the permutations on the shift-corrected matrix: one for the
+  bridge's null moments at every width, one for the standardized maximum.
+- **Parallelize over genes, not permutations.** Each gene's two passes then
+  share cache, and the moment accumulators need no cross-thread reduction — the
+  alternative would need one `(genes × widths)` accumulator per thread.
+- Validate against the NumPy path elementwise, the same way the existing kernel
+  was: the baseline is already correct, so a disagreement has one cause.
 
-Removing the window removes `tail_mean`, which was the subset-sensitive test.
-Detecting a signal confined to a few percent of the curve is a sparse-signal
-detection problem, where L2-type omnibus statistics lose power badly because the
-signal is diluted across the region that did not move.
+Independent of 1–3; can be done at any point.
 
-Prototyped in `prototypes/` and resolved. Higher Criticism and max-Z lost
-decisively — HC is built for *scattered* sparse signals while WADE's
-alternative is a contiguous block at a known end of an ordered grid. A plain
-mean test proved not to be dominated, being the best single detector for weak
-diffuse effects, which is why it remains stage 1. The three considered:
+## 5. Scale and inference refinements
 
-1. **Scan statistic** — max over `k` of the standardized partial sum from the
-   top of the grid, calibrated by permutation. Threshold-free by *maximization*
-   rather than by choosing, with the permutation null absorbing the multiplicity;
-   this is the direct answer to COPA's "run it at every cutoff". Its `argmax`
-   yields the affected fraction as a by-product, so detection and
-   characterization would come from one computation and could not disagree.
-2. **Higher Criticism** (Donoho & Jin) — the reference detector for sparse
-   alternatives, also parameter-free.
-3. **A plain mean test** — the floor. WADE's claim is *additional* sensitivity
-   to subset signals, not better detection of global shifts, and that claim is
-   only meaningful measured against an ordinary test.
-
-Report power curves, not verdicts. Then agree a plan before implementing.
-
-### Sequencing after the prototype
-
-1. Agree the detector from the power curves.
-2. **Document the agreed plan** — the new method, in one place.
-3. **Consolidate the documentation** and retire what the plan supersedes.
-   Current: ten markdown files, most of them porting-process artefacts. Target
-   four — `README.md`, `docs/method.md` (algorithm and rationale, rewritten
-   around the new statistic), `docs/limits.md`, `docs/implementation-notes.md`
-   (the cross-language hazards that still bite — quantile convention, broadcast
-   axis, summation order, R's non-round-tripping parser — plus the parity
-   result). `implementation-notes.md`, `implementation-notes.md`, `ROADMAP.md`
-   and `implementation-notes.md` fold into those and are deleted.
-
----
-
-## Then — making it usable (goal 5)
-
-Blocked on the redesign only where noted; the tail definition decides what the
-plots and the demo have to show.
-
-- **I/O with Polars.** Readers for count matrices across the formats Polars
-  already handles, and result writers. `WadeResult.to_polars()`. Sample-name and
-  gene-name aware throughout — the current API takes integer column indices,
-  which no user has.
-- **Plotting.**
-  - Single-gene panel: the quantile pair with the difference curve, descended
-    from HITLIB's `areadiff_plot`. This is where the cliff-versus-straight-line
-    reading lives, so it is the figure the method is explained with.
-  - Volcano: effect size against significance, coloured by the affected
-    fraction. *Waits on the redesign* — the colour axis is the new statistic.
-  - The two-axis scatter, bulk against subset, which is what the discrimination
-    simulation actually shows.
-- **Demo notebook.** **Synthetic data, no download** (decided). It doubles as a
-  method comparison: t-test and Wilcoxon as floors, and COPA / OS / ORT / MOST
-  as the honest competitors, since they share the subset-detection goal and are
-  a few lines each.
-
-## Later
-
-- **Memory at scale.** The null matrices are always materialized: peak RSS
-  tracks `2 · g · B · 8` bytes plus about 40% (measured 2.22 GB at 20,000 genes
-  × 5,000 permutations). `keep_null` controls retention, not construction. A
-  chunked or streaming path needs two passes, because the GPD refinement needs
-  each refined gene's full null vector.
-- Thread cap for the kernel, and progress reporting for long runs.
+- **Memory.** The null is always materialized — `keep_null` controls retention,
+  not construction. A streaming path needs two passes regardless, because the
+  GPD refinement needs each refined gene's full null vector.
+- **Thread cap** for the kernel, and progress reporting for multi-minute runs.
 - **GPD moment fit → maximum likelihood.** Moments are poorly behaved for
-  `xi > 0.5`, which is the heavy-tailed regime the refinement exists for. The
-  resolution floor `1/(B · n_tail)` must survive any upgrade: it is a statement
-  about what B permutations can support, and a better tail fit does not buy more
-  resolution.
-- Permutation and p-value construction more broadly.
-- Wheels across platforms, CI, and an API documentation build.
+  `xi > 0.5`, which is the heavy-tailed regime the refinement exists for. Two
+  constraints on any upgrade: the resolution floor `1/(B · n_tail)` must survive
+  it, because it is a statement about what `B` permutations can support rather
+  than a numerical guard; and the `xi <= 0` exponential branch must survive,
+  because a negative shape gives the GPD a hard upper bound past which a strong
+  statistic collapses to machine epsilon.
+- **Permutation and p-value construction** more broadly — the user has
+  references and ideas to bring to this.
+
+## 6. Packaging and release
+
+Wheels across platforms, CI, an API documentation build, and a decision on
+whether the validation simulations ship as tests, as documentation, or both.
+
+---
+
+## Open questions
+
+- **What happens to the parity fixtures long-term.** They now pin the machinery
+  underneath the statistic — normalization, the quantile grids, the permutation
+  null, the GPD, BH — rather than the statistic itself, which has been replaced.
+  That is still worth pinning. Whether `reference/R/` and the renv sandbox stay
+  once nothing new will be generated from them is a separate call; deleting them
+  would leave `tests/fixtures/` unfalsifiable.
+- **Whether `w1` earns its place.** It is reported and tested but nothing
+  consumes it.
+- **What to do about composition.** Library-size normalization couples genes, so
+  a signal-saturated matrix distorts `affected_fraction` and `direction` (the
+  subset *test* is immune — its statistic is invariant to a global offset). No
+  method on normalized data escapes this; the question is whether WADE should
+  detect and warn.

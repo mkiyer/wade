@@ -78,11 +78,11 @@ def test_bridge_is_positive_when_the_difference_is_front_loaded():
 
 
 # ---------------------------------------------------------------------
-# pi_hat -- the effective affected fraction
+# affected_fraction -- the effective affected fraction
 # ---------------------------------------------------------------------
 
 @pytest.mark.parametrize("frac", [0.02, 0.05, 0.10, 0.25, 0.50])
-def test_pi_hat_recovers_the_planted_fraction(frac):
+def test_affected_fraction_recovers_the_planted_fraction(frac):
     rng = np.random.default_rng(11)
     _, r = _curve(rng, "up", frac)
     got = np.median(wade.affected_fraction(r))
@@ -92,14 +92,14 @@ def test_pi_hat_recovers_the_planted_fraction(frac):
 
 
 @pytest.mark.parametrize("fc", [1.5, 2.0, 4.0, 8.0])
-def test_pi_hat_is_one_for_a_global_fold_change_of_any_size(fc):
+def test_affected_fraction_is_one_for_a_global_fold_change_of_any_size(fc):
     """The anchor. This is what the log scale buys and the raw scale cannot."""
     rng = np.random.default_rng(12)
     _, r = _curve(rng, "global", fc)
     assert np.median(wade.affected_fraction(r)) > 0.93
 
 
-def test_pi_hat_on_the_raw_scale_would_lose_the_anchor():
+def test_affected_fraction_on_the_raw_scale_would_lose_the_anchor():
     """Why section 4 specifies the log-ratio curve, asserted rather than asserted-to.
 
     On the absolute scale a global fold change produces a difference curve
@@ -116,7 +116,7 @@ def test_pi_hat_on_the_raw_scale_would_lose_the_anchor():
     assert on_raw < 0.80, f"raw scale should NOT anchor at 1; got {on_raw:.3f}"
 
 
-def test_pi_hat_is_bounded():
+def test_affected_fraction_is_bounded():
     rng = np.random.default_rng(14)
     for kind, arg in (("up", 0.05), ("global", 3.0), ("var", 2.0), ("down", 0.2)):
         _, r = _curve(rng, kind, arg, rep=40)
@@ -124,7 +124,7 @@ def test_pi_hat_is_bounded():
         assert np.all((v > 0) & (v <= 1.0 + 1e-12))
 
 
-def test_pi_hat_resolution_limit_is_one_over_m():
+def test_affected_fraction_resolution_limit_is_one_over_m():
     """Below m ~ 50 it stops being a fraction estimate and stays qualitative.
 
     Stated openly rather than hidden: the grid has m points, so no finer
@@ -146,7 +146,7 @@ def test_pi_hat_resolution_limit_is_one_over_m():
 # ---------------------------------------------------------------------
 
 def test_direction_separates_orientation_and_symmetry():
-    """The pair (pi_hat, direction) is the whole characterization."""
+    """The pair (affected_fraction, direction) is the whole characterization."""
     rng = np.random.default_rng(16)
     expect = {("global", 2.0): +1.00, ("global", 0.5): -1.00,
               ("up", 0.05): +0.92, ("down", 0.05): -0.93,
@@ -168,7 +168,7 @@ def test_direction_is_bounded():
 
 
 def test_variance_change_and_one_sided_subset_are_distinguishable():
-    """Both give pi_hat ~ 0.3; only direction tells them apart.
+    """Both give affected_fraction ~ 0.3; only direction tells them apart.
 
     This is the caveat that made direction necessary: the subset test's claim is
     'a global shift does not explain this', which a variance change satisfies.
@@ -177,7 +177,7 @@ def test_variance_change_and_one_sided_subset_are_distinguishable():
     _, r_var = _curve(rng, "var", 1.6)
     _, r_sub = _curve(rng, "up", 0.30)
     pi_var, pi_sub = np.median(wade.affected_fraction(r_var)), np.median(wade.affected_fraction(r_sub))
-    assert abs(pi_var - pi_sub) < 0.15, "the two should be similar on pi_hat alone"
+    assert abs(pi_var - pi_sub) < 0.15, "the two should be similar on affected_fraction alone"
     assert abs(np.median(wade.direction(r_var))) < 0.15
     assert np.median(wade.direction(r_sub)) > 0.80
 
@@ -267,14 +267,14 @@ def test_shape_test_refuses_a_grid_too_small_to_have_a_bridge():
         subset_test(x, cond, wade.draw_perms(cond, 10, seed=1))
 
 
-def test_pi_hat_is_robust_to_signal_shape_and_the_scan_argmax_is_not():
-    """Why pi_hat is the estimator and the scan's argmax is only a diagnostic.
+def test_affected_fraction_is_robust_to_signal_shape_and_the_scan_argmax_is_not():
+    """Why affected_fraction is the estimator and the scan's argmax is only a diagnostic.
 
     The argmax tracks the planted fraction when the affected samples are
     shifted multiplicatively, and underestimates it several-fold when their
     values are replaced outright — the log-ratio curve then declines steeply
     across the affected region, so the cumulative departure peaks before it
-    ends. pi_hat is accurate under both, which is the property that matters
+    ends. affected_fraction is accurate under both, which is the property that matters
     when nobody knows the signal's shape in advance.
     """
     rng = np.random.default_rng(27)
@@ -287,18 +287,18 @@ def test_pi_hat_is_robust_to_signal_shape_and_the_scan_argmax_is_not():
         case[idx] = case[idx] * 8.0 if shape == "multiply" else rng.lognormal(6.2, 0.3, k)
         return np.r_[case, rng.lognormal(3, 0.6, N0)]
 
-    err = {"argmax": 0.0, "pi_hat": 0.0}
+    err = {"argmax": 0.0, "affected_fraction": 0.0}
     for shape in ("multiply", "replace"):
         for frac in (0.05, 0.10, 0.25):
             x = np.array([gen(shape, frac) for _ in range(60)])
             res = subset_test(x, COND, perms)
             err["argmax"] += abs(float(np.median(res.scan_fraction)) - frac)
-            err["pi_hat"] += abs(float(np.median(res.affected_fraction)) - frac)
+            err["affected_fraction"] += abs(float(np.median(res.affected_fraction)) - frac)
             assert abs(float(np.median(res.affected_fraction)) - frac) < max(0.04, 0.2 * frac), (
-                f"pi_hat must track {frac:.0%} under a {shape} signal"
+                f"affected_fraction must track {frac:.0%} under a {shape} signal"
             )
-    assert err["pi_hat"] < 0.5 * err["argmax"], (
-        f"pi_hat error {err['pi_hat']:.3f} should be well below the argmax's "
+    assert err["affected_fraction"] < 0.5 * err["argmax"], (
+        f"affected_fraction error {err['affected_fraction']:.3f} should be well below the argmax's "
         f"{err['argmax']:.3f}; if that stopped holding, revisit which is reported"
     )
 

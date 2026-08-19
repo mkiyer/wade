@@ -52,8 +52,8 @@ def wade_gene(
     curve consistent with the numbers the test produced.
 
     Second, reversing changes the summation order. The curve is built so
-    that ``cum[-1] == diff_mean``, and in exact arithmetic that is
-    trivially true — but ``diff_mean`` sums ``D`` forwards while the
+    that ``cum[-1] == mean_shift``, and in exact arithmetic that is
+    trivially true — but ``mean_shift`` sums ``D`` forwards while the
     endpoint accumulates it backwards. Measured in the R over 2,000 random
     rows, the two differ bitwise in about two thirds of genes, at a worst
     relative difference of 3.5e-14. **So the endpoint identity is a

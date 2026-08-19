@@ -1,6 +1,6 @@
 """Layer 4 — the per-gene reductions.
 
-``diff_mean``, ``w1``, ``tail_mean``, ``fc``, ``cond1_mean``,
+``mean_shift``, ``w1``, ``tail_mean``, ``fc``, ``cond1_mean``,
 ``cond0_mean``, ``tot_mean``, ``diff_frac``, at relative tolerance
 (hazard 10 — ``rowSums`` and NumPy's pairwise summation legitimately
 differ in the last bits).
@@ -56,8 +56,8 @@ def test_fc_is_the_ratio_of_grid_means(name):
 
 
 @pytest.mark.parametrize("name", PARITY_SCENARIOS)
-def test_w1_dominates_absolute_diff_mean(name):
-    """``w1 >= |diff_mean|`` by the triangle inequality, with equality
+def test_w1_dominates_absolute_mean_shift(name):
+    """``w1 >= |mean_shift|`` by the triangle inequality, with equality
     exactly when ``D`` does not change sign."""
     _, res = run_port(name)
     assert np.all(res.w1 >= np.abs(res.mean_shift) - 1e-12 * np.maximum(1.0, res.w1))
@@ -65,19 +65,19 @@ def test_w1_dominates_absolute_diff_mean(name):
 
 @pytest.mark.parametrize("name", PARITY_SCENARIOS)
 def test_mean_shift_equals_the_difference_of_grid_means(name):
-    """``diff_mean == cond1_mean - cond0_mean``, to the accuracy available.
+    """``mean_shift == cond1_mean - cond0_mean``, to the accuracy available.
 
     Compared against the **scale of the operands**, not of the result.
-    ``diff_mean`` sums ``D = Q1 - Q0`` while the right-hand side
+    ``mean_shift`` sums ``D = Q1 - Q0`` while the right-hand side
     subtracts two grid sums, so on a gene whose two groups nearly agree
     the answer is a small number built from large ones and the relative
     error on the *difference* is unbounded by construction — measured up
-    to 3.2e-13 on a ``diff_mean`` of -0.85 against group means in the
+    to 3.2e-13 on a ``mean_shift`` of -0.85 against group means in the
     thousands. That is catastrophic cancellation, not disagreement, and
     an absolute bound scaled by ``tot_mean`` is the meaningful test.
 
-    The identity is what lets ``wade_score()`` take its sign from
-    ``diff_frac`` and its magnitude from ``log2(fc)``: they always agree.
+    The identity is what makes ``mean_shift`` and ``log2_fc`` always agree in
+    sign, so a reader can trust either to say which way a gene moved.
     """
     _, res = run_port(name)
     lhs = res.mean_shift
@@ -89,7 +89,7 @@ def test_mean_shift_equals_the_difference_of_grid_means(name):
 
 
 @pytest.mark.parity
-def test_diff_mean_is_not_the_difference_of_sample_means_on_unequal_groups():
+def test_mean_shift_is_not_the_difference_of_sample_means_on_unequal_groups():
     """``diff.mean = mean(case) - mean(ctrl)`` holds ONLY at n1 == n0.
 
     Stated unqualified in ``wade.R``'s header and in three source
@@ -104,7 +104,7 @@ def test_diff_mean_is_not_the_difference_of_sample_means_on_unequal_groups():
     identity fails (11.5 against 9.4), while ``gB``'s are an arithmetic
     sequence so it holds exactly (11.0 = 11.0).
 
-    A port that "fixes" ``diff_mean`` to a difference of sample means
+    A port that "fixes" ``mean_shift`` to a difference of sample means
     would change the statistic, invalidate parity, and alter the p-values,
     since the null would have to change with it.
     """
@@ -125,7 +125,7 @@ def test_diff_mean_is_not_the_difference_of_sample_means_on_unequal_groups():
 def test_worked_example_reproduces_algorithm_md_section_2_7():
     """Two genes, 5 cases vs 4 controls, no jitter and no normalization.
 
-    Nearly indistinguishable on the bulk axis (11.5 vs 11.0) and separated
+    Nearly indistinguishable on the mean shift (11.5 vs 11.0) and separated
     by a factor of 3.7 on the subset axis (44 vs 12) — which is the entire
     motivation for the shape statistics.
     """

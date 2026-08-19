@@ -13,19 +13,28 @@ the oracle the golden fixtures were generated from. The port is verified
 independently of it: the fixtures are committed, so the test suite runs with no
 R present.
 
-**Worst-case relative deviation: 9.155e-15 across 610 comparisons.**
+**Worst-case relative deviation: 9.155e-15 across 325 comparisons.**
 
 | layer | comparisons | worst relative deviation |
 |---|---|---|
-| 1 — grid scalars and `q` | 14 | **0** (bitwise) |
-| 2 — library sizes, normalized matrix | 28 | **0** (bitwise) |
-| 3 — `Q1`, `Q0`, `D` grids | 54 | **0** (bitwise) |
-| 4 — per-gene reductions | 178 | 2.6e-16 |
-| 5 — the `g × nperms` null matrices | 26 | **0** (bitwise) |
-| 6 — p-values and the GPD | 110 | 9.2e-15 |
-| 7 — BH and the frame | 33 | 9.8e-16 |
-| 8 — rank scores | 44 | **0** (bitwise) |
-| Rust kernel | 94 | 2.2e-15 |
+| 1 — grid scalars and `q` | 12 | **0** (bitwise) |
+| 2 — library sizes, normalized matrix | 24 | **0** (bitwise) |
+| 3 — `Q1`, `Q0`, `D` grids | 48 | **0** (bitwise) |
+| 4 — per-gene reductions | 80 | 2.2e-16 |
+| 5 — the `g × nperms` null matrix | 11 | **0** (bitwise) |
+| 6 — p-values and the GPD | 95 | 9.2e-15 |
+| 7 — BH and the frame | 17 | 9.8e-16 |
+| Rust kernel | 38 | 8.9e-16 |
+
+**What the fixtures are for, now that the statistic they validated has been
+replaced.** The tail window is gone (`method.md` §7), so parity on `tail.mean`
+and `tail.conc` no longer tests anything that runs. What they still pin is the
+machinery *underneath* every statistic — normalization, the type-7 quantile
+grids, the permutation null, the GPD refinement and BH — which the current
+method uses unchanged, and which is exactly where a silent cross-language
+disagreement would do the most damage. Parity runs pin
+``alternative="greater"``, since the R oracle is one-sided and the port now
+defaults to two-sided.
 
 Interpretive threshold: **1e-12 relative is a real bug; 1e-14 is summation
 order.** The worst figure here is in the GPD's `xi` and is an `exp`/`pow`
@@ -185,20 +194,21 @@ qualitatively identical output. It passes every plausibility check and fails
 only an exact test. That is the argument for having one, and the reason the
 normalization layer carries the tightest tolerance in the suite.
 
-### 2.10 The two places a correct port must DISAGREE with R
+### 2.10 Where a correct port must DISAGREE with R
 
-A suite that enforces agreement here enforces a bug. Both are asserted
-positively — stating what R does and what the port does instead — because an
-untested divergence is indistinguishable from an oversight.
+A suite that enforces agreement here enforces a bug, so the divergence is
+asserted positively — stating what R does and what the port does instead —
+because an untested divergence is indistinguishable from an oversight.
 
-- **`tail.conc`.** R's guard fires roughly nine orders of magnitude tighter than
-  the pathology, catching none of it. See [`method.md`](method.md) §7.
-- **A one-sample group.** `rowQuantiles` drops the dimension attribute when the
-  result has a single row *or* a single column, and R's guard assumes the
-  former. At `nprobs == 1` it means the latter, so a length-`g` vector is
-  reshaped to `1 × g`, genes become probabilities, and the frame reports one
-  recycled value for every gene — no error, right shape, wrong answer. The port
-  refuses `min(n0, n1) == 1` by default.
+**A one-sample group.** `rowQuantiles` drops the dimension attribute when the
+result has a single row *or* a single column, and R's guard assumes the former.
+At `nprobs == 1` it means the latter, so a length-`g` vector is reshaped to
+`1 × g`, genes become probabilities, and the frame reports one recycled value
+for every gene — no error, right shape, wrong answer. The port refuses
+`min(n0, n1) == 1` by default.
+
+(`tail.conc` used to be the other one. The statistic it guarded has been
+retired, so there is no longer a ratio to disagree about.)
 
 ---
 
@@ -271,18 +281,25 @@ Boundary decisions:
   numerically: each permutation's arithmetic is self-contained.
 
 Measured, 16 threads: 18–22× the NumPy path, and null matrices **bitwise
-identical to R** on all 13 permutation scenarios.
+identical to R** on every permutation scenario.
+
+**The subset test has no kernel yet**, and is now the dominant cost: measured at
+20,000 genes, 100 v 100, B = 2000 — mean-shift null 5.4 s on the kernel, subset
+test **302 s** on NumPy. It needs two passes over the permutations on the
+shift-corrected matrix (one for the bridge's null moments, one for the
+standardized maximum). The right shape is to parallelize **over genes** rather
+than permutations, so each gene's two passes share cache and the moment
+accumulators need no cross-thread reduction.
 
 | scale | NumPy | Rust |
 |---|---|---|
 | 2,219 genes, 60v22, B=2000 | 4.10 s | 0.20 s |
 | 20,000 genes, 50v50, B=1000 | 30.26 s | 1.35 s |
 
-**Memory is the unsolved half.** The null matrices are always materialized:
-peak RSS tracks `2 · g · B · 8` bytes plus about 40% — measured 2.22 GB at
-20,000 genes × 5,000 permutations. `keep_null` controls retention, not
-construction. A streaming path needs two passes, because the GPD needs full null
-vectors for refined genes.
+**Memory is the unsolved half.** The null is always materialized: peak RSS
+tracks `g · B · 8` bytes plus overhead. `keep_null` controls retention, not
+construction. A streaming path needs two passes anyway, because the GPD needs
+full null vectors for refined genes.
 
 ---
 

@@ -1,156 +1,180 @@
 # WADE — Wasserstein Area Differential Expression
 
-A quantile-area differential-distribution test built for **subset detection**: it
-compares a heterogeneous case group against a control group without assuming the
-two differ by a location shift, and it is designed to surface genes altered in
-only a fraction of cases.
+A two-group differential-expression test that answers **two** questions instead
+of one:
 
-For each gene, WADE evaluates both groups' empirical quantile functions on a
-shared grid of `min(n_case, n_ctrl)` probabilities. The signed area between them
-is the bulk axis; the mean difference over the upper-tail window is the **subset
-axis**, where a rare high-expressing subpopulation concentrates. Inference on
-both axes is by label permutation, with a Generalized Pareto fit refining
-p-values whose empirical resolution has run out.
+1. **Is there a difference?** — the ordinary question, which any DE method
+   answers.
+2. **What kind of difference is it?** — a shift affecting every sample, or a
+   pronounced change confined to a small subset of one group.
 
-The method joins two literatures: quantile/Wasserstein differential-distribution
-testing (scDD, waddR) supplies the mechanism, and cancer-outlier profile analysis
-(COPA, OS, ORT, MOST, LSOSS) supplies the subset-detection goal.
+The second question is the point. A gene altered in 5% of cases and a gene
+shifted 2× in all of them can produce the same mean difference, and a
+first-moment test cannot tell them apart. WADE separates them, and **never asks
+you to declare in advance which you are looking for** — there is no percentile
+cutoff, no window width, no tuning parameter describing the shape of the effect.
 
-## Status
+For each gene it compares the two groups' whole quantile functions on a shared
+grid of `min(n_case, n_ctrl)` probabilities. Inference is by label permutation,
+with a Generalized Pareto fit refining p-values whose empirical resolution has
+run out, then BH-FDR.
 
-WADE was prototyped in R inside a cell-free RNA analysis project. The laboratory
-is moving from R to Python, so WADE is being rebuilt as a Python package with a
-Rust-backed core for the permutation loop. The R in `reference/` is the source of
-truth to port *from* and to validate *against*; it is not shipped and will not be
-maintained. See [`ROADMAP.md`](ROADMAP.md).
-
-| | |
-|---|---|
-| Algorithm specification | complete |
-| R reference implementation | staged, runnable, byte-identical to origin |
-| Golden parity fixtures | 20 fixtures, generated from the R through a deterministic seam |
-| Python package | implemented |
-| Parity suite | layers 0–9, passing |
-| Rust kernel | implemented (PyO3 + rayon), 18–22× faster than the NumPy path |
-| Subset test and characterization | implemented; replaces the fixed tail window |
-
-**Parity, measured:** worst-case relative deviation against the R reference is
-**9.2e-15** across 325 comparisons. The normalized matrix, the quantile grids and
-the permutation null are **bit-for-bit identical** to R. The fixtures now pin
-the shared machinery underneath the statistic rather than the statistic itself,
-which has been replaced — see [`docs/method.md`](docs/method.md) §7.
-
-## Layout
-
-```
-src/wade/                 the Python package
-rust/src/lib.rs           the permutation kernel
-tests/                    the parity suite (layers 0–9) and the golden fixtures
-tools/r/                  the deterministic seam and the fixture generator
-docs/                     the specifications — written for the port, read these first
-reference/R/              the original R, runnable in a pinned renv sandbox
-reference/PROVENANCE.md   what was copied from where, with checksums
-```
-
-## Install and use
-
-The Rust kernel is optional: without a toolchain the package installs and runs
-on the NumPy path, which is the correctness baseline the kernel is validated
-against.
+## Install
 
 ```bash
 mamba env create -f mamba_env.yaml
 conda activate wade
 pip install -e . --no-build-isolation
-pytest                    # the full parity suite, ~2 s
+pytest                       # ~25 s
 ```
 
-`mamba_env.yaml` declares the runtime, the Rust build toolchain and the test
-dependencies. It deliberately does **not** declare R: the reference sandbox runs
-against a system R 4.6.1 restoring offline from a read-only `renv` cache, which
-conda cannot reproduce. You need R only to regenerate `tests/fixtures/`, and the
-fixtures are committed — the parity suite passes with no R present.
+The Rust kernel is optional. Without a toolchain the package installs and runs
+on the NumPy path, which is the correctness baseline the kernel is validated
+against — just slower.
+
+## Use it
 
 ```python
 import numpy as np
 from wade import wade
 
-res = wade(counts, normalizer, cond, nperms=2000)  # raw counts, genes x samples
-
-res.p_mean_shift       # is average expression different?
-res.p_subset           # is the difference confined to a subset of samples?
-res.affected_fraction  # what fraction of samples differ (1.0 = all of them)
-res.direction          # -1 all down .. +1 all up
+# counts: genes x samples, RAW counts (see "Why raw counts" below)
+# normalizer: a per-gene vector (e.g. gene length) or a genes x samples matrix
+# cond: 1 = case, 0 = control, one entry per column
+res = wade(counts, normalizer, cond, nperms=2000)
 ```
 
-The second question is the point. A gene altered in 5% of cases and a gene
-shifted 2x in all of them can produce the same mean difference, and a
-first-moment test cannot tell them apart. **Nothing asks you to declare in
-advance which you are looking for** — no percentile cutoff, no window width.
+### Reading the result
 
-The entry point takes **raw counts**, not a normalized matrix. The continuity
-jitter that breaks ties in sparse data is applied at count precision *before*
-division, so a pre-normalized matrix cannot reproduce it; `wade_from_matrix()`
-accepts one anyway and documents what that costs.
+| column | question it answers |
+|---|---|
+| `mean_shift` | how much did average expression move? (signed) |
+| `p_mean_shift`, `padj_mean_shift` | is that shift significant? |
+| `p_subset`, `padj_subset` | is a global shift an **inadequate** explanation? |
+| `affected_fraction` | what fraction of samples differ? `1.0` = all of them |
+| `direction` | `+1` all up, `-1` all down, `0` two-sided |
+| `log2_fc`, `w1` | fold change; 1-Wasserstein distance |
 
-## Reading order
+Four patterns, read off the two p-values and the two descriptors:
 
-1. [`docs/method.md`](docs/method.md) — what WADE computes and why. The
-   contract; implementable without reading any R.
-2. [`docs/limits.md`](docs/limits.md) — what it does not do, and the two hard
-   constraints that decide whether it can answer your question at all.
-3. [`docs/implementation-notes.md`](docs/implementation-notes.md) — parity with
-   the reference, where two implementations silently disagree, and the Rust
-   kernel's boundary.
-4. [`ROADMAP.md`](ROADMAP.md) — the work queue and the open questions.
+| `p_mean_shift` | `p_subset` | what you are looking at |
+|---|---|---|
+| significant | — | a **global shift**; an ordinary DE method finds this too |
+| significant | significant | a **subset**, strong enough to move the mean. `affected_fraction` says how much of the group, `direction` says which way |
+| — | significant | a distributional change with **no net mean shift**: a balanced subset, or a variance change |
+| — | — | not differential |
 
-## Running the R reference
+There is deliberately no categorical label and no `interpret()` function.
+Turning continuous statistics into classes needs thresholds, which is what this
+design exists to avoid.
 
-The sandbox is pinned and offline. Three environment details are load-bearing and
-documented in [`reference/R/README.md`](reference/R/README.md):
-
-```bash
-export PATH="/usr/local/bin:$PATH"
-cd reference/R
-RENV_CONFIG_SANDBOX_ENABLED=FALSE \
-RENV_PATHS_CACHE="$HOME/Library/Caches/org.R-project.R/R/renv/cache" \
-  Rscript validation_sims_v7.R
+```python
+res.columns()          # dict of equal-length arrays
+res.to_polars()        # if polars is installed
 ```
 
-`reference/R/wade.R` must remain byte-identical to its origin; verify with
-`shasum -a 256 -c sha256sums.txt` from that directory.
+### Worked example
 
-## When not to use WADE
+```python
+import numpy as np
+from wade import wade
 
-Stated up front because each item is a live limitation rather than a
-hypothetical. Full treatment in [`docs/limits.md`](docs/limits.md).
+rng = np.random.default_rng(0)
+n1 = n0 = 200
+cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
 
-- **No covariate or batch adjustment.** The test takes no design matrix. A
-  confound can be detected but not removed.
-- **No repeated-measures handling.** Samples are assumed exchangeable; libraries
-  from the same subject are not.
-- **Two-sided by default**, with `alternative="greater"` or `"less"` if you
-  only care about one direction.
-- **The affected fraction cannot resolve finer than `1/min(n_case, n_ctrl)`.**
-  Quantitative above about 100 per group, degrading through 50, and below that
-  only qualitative — global still separates from concentrated, but 2% and 5% do
-  not separate from each other.
-- **A combinatorial floor limits subset detection**, and it binds harder than the
-  original write-up suggested. If `k` samples carry a signal, label shuffling
-  places all of them in the case group with probability
-  `C(n_case, k) / C(n_case + n_ctrl, k)`; when that exceeds your alpha, no effect
-  size and no permutation count can separate the signal. The floor is driven by
-  group *imbalance*, so evaluate it for your own design.
+genes = []
+genes += [np.r_[rng.lognormal(3, .6, n1), rng.lognormal(3, .6, n0)]        # null
+          for _ in range(300)]
+genes += [np.r_[rng.lognormal(3, .6, n1) * 2, rng.lognormal(3, .6, n0)]    # global 2x
+          for _ in range(20)]
+for _ in range(20):                                                         # 5% subset
+    case = rng.lognormal(3, .6, n1)
+    case[rng.choice(n1, 10, replace=False)] *= 8
+    genes.append(np.r_[case, rng.lognormal(3, .6, n0)])
+
+counts = np.array(genes)
+res = wade(counts, np.full(counts.shape[0], 4.0), cond, nperms=500)
+
+for name, sl in (("null", slice(0, 300)), ("global", slice(300, 320)),
+                 ("subset", slice(320, 340))):
+    print(f"{name:<8s} p_mean={np.median(res.p_mean_shift[sl]):.3f}  "
+          f"p_subset={np.median(res.p_subset[sl]):.3f}  "
+          f"affected={np.median(res.affected_fraction[sl]):.2f}")
+```
+
+The planted 5% subset shows the point: the mean-shift test largely misses it
+while the subset test finds it, and `affected_fraction` recovers roughly 0.05.
+A genuine global shift is the mirror image — found by the mean test, and
+correctly **not** flagged as a subset.
+
+### Choosing direction
+
+```python
+wade(..., alternative="two-sided")   # default: differences either way
+wade(..., alternative="greater")     # only elevation in cases
+wade(..., alternative="less")        # only reduction in cases
+```
+
+### Why raw counts
+
+The entry point takes **raw counts**, not a normalized matrix. WADE adds a tiny
+continuity jitter at *count precision* before dividing, which breaks ties in
+zero-heavy data where many samples share a count of zero and the quantile grid
+would otherwise degenerate into flat runs. Once counts have been divided by a
+normalizer and a library size that perturbation cannot be reconstructed.
+
+`wade_from_matrix(x, cond)` accepts an already-normalized matrix and documents
+what it costs: no tie-breaking, and no guaranteed positivity.
+
+Normalizers ship as separate functions — `tpm_like`, `cpm`, `rle` — so the
+choice is explicit and swappable.
+
+## Before you run it: two things to check
+
+Both are arithmetic on your **design**, not properties of the software, and
+neither is fixable with more data or more permutations.
+
+**Resolution.** The grid has `min(n_case, n_ctrl)` points, so nothing finer than
+`1/m` is estimable. `affected_fraction` is quantitative above roughly 100 per
+group and only qualitative below about 50.
+
+**The combinatorial floor.** If `k` samples carry a signal, shuffling puts all
+of them in one group with probability `C(n1,k)/C(n1+n0,k)` — and **no
+permutation test can return a p-value below that.** At 77 cases vs 18 controls
+the floor is still 0.032 with 15 affected samples. It is driven by group
+*imbalance*: balancing the groups helps far more than adding cases.
+
+[`docs/limits.md`](docs/limits.md) has both in full, plus the checklist of when
+to reach for something else.
+
+## Documentation
+
+- [`docs/method.md`](docs/method.md) — what WADE computes and why. The contract.
+- [`docs/limits.md`](docs/limits.md) — what it cannot do; read before running.
+- [`docs/implementation-notes.md`](docs/implementation-notes.md) — parity with
+  the R original, the cross-language traps, the Rust kernel's boundary.
+- [`ROADMAP.md`](ROADMAP.md) — what is planned.
+
+## Status
+
+Implemented and tested: the statistic, both stages, the characterization, the
+normalizers, permutation inference with GPD refinement and BH, and a Rust kernel
+for the permutation loop. **499 tests.**
+
+Ported from an R implementation that remains in `reference/` as the oracle the
+golden fixtures were generated from. Worst-case relative deviation across 325
+parity comparisons: **9.2e-15**, with the normalized matrix, the quantile grids
+and the permutation null bit-for-bit identical.
+
+Not yet built: plotting, file I/O, and a demo notebook. See the roadmap.
 
 ## Provenance
 
-Extracted from the MCTP cfRNA analysis repository at commit `828f2f1c`. The
-consumer layer that called WADE (contrast registry, feasibility screen, figures)
-stays in that repository. It was staged here during the port as evidence of what
-a caller needs, and removed once that contract was implemented; see
+Extracted from the MCTP cfRNA analysis repository at commit `828f2f1c`, where it
+began as a small set of functions called HITLIB. No patient-derived data is
+included; everything here is synthetic. Details in
 [`reference/PROVENANCE.md`](reference/PROVENANCE.md).
-No patient-derived data is included; every fixture and simulation here is
-synthetic. Details in [`reference/PROVENANCE.md`](reference/PROVENANCE.md).
 
 ## License
 

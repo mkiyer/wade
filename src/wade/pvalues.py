@@ -266,9 +266,9 @@ def perm_pvalues(
 def bh_adjust(p: np.ndarray) -> np.ndarray:
     """Benjamini-Hochberg step-up adjustment, matching ``p.adjust(p, "BH")``.
 
-    Applied **separately to each axis** across all genes: ``padj_diff``
-    from the G values of ``p_diff``, ``padj_tail`` from the G values of
-    ``p_tail``. The two axes are not pooled into one family of 2G tests.
+    Applied **separately to each stage** across all genes: ``padj_mean_shift``
+    from the G values of ``p_mean_shift``, ``padj_subset`` from the G values of
+    ``p_subset``. The two stages are not pooled into one family of 2G tests.
 
     Two behaviours pinned here that are not about the arithmetic, because
     ``wade()`` produces all-NaN p-value columns when ``nperms == 0``:

@@ -75,8 +75,7 @@ cases at 2×: power 0.700, against 0.295 for the shape test). WADE's claim is
 that it adds sensitivity the mean test lacks for strong concentrated effects
 (2% of cases at 8×: 0.700 against 0.935).
 
-> Formerly `diff.mean`, described as the "bulk axis". Renamed: "bulk" told a
-> reader nothing.
+> Formerly `diff.mean`, described as the "bulk axis". Renamed: "bulk" told a reader nothing.
 
 ---
 
@@ -299,8 +298,7 @@ small $n$ and is the single most important thing to check before running.
 ## 7. What was retired, and why
 
 The subset machinery used to be a fixed tail window,
-``k = max(1, ceil(q_tail * m))`` with ``q_tail = 0.10``, giving `tail.mean`
-and `tail.conc`. It is gone, along with `q_tail`, the guard factor `F`, and
+``k = max(1, ceil(q_tail * m))`` with ``q_tail = 0.10``, giving `tail.mean` and `tail.conc`. It is gone, along with `q_tail`, the guard factor `F`, and
 the rank scores that consumed it.
 
 Three stacked heuristics — a fraction, a rounding rule and a floor — plus a

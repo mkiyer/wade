@@ -58,7 +58,7 @@ def test_the_port_refuses_a_one_sample_group():
     """Refusing loudly is better than the reference's silence.
 
     A one-sample group has no quantile function worth comparing: the grid
-    collapses to the single point p = 1, so ``diff_mean``, ``tail_mean``
+    collapses to the single point p = 1, so ``mean_shift``, ``tail_mean``
     and ``w1`` all reduce to the difference of group maxima.
     """
     fx = load_fixture("onesample")

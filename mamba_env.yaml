@@ -26,6 +26,9 @@ dependencies:
   # build-system table; rust >=1.75 covers pyo3 0.27's MSRV with margin.
   - rust>=1.75
   - maturin>=1.5,<2
+  # Optional. WadeResult.to_polars() uses it, and the I/O layer will; the
+  # statistic does not, so the package imports and runs without it.
+  - polars
   # Test-only. scipy is used by ONE thing: the Kolmogorov-Smirnov test in
   # the ported null-calibration simulation (tests/test_layer9_validation.py).
   # It is not a runtime dependency of the package and the statistic does
