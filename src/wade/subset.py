@@ -221,6 +221,53 @@ class SubsetResult:
     correction: str = "division"       # "division" or "thinning"
 
     @property
+    def subset_log2_fc(self) -> np.ndarray:
+        """The magnitude of the subset: log2 fold change **within the
+        affected fraction**.
+
+        The log-ratio curve already *is* per-quantile magnitude —
+        ``R(p) = log2 Q1(p) - log2 Q0(p)`` says how many folds above the
+        corresponding control quantile the cases sit at each ``p`` — so the
+        subset's magnitude is the mean of ``R`` over the affected region:
+        the top ``ceil(affected_fraction * m)`` grid nodes for an upward
+        subset (``direction >= 0``), the bottom nodes for a downward one.
+        No threshold is introduced: the region width is the data's own
+        :func:`affected_fraction`.
+
+        Reads exactly as a fold change, with one deliberate property: the
+        comparison is **quantile-matched** — the affected cases against what
+        the *controls themselves* do at those same extreme quantiles, not
+        against the control mean. A subset planted at 8× the control mean
+        of an NB(50) reads ~2 rather than ``log2 8 = 3``, because the
+        controls' own top decile sits well above their mean; a subset that
+        barely clears the controls' natural tail reads near 0 however far
+        above the control *mean* it is. That discounting of the controls'
+        spread is what makes the number a measure of how *distinctive* the
+        subset is, and it is the distinction ``p_subset`` cannot make once
+        it saturates: an 8× and a 100× subset tie on p and differ by ~3.5
+        here. Two boundary behaviours make it coherent with the
+        rest of the table: a global change has ``affected_fraction ~ 1``, so
+        this becomes the mean of the whole curve — the gene's overall log2
+        fold change — and the reported number *includes* any global shift
+        the gene also carries (``shift`` is reported separately, so the
+        subset's excess over it is one subtraction away). For a balanced
+        up-and-down mixture (``direction ~ 0``) a single signed number is
+        the wrong shape, as it is for ``direction`` itself.
+        """
+        r = np.asarray(self.r, dtype=np.float64)
+        g, m = r.shape
+        frac = np.nan_to_num(self.affected_fraction, nan=1.0)
+        k = np.clip(np.ceil(frac * m).astype(np.intp), 1, m)
+        cs = np.cumsum(r, axis=1)
+        rows = np.arange(g)
+        top = cs[rows, k - 1] / k
+        # sum of the last k nodes = total - sum of the first m - k
+        below = np.where(k < m, cs[rows, np.maximum(m - k - 1, 0)], 0.0)
+        bottom = (cs[:, -1] - below) / k
+        down = np.nan_to_num(self.direction, nan=0.0) < 0
+        return np.where(down, bottom, top)
+
+    @property
     def scan_fraction(self) -> np.ndarray:
         """``argmax_k / m`` — the width the scan chose.
 

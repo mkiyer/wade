@@ -386,12 +386,15 @@ def condition(
 
 #: The written column order. ``neglog10_p_*`` is what a volcano plots; ``p_*``
 #: and ``padj_*`` stay beside it because significance is read off BH, not off
-#: the raw p-value.
+#: the raw p-value. ``z_*`` are the permutation z-scores (the GSEA-NES
+#: analogue) — the ranking that keeps working when p-values pile up at the
+#: resolution floor; ``subset_log2_fc`` is the subset's magnitude, the log2
+#: fold change within the affected fraction.
 RESULT_COLUMNS = (
     "gene", "case_mean", "ctrl_mean", "mean_shift", "log2_fc",
-    "p_mean_shift", "padj_mean_shift", "neglog10_p_mean_shift",
-    "subset_stat", "p_subset", "padj_subset", "neglog10_p_subset",
-    "affected_fraction", "direction", "w1",
+    "p_mean_shift", "padj_mean_shift", "neglog10_p_mean_shift", "z_mean_shift",
+    "subset_stat", "p_subset", "padj_subset", "neglog10_p_subset", "z_subset",
+    "affected_fraction", "subset_log2_fc", "direction", "w1",
 )
 
 
@@ -417,6 +420,8 @@ def result_columns(res) -> dict:
         "padj_mean_shift": res.padj_mean_shift,
         "neglog10_p_mean_shift": _neglog10(res.p_mean_shift),
     }
+    if getattr(res, "z_mean_shift", None) is not None:
+        cols["z_mean_shift"] = res.z_mean_shift
     if res.subset is not None:
         cols.update({
             "subset_stat": res.subset.statistic,
@@ -424,8 +429,11 @@ def result_columns(res) -> dict:
             "padj_subset": res.padj_subset,
             "neglog10_p_subset": _neglog10(res.p_subset),
             "affected_fraction": res.affected_fraction,
+            "subset_log2_fc": res.subset.subset_log2_fc,
             "direction": res.direction,
         })
+        if getattr(res, "z_subset", None) is not None:
+            cols["z_subset"] = res.z_subset
     cols["w1"] = res.w1
     ordered = {k: cols[k] for k in RESULT_COLUMNS if k in cols}
     for name, ci in (("affected_fraction", res.ci_affected_fraction),

@@ -90,6 +90,13 @@ class WadeResult:
     p_subset: np.ndarray | None = None
     padj_subset: np.ndarray | None = None
 
+    #: Permutation z-scores, ``(observed - mean(null)) / sd(null)`` per gene —
+    #: the GSEA-NES analogue, for ranking past the p-value floor (see
+    #: :func:`_perm_z`). ``z_mean_shift`` is NaN when there were no
+    #: permutations; ``z_subset`` is ``None`` when the subset stage did not run.
+    z_mean_shift: np.ndarray | None = None
+    z_subset: np.ndarray | None = None
+
     #: The condition vector the contrast was run on, one entry per column of
     #: ``tpm``. Kept so a single gene can be re-derived from the result alone
     #: (:meth:`gene_detail`, and the plotting layer).
@@ -118,6 +125,14 @@ class WadeResult:
     @property
     def direction(self) -> np.ndarray | None:
         return None if self.subset is None else self.subset.direction
+
+    @property
+    def subset_log2_fc(self) -> np.ndarray | None:
+        """Log2 fold change **within the affected fraction** — the subset's
+        magnitude, read off the log-ratio curve over the region
+        ``affected_fraction`` names (:attr:`wade.SubsetResult.subset_log2_fc`).
+        The number to rank subset findings by once ``p_subset`` saturates."""
+        return None if self.subset is None else self.subset.subset_log2_fc
 
     @property
     def fitted_fold_change(self) -> np.ndarray | None:
@@ -187,14 +202,19 @@ class WadeResult:
             "p_mean_shift": self.p_mean_shift,
             "padj_mean_shift": self.padj_mean_shift,
         }
+        if self.z_mean_shift is not None:
+            cols["z_mean_shift"] = self.z_mean_shift
         if self.subset is not None:
             cols.update({
                 "subset_stat": self.subset.statistic,
                 "p_subset": self.p_subset,
                 "padj_subset": self.padj_subset,
                 "affected_fraction": self.subset.affected_fraction,
+                "subset_log2_fc": self.subset.subset_log2_fc,
                 "direction": self.subset.direction,
             })
+            if self.z_subset is not None:
+                cols["z_subset"] = self.z_subset
         for name, ci in (("affected_fraction", self.ci_affected_fraction),
                          ("direction", self.ci_direction), ("log2_fc", self.ci_log2_fc)):
             if ci is not None:
@@ -295,6 +315,27 @@ def _resolve_input(counts, normalizer, cond, gene_names, sample_names):
     return c, np.asarray(normalizer, dtype=np.float64), np.asarray(cond), meta
 
 
+def _perm_z(stat: np.ndarray, null: np.ndarray) -> np.ndarray:
+    """The permutation z-score: ``(observed - mean(null)) / sd(null)``,
+    per gene, against the gene's own permutation null.
+
+    The analogue of GSEA's normalized enrichment score, in z form because
+    WADE's stage-1 statistic is signed (its null mean is ~0, so a ratio to
+    the mean would be unstable where NES's ratio to the positive-ES mean is
+    not). It exists for **ranking**: the empirical p-value floors at
+    ``1/(B+1)`` (GPD-refined, ``1/(B * n_tail)``), so on large cohorts
+    thousands of genes tie at the floor while their separations from the
+    null differ by orders of magnitude — this number keeps ordering them,
+    at no extra cost, because the null matrix is already in hand. It is
+    not a calibrated tail probability and must not be converted into one
+    via the normal CDF; calibrated resolution is ``docs/scaling.md`` §4.
+    """
+    mu = null.mean(axis=1)
+    sd = null.std(axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(sd > 0, (stat - mu) / sd, np.nan)
+
+
 def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
             alternative, keep_null, gene_names, tpm, jitter, pseudocount,
             n_boot, sample_names, condition_meta, max_probs,
@@ -318,12 +359,15 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
             stat, null, n_exc_min=n_exc_min, n_tail=n_tail,
             alternative=alternative,
         )
+        z_mean = _perm_z(stat, null)
     else:
         p_mean = np.full(g, np.nan)
         nexc = np.zeros(g, dtype=np.int64)
         refined = np.zeros(g, dtype=bool)
+        z_mean = np.full(g, np.nan)
 
     p_subset = padj_subset = None
+    z_subset = None
     if sub is not None:
         # The subset statistic is already a maximum over widths, oriented by
         # `alternative` inside the scan, so its p-value is an upper-tail one.
@@ -332,6 +376,7 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
             alternative="greater",
         )
         padj_subset = bh_adjust(p_subset)
+        z_subset = _perm_z(sub.statistic, sub.null)
         if not keep_null:
             from dataclasses import replace
             sub = replace(sub, null=None)
@@ -345,6 +390,7 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
         stats=obs, tpm=tpm, jitter=jitter, perms=perms,
         null_mean_shift=null if keep_null else None,
         subset=sub, p_subset=p_subset, padj_subset=padj_subset,
+        z_mean_shift=z_mean, z_subset=z_subset,
         cond=cond, sample_names=sample_names, pseudocount=pseudocount,
         ci_affected_fraction=ci.get("affected_fraction"),
         ci_direction=ci.get("direction"),

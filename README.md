@@ -62,8 +62,14 @@ res = wade(counts, normalizer, cond, nperms=2000)
 | `p_mean_shift`, `padj_mean_shift` | is that shift significant? |
 | `p_subset`, `padj_subset` | is a global shift an **inadequate** explanation? |
 | `affected_fraction` | what fraction of samples differ? `1.0` = all of them |
+| `subset_log2_fc` | by how many folds does that fraction differ? (quantile-matched) |
 | `direction` | `+1` all up, `-1` all down, `0` two-sided |
+| `z_mean_shift`, `z_subset` | how far past its own permutation null? — the ranking that keeps working when p-values hit the resolution floor (GSEA's NES, in z form) |
 | `log2_fc`, `w1` | fold change; 1-Wasserstein distance |
+
+On a large cohort the p-values saturate — thousands of genes tie at the
+resolution floor — so the working recipe is: **filter** by `padj_*`, then
+**rank** by magnitude (`subset_log2_fc`, `log2_fc`) or by `z_*`.
 
 With `n_boot=300` the three descriptive statistics also carry bootstrap 95%
 intervals (`ci_affected_fraction`, `ci_direction`, `ci_log2_fc`, and `*_lo` /

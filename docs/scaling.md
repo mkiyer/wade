@@ -401,6 +401,19 @@ tie degradation, and resampling with replacement stays the default.
 
 ## 4. P-value resolution
 
+### 4.0 What landed 2026-08-20: ranking without resolution
+
+The rna100k plasma contrast made the pile-up real (18.8% of genes at the
+mean-shift floor; nearly every gene subset-significant), and the *ordering*
+half of the problem is now addressed without new inference machinery:
+**permutation z-scores** (`z_mean_shift`, `z_subset` — the observed
+statistic against its own gene's null mean and sd, the GSEA-NES analogue,
+free because the null matrices are in hand) and **`subset_log2_fc`** (the
+subset's magnitude: mean of the log-ratio curve over the affected fraction,
+quantile-matched). The recipe on saturated cohorts: filter by `padj`, rank
+by magnitude or z. What these deliberately do **not** provide is a
+calibrated tail probability — that remains this section's agenda, below.
+
 ### 4.1 Why this becomes urgent at scale, and not before
 
 At 30,000 genes, BH at 0.05 needs resolution to roughly `1e-6` — which is

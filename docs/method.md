@@ -209,7 +209,8 @@ higher", and the difference is documented rather than hidden:
 
 ## 4. Characterization
 
-Two bounded, parameter-free numbers, both read off $R$.
+Three parameter-free numbers, all read off $R$: how much of the group
+differs, which way, and by how much.
 
 ### `affected_fraction` — how much of the group differs
 
@@ -246,6 +247,33 @@ Together the pair is a complete description. Measured at 500 v 500:
 
 A symmetric variance change and a one-sided 30% subset both give
 $\hat{\pi} \approx 0.3$ and are separated by `direction` (0.50 against ~1.0).
+
+### `subset_log2_fc` — by how much
+
+$$\texttt{subset\_log2\_fc} = \frac{1}{k}\sum_{\text{top }k} R(p),
+\qquad k = \lceil \hat{\pi}\, m \rceil$$
+
+— the mean of the log-ratio curve over the region `affected_fraction` names
+(the *bottom* $k$ nodes when `direction` is negative). This is the magnitude
+the subset test itself deliberately lacks: `p_subset` says a global shift is
+inadequate, $\hat{\pi}$ says how much of the group departs, and this says **by
+how many folds** — a 10% subset at a modest 3× and one at 100× can share a
+saturated p-value and differ here by ~3.5 log2 units. No threshold enters:
+the region width is the data's own $\hat{\pi}$.
+
+Read it knowing what it compares: the affected cases against the **controls'
+own quantiles at those extremes**, not against the control mean. A subset
+planted at 8× the mean of an NB(50) reads ~2 rather than $\log_2 8 = 3$,
+because the controls' top decile already sits well above their mean; a
+subset that barely clears the controls' natural tail reads near 0 however
+far above the control *mean* it is. That discounting of the control spread
+is what makes the number a measure of how *distinctive* the subset is.
+Boundary behaviour is coherent: a global change has $\hat{\pi} \approx 1$, so
+this becomes the gene's overall log2 fold change, and the number includes
+any global shift the gene also carries (the fitted shift is reported
+separately, so the subset's excess over it is one subtraction away). For a
+balanced up-and-down mixture (`direction` $\approx 0$) one signed number is
+the wrong shape, as it is for `direction` itself.
 
 ### Composition moves both, and that is not a defect
 
@@ -328,6 +356,18 @@ honesty constraint, not a numerical guard**: it is what $B$ permutations can
 support. A port that returns smaller p-values by "improving" it is a regression.
 
 **BH-FDR** is applied across genes, separately per axis.
+
+**Permutation z-scores** (`z_mean_shift`, `z_subset`): the observed statistic
+standardized against its own gene's null,
+$(t - \bar{t}^{(\cdot)})/\mathrm{sd}(t^{(\cdot)})$ — the analogue of GSEA's
+normalized enrichment score, in z form because stage 1's statistic is signed.
+They exist for **ranking**: on large cohorts thousands of genes tie at the
+p-value floor while their separations from the null differ by orders of
+magnitude, and the z keeps ordering them at no extra cost, since the null
+matrix is already in hand. They are *not* calibrated tail probabilities and
+must not be pushed through a normal CDF — the null of a maximum statistic is
+not normal, and honesty about the tail is the floor's job. Calibrated
+resolution beyond the floor is the `scaling.md` §4 agenda.
 
 ### The combinatorial floor
 

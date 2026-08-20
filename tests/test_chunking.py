@@ -39,6 +39,7 @@ def _counts(seed=0):
 EVERY_ARRAY = ("mean_shift", "w1", "fc", "log2_fc", "case_mean", "ctrl_mean",
                "p_mean_shift", "padj_mean_shift", "nexc_mean_shift",
                "p_subset", "padj_subset", "affected_fraction", "direction",
+               "z_mean_shift", "z_subset", "subset_log2_fc",
                "tpm", "jitter", "pseudocount")
 
 

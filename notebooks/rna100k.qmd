@@ -172,25 +172,42 @@ sig_mean = int((res.padj_mean_shift <= 0.05).sum())
 sig_subset = int((res.padj_subset <= 0.05).sum())
 print(f"BH 0.05: {sig_mean:,} mean-shift genes, {sig_subset:,} subset genes")
 
-SHOW = ["gene_name", "gene_type", "log2_fc", "padj_mean_shift", "padj_subset",
-        "affected_fraction", "direction"]
+SHOW = ["gene_name", "gene_type", "subset_log2_fc", "affected_fraction",
+        "direction", "log2_fc", "z_subset", "z_mean_shift", "padj_subset",
+        "padj_mean_shift"]
 pl.Config.set_tbl_rows(40)
 ```
 
-The two rankings, forty genes each — the subset stage's (sorted by the
-subset statistic itself, since the p-values saturate at this cohort size,
-then by the p-value) and the ordinary mean-shift ranking:
+With p-values saturated at this cohort size, the working recipe is
+**filter by `padj`, rank by magnitude**. `subset_log2_fc` is the subset's
+magnitude — the log2 fold change within the affected fraction, quantile-
+matched against what the controls themselves do at those extremes — and
+`z_subset` / `z_mean_shift` are the permutation z-scores (GSEA's NES, in z
+form), which keep ordering genes long after the p-values tie at the floor.
+
+**The largest distinctive subsets** — significant, minority-fraction, ranked
+by how many folds the affected samples sit above the matched control
+quantiles:
 
 ```{python}
-#| label: top-subset
-frame.sort(["padj_subset", "subset_stat"],
-           descending=[False, True]).select(SHOW).head(40)
+#| label: top-subset-magnitude
+(frame.filter((pl.col("padj_subset") <= 0.05) & (pl.col("affected_fraction") < 0.5))
+ .sort("subset_log2_fc", descending=True).select(SHOW).head(40))
 ```
 
+**The strongest mean shifts**, ranked by fold change among the significant:
+
 ```{python}
-#| label: top-mean
-frame.sort(["padj_mean_shift", "neglog10_p_mean_shift"],
-           descending=[False, True]).select(SHOW).head(40)
+#| label: top-mean-magnitude
+(frame.filter(pl.col("padj_mean_shift") <= 0.05)
+ .sort("log2_fc", descending=True).select(SHOW).head(40))
+```
+
+**The z-ranking**, which needs no filter at all and never ties:
+
+```{python}
+#| label: top-z
+frame.sort("z_subset", descending=True, nulls_last=True).select(SHOW).head(40)
 ```
 
 The **full annotated table** — every gene, symbols first, Ensembl ids and
@@ -222,9 +239,10 @@ wade.plot_stages(res)
 
 ```{python}
 #| label: fig-gene
-#| fig-cap: "The most subset-like significant gene, in full: quantile pair, difference, log-ratio curve."
-top = (frame.filter(pl.col("padj_subset") <= 0.05)
-       .sort("subset_stat", descending=True).head(1))
+#| fig-cap: "The largest distinctive subset, in full: quantile pair, difference, log-ratio curve."
+top = (frame.filter((pl.col("padj_subset") <= 0.05)
+                    & (pl.col("affected_fraction") < 0.5))
+       .sort("subset_log2_fc", descending=True).head(1))
 wade.plot_gene(res, gene=top["gene_name"].to_list() if top.height else [0])
 ```
 
@@ -320,9 +338,11 @@ print(f"pw_pdac_bloodev ({int(case_p.sum())} v {int((~case_p).sum())}) — BH 0.
       f"{int((res_p.padj_subset <= 0.05).sum()):,} subset")
 print(f"median depth  case {np.median(depth_p[case_p]) / 1e6:.1f}M   "
       f"control {np.median(depth_p[~case_p]) / 1e6:.1f}M")
-(res_p.to_frame().sort(["padj_subset", "subset_stat"], descending=[False, True])
- .select("gene", "log2_fc", "padj_mean_shift", "padj_subset",
-         "affected_fraction", "direction").head(25))
+(res_p.to_frame()
+ .filter((pl.col("padj_subset") <= 0.05) & (pl.col("affected_fraction") < 0.5))
+ .sort("subset_log2_fc", descending=True)
+ .select("gene", "subset_log2_fc", "affected_fraction", "direction",
+         "log2_fc", "z_subset", "padj_subset").head(25))
 ```
 
 ## The full cohort, when you mean it

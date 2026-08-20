@@ -46,7 +46,7 @@ The package is `src/wade/`. Twelve modules, all small:
 |---|---|
 | `quantiles.py` | the probability grid, type-7 quantiles, `capped_nprobs` |
 | `stats.py` | `wade_stats()` — the grids, `mean_shift`, `w1`, `fc` |
-| `subset.py` | the bridge, the subset test, `affected_fraction`, `direction`, the bootstrap (threaded, chunkable) |
+| `subset.py` | the bridge, the subset test, `affected_fraction`, `direction`, `subset_log2_fc` (the subset's magnitude), the bootstrap (threaded, chunkable) |
 | `thinning.py` | the count-native shift correction: `fit_fold_change` (normalize path + affine `alpha=` path + kernel backend), `thin_counts`, `one_count`, `gene_chunks` (§10.3–10.4) |
 | `permutation.py` | the nulls; dispatches to the Rust kernel; `mean_diff_stat` / `mean_diff_null` (the GEMM stage 1) |
 | `pvalues.py` | empirical p, GPD refinement, BH, `alternative` |
@@ -369,6 +369,7 @@ Reasoning is in `method.md`; this is the index.
 | The subset test's null is the **fitted global shift**, not no-difference | `method.md` §3 |
 | `affected_fraction` uses the **fourth** moment on the **log** curve | `method.md` §4 |
 | Two-sided by default, `alternative` for one-sided | `method.md` §9 |
+| Ranking past the p-floor: `z_mean_shift`/`z_subset` (permutation z, the NES analogue — never a calibrated p) and `subset_log2_fc` (subset magnitude, quantile-matched) | `method.md` §4/§6, `scaling.md` §4.0 |
 | The tail window, `tail_conc`, `F` and the rank scores are retired | `method.md` §7 |
 | Higher Criticism and max-Z lost the detector comparison | commit `dcba920` |
 | Names: `mean_shift`, `p_subset`, `affected_fraction`, `direction`; no aliases | commit `ff22cbb` |
