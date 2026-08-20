@@ -15,10 +15,13 @@ Two properties of the construction are load-bearing
   an independent shuffle per gene would compute a different — and, across
   correlated genes, anti-conservative — null.
 
-This module is deliberately the slow, readable version. It is the
-correctness baseline the Rust kernel is validated against, and the
-ordering constraint in ``ROADMAP.md`` exists so that a disagreement with
-the R has one candidate cause rather than two.
+The NumPy loops here are deliberately the slow, readable versions. They
+are the correctness baselines the Rust kernel is validated against — both
+the mean-shift null (:func:`null_statistics`) and the subset test's two
+passes (:func:`_subset_null_numpy`, reached through
+:func:`subset_null_backend`) have a compiled counterpart held to them
+elementwise. The ordering constraint in ``ROADMAP.md`` exists so that a
+disagreement with the R has one candidate cause rather than two.
 """
 
 from __future__ import annotations
@@ -194,7 +197,13 @@ def _subset_null_numpy(xs, b_obs, perms, q, alternative):
 
 def subset_null_backend(xs, b_obs, perms, q, *, alternative="two-sided", backend="auto"):
     """Dispatch the subset test's permutation work. Returns
-    ``(statistic, null, mu, sd, argmax_k)``."""
+    ``(statistic, null, mu, sd, argmax_k)``.
+
+    The kernel takes the same arguments and is held to the NumPy path
+    elementwise (``tests/test_subset_kernel.py``); it parallelizes over
+    genes, so each gene's two passes stay on one thread and accumulate over
+    permutations in the same order the loop above does.
+    """
     from .pvalues import ALTERNATIVES
 
     if alternative not in ALTERNATIVES:
@@ -207,4 +216,12 @@ def subset_null_backend(xs, b_obs, perms, q, *, alternative="two-sided", backend
             "`pip install -e .` (needs cargo/rustc), or use backend='numpy'"
         )
     xs = np.ascontiguousarray(xs, dtype=np.float64)
+    if backend != "numpy" and _rust is not None:
+        return _rust.subset_null(
+            xs,
+            np.ascontiguousarray(b_obs, dtype=np.float64),
+            np.ascontiguousarray(perms, dtype=np.int64),
+            np.ascontiguousarray(q, dtype=np.float64),
+            alternative,
+        )
     return _subset_null_numpy(xs, b_obs, perms, q, alternative)

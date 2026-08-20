@@ -283,18 +283,41 @@ Boundary decisions:
 Measured, 16 threads: 18–22× the NumPy path, and null matrices **bitwise
 identical to R** on every permutation scenario.
 
-**The subset test has no kernel yet**, and is now the dominant cost: measured at
-20,000 genes, 100 v 100, B = 2000 — mean-shift null 5.4 s on the kernel, subset
-test **302 s** on NumPy. It needs two passes over the permutations on the
-shift-corrected matrix (one for the bridge's null moments, one for the
-standardized maximum). The right shape is to parallelize **over genes** rather
-than permutations, so each gene's two passes share cache and the moment
-accumulators need no cross-thread reduction.
-
 | scale | NumPy | Rust |
 |---|---|---|
 | 2,219 genes, 60v22, B=2000 | 4.10 s | 0.20 s |
 | 20,000 genes, 50v50, B=1000 | 30.26 s | 1.35 s |
+
+**The subset test has its own kernel** (`subset_null`), validated elementwise
+against `wade.permutation._subset_null_numpy`, which remains the contract.
+Before it, the subset test was 98% of the runtime at scale. Three design
+choices, each stated in the kernel's own docs:
+
+- **Parallel over genes, not permutations.** The two passes over the
+  permutations (null moments of the bridge, then the standardized maximum) run
+  for one gene on one thread, so the moment accumulators need no cross-thread
+  reduction and the order of accumulation over permutations is the NumPy
+  path's. Pass 2 re-reads the bridges pass 1 stored (per thread, `B · m`
+  doubles, capped at 64 MB) and recomputes them above the cap.
+- **One sort per gene.** A permutation only re-partitions the same values, so
+  the sorted case and control groups are read off the gene's one sorted row by
+  an O(n) walk.
+- **`log2` only where type 7 interpolates.** Elsewhere the quantile is an order
+  statistic whose log was taken once per gene; where the guard fires, `log2` is
+  called on the interpolated value exactly as NumPy does. The inputs to `log2`
+  are therefore the same, and so are the bits.
+
+Measured, 16 threads — and every comparison **bitwise** (statistic, null,
+`mu`, `sd`, `argmax_k`; worst relative deviation 0 over 111 comparisons):
+
+| scale | NumPy | Rust | mean-shift kernel, same run |
+|---|---|---|---|
+| 2,000 genes, 100v100, B=500 | 8.4–9.3 s | 0.08–0.09 s | 0.13 s |
+| 2,219 genes, 60v22, B=2000 | 10.1 s | 0.13 s | 0.24 s |
+| 20,000 genes, 100v100, B=2000 | 307 s | 3.9 s | 5.8 s |
+
+Single-threaded (`RAYON_NUM_THREADS=1`) the small case takes 0.82 s, so the
+kernel is about 11× the NumPy path per thread before parallelism.
 
 **Memory is the unsolved half.** The null is always materialized: peak RSS
 tracks `g · B · 8` bytes plus overhead. `keep_null` controls retention, not
