@@ -345,6 +345,94 @@ print(f"median depth  case {np.median(depth_p[case_p]) / 1e6:.1f}M   "
          "log2_fc", "z_subset", "padj_subset").head(25))
 ```
 
+## Who drives a subset? The check that reversed a reading
+
+The magnitude ranking's top of the table invites a story, and this is where
+one gets tested. The first read of it looked like Ewing sarcoma biology —
+**FLI1** at #1 and **EWSR1** at #4, the two halves of the canonical *EWSR1–FLI1*
+fusion, each as a ~1.7% subset at 20–40×. That reading was wrong, and the
+check below is what killed it: **the same ~20 libraries top FLI1, EWSR1,
+TRGC2 and LYVE1 alike** (FLI1 and the unrelated TRGC2 share 24 of their top
+25 — *more* than FLI1 and EWSR1's 23), all from one study, with scattered
+diagnoses (PRAD, PAAD, EPM, MBL, CHOL). A coherent fusion would not do that;
+a set of anomalous libraries would.
+
+The mechanism is library composition, not normalization: those libraries
+detect **5,563 genes against 11,114** elsewhere and carry **36% of their mass
+in ten genes** (cohort median 15%), with raw FLI1 junction counts of ~297,000
+against ~1,600 elsewhere. Blood-cell transcripts dominating a plasma prep —
+FLI1 (megakaryocytic), TRGC2 (T-cell receptor), LYVE1 (macrophage) — is the
+signature of leukocyte carry-over, and whatever its cause, such a library is
+an extreme outlier in *thousands of genes at once*. The subset stage then
+faithfully reports a subset in every one of them.
+
+**ETV4 is the counter-example, and it survives every check.** Zero overlap
+with the artefact libraries; its 25 top libraries have ordinary complexity
+(10,483 genes detected, 13.9% top-10 share) and *below*-median depth
+(2.1M) — so neither depth nor complexity explains it; median ETV4 across all
+3,005 plasma libraries is **0**, and its top 25 are **25 distinct patients,
+all pancreatic adenocarcinoma, replicated across two independent studies**.
+An ETS-family oncogene surfacing as a rare, high-magnitude plasma subset in
+PDAC is the cancer-outlier pattern WADE exists to find.
+
+The generalizable lesson is the diagnostic, not the gene: **ask which samples
+drive a gene's subset, and how often those samples drive everything else.**
+
+```{python}
+#| label: drivers
+counts_pos = counts > 0
+detected = counts_pos.sum(axis=0)
+share10 = np.sort(res.tpm, axis=0)[::-1][:10].sum(axis=0) / res.tpm.sum(axis=0)
+
+case_cols = np.flatnonzero(np.asarray(res.cond) == 1)
+K = np.clip(np.ceil(res.affected_fraction * res.nprobs).astype(int), 1, case_cols.size)
+up = np.nan_to_num(res.direction) > 0
+participation = np.zeros(case_cols.size)
+drivers = {}
+for g in range(res.tpm.shape[0]):
+    if not up[g]:
+        continue
+    row = res.tpm[g, case_cols]
+    idx = np.argpartition(-row, min(K[g], row.size - 1))[:K[g]]
+    participation[idx] += 1
+    if res.gene[g] in ("FLI1", "EWSR1", "TRGC2", "ETV4"):
+        drivers[res.gene[g]] = idx
+
+print(f"library participation in affected subsets (of {int(up.sum()):,} up-genes):")
+print(f"  median case library {np.median(participation):,.0f}   "
+      f"worst {participation.max():,.0f}   "
+      f"expected if uniform {(K[up].sum() / case_cols.size):,.0f}")
+print("\ngene            drivers  median driver participation  median complexity")
+for g, idx in drivers.items():
+    cc = case_cols[idx]
+    print(f"  {g:<12} {len(idx):5d}   {np.median(participation[idx]):>12,.0f}"
+          f"              {np.median(detected[cc]):>8,.0f}")
+print(f"\n  cohort median: participation {np.median(participation):,.0f}, "
+      f"genes detected {np.median(detected):,.0f}, top-10 share {np.median(share10):.1%}")
+```
+
+**Read that table against the hypothesis it was built to test, because it
+refutes half of it.** The tempting statistic — "how often do this gene's
+drivers drive *everything*?" — does **not** flag the artefact: FLI1's and
+TRGC2's drivers participate in 375 of 6,769 up-gene subsets against a cohort
+median of 1,769, i.e. *far below* average, while ETV4's sit slightly above at
+1,944. The reason is mechanical: a low-complexity library is zero in ~25,000
+genes, so it ranks at the **bottom** of most genes' orderings and can only be
+extreme in the few thousand it detects. Cross-gene recurrence is a real
+phenomenon here — the worst library sits in 3,583 of 6,769 subsets, twice the
+median — but it is a *different* set of libraries, and it is not what makes
+FLI1 an artefact.
+
+What separates them cleanly is the rightmost column: **the drivers' own
+library complexity.** FLI1, EWSR1 and TRGC2 are driven by libraries detecting
+~5,600 genes; ETV4 by libraries detecting 10,545, against a cohort median of
+11,096. So the discriminating question is not "do these samples drive
+everything" but **"are these samples ordinary libraries?"** — which makes
+per-library QC (complexity, top-10 mass share, depth) the load-bearing
+diagnostic, and driver attribution the substrate that lets a gene inherit its
+drivers' QC profile. That is now the top item in `ROADMAP.md` §2, in that
+corrected form.
+
 ## The full cohort, when you mean it
 
 The gate, not a default: ~20.6 GB for the matrix plus WADE's residents —

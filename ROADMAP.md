@@ -61,59 +61,96 @@ integration test for both.
   5% at 8×) already shows the same-fold-change/different-shape pair and the
   5% subsets sitting at the floor.
 
-## 2. Performance and memory — what remains after the 2026-08-20 queue
+## 2. What the real data demands
 
-The six-item queue landed (see the preamble and `docs/scaling.md` §§2–3 for
-every measurement). What remains, in order:
+The performance queue landed (preamble; `docs/scaling.md` §§2–3 for every
+measurement) and `notebooks/rna100k.qmd` runs real contrasts. Two findings
+from first contact set this queue, and both are measured rather than argued:
 
-1. **The real dataset — first contact made 2026-08-20**
-   (`notebooks/rna100k.qmd`: 30,976 genes × 83,047 libraries of
-   splice-junction counts, intron-count normalizer, harmonized metadata
-   joined by `library`; 228 cohort libraries, all CPTAC_MEL, not yet
-   harmonized; the full-cohort run stays gated at ~60 GB). The plasma
-   contrast (1,343 malignant v 1,662 non-malignant, 126 s) saturated —
-   most of the transcriptome subset-significant — and the notebook's
-   falsification section pinned down what that is: **not a bug** (permuted
-   labels on the same matrix: 0 mean-shift / 53 subset BH hits, raw
-   p_subset < 0.05 at 3.9% — nominal), and **not only cross-study
-   structure** (a single-study 283 v 117 contrast still calls ~70% of
-   genes). At these n's the stage-2 point null rejects on every real
-   deviation, so **significance saturates and the rankings/descriptors are
-   the operative outputs**. What that ordering demands, measured facts
-   attached:
+**Significance saturates.** The plasma contrast (1,343 malignant v 1,662
+non-malignant, 126 s) called most of the transcriptome subset-significant.
+The notebook's falsification section shows this is **not a bug** (permuted
+labels on the same matrix: 0 mean-shift / 53 subset BH hits, raw
+`p_subset < 0.05` at 3.9% — nominal) and **not only cross-study structure**
+(a single-study 283 v 117 contrast still calls ~70%). At these `n` the
+stage-2 point null rejects on every real deviation, so **rankings and
+descriptors are the operative outputs** — which `subset_log2_fc` and the
+permutation z-scores now provide.
 
-   1. **A rank-recovery benchmark on real background** — plant known subset
-      and global signals into real non-malignant plasma libraries and
-      measure whether the subset ranking recovers them. The direct test of
-      the user's stated priority ("the best genes are the best genes").
-   2. **The depth experiment** — group-associated depth appeared in both
-      contrasts (1.7× one way, 1.3× the other; cohort spans 0.8M–89M).
-      Planted depth imbalance, false-positive rates per stage, guards led
-      by depth-equalizing binomial thinning (the count-exact form of the
-      user's Poisson-noise instinct).
-   3. **P-value resolution** (§3 below and `docs/scaling.md` §4) — 18.8% of
-      genes at the mean-shift floor, observed. The saddlepoint route also
-      sharpens the ranking item 1 cares about; `stage1="gemm"` already makes
-      the statistic exactly linear, which is what the saddlepoint needs.
-   4. **Restricted (within-group) permutation** — permute labels within
-      study/stratum. The defensible contrasts on this cohort need it, and it
-      is the same machinery single cell's donor permutation needs
-      (`docs/scaling.md` §5.3).
-   5. **47% zeros**: the §5.1 sparse walk buys ~2× here, not 10× — worth
-      having, not urgent.
-2. **The resident-matrix question** (`docs/scaling.md` §2.3, sharpened): the
-   chunked driver's peak is now four full `genes x samples` float64
-   residents — counts, jitter, `tpm` and the pseudocount, all carried by
-   `WadeResult` — plus the int32 thinned counts. The jitter is a seeded
-   stream and the pseudocount a rank-1 outer product; neither has to be
-   materialized. Whether to make them lazy (or float32) is a contract
-   question about what a result object carries, not a kernel question.
-3. **The subset kernel is now the wall-clock wall** at the target: B × O(n)
-   per gene is intrinsic for dense data (~40 min of a ~50-min total at
-   B = 2,000). The real answer is §5.1's sparse zero-run walk, which is the
-   single-cell path anyway; a dense shortcut worth trying first is lowering
-   stage-2's `B` independently of stage 1's (stage 1 needs the resolution;
-   stage 2's findings are rarer).
+**A few anomalous libraries drive many genes' subsets.** Chasing the
+magnitude ranking's top found FLI1, EWSR1, TRGC2 and LYVE1 sharing 23–24 of
+their top 25 driver libraries (FLI1 and the *unrelated* TRGC2 share 24 —
+more than the FLI1/EWSR1 "fusion pair" — which is what falsified a tempting
+Ewing-sarcoma reading). Those libraries detect 5,563 genes against 11,114
+elsewhere and hold 36% of their mass in ten genes (cohort median 15%). At
+cohort scale the skew is severe: **some libraries sit in the top 25 of a
+third of all genes** (10,229 of 30,976; 258 expected if uniform). Meanwhile
+**ETV4** passes every control — zero overlap with those libraries, ordinary
+complexity, *below*-median depth, median 0 TPM across all 3,005 plasma
+libraries, and its top 25 are 25 distinct patients, all PDAC, replicated
+across two independent studies.
+
+In order:
+
+1. **Per-library QC, and driver attribution built on it — the top priority.**
+   Measured 2026-08-20, and the measurement **refuted the obvious statistic**:
+   "how often do this gene's drivers drive everything else?" does *not* flag
+   the artefact. FLI1's and TRGC2's drivers appear in 375 of 6,769 up-gene
+   subsets against a cohort median of 1,769 — *far below* average — because a
+   low-complexity library is zero in ~25,000 genes and therefore ranks at the
+   **bottom** of most genes' orderings. (Cross-gene recurrence is real — one
+   library sits in 3,583 of 6,769 subsets — but in a different set of
+   libraries, and it is not the artefact mechanism.) What separates cleanly is
+   the drivers' **own library complexity**: ~5,600 genes detected for
+   FLI1/EWSR1/TRGC2 against 10,545 for ETV4 and a cohort median of 11,096. So:
+   * **per-library QC as first-class** — genes detected, top-10 mass share,
+     depth: the same status as the combinatorial floor, properties of the
+     design to look at *before* trusting a run. A small `wade` helper is
+     defensible (it is about whether the null can be trusted, not about I/O).
+   * **driver attribution as the substrate** — which samples sit in a gene's
+     affected region — so a gene can inherit and report its drivers' QC
+     profile (median driver complexity, or the gene's share of its drivers'
+     library mass: FLI1 takes 12.6% of an artefact library, ETV4 ~1.5%).
+   * **the reported score is still an open design question** and the user's
+     call, since it is a new number in the method: driver-complexity summary,
+     mass-share, or a normalized composite — to be chosen against item 3's
+     benchmark rather than by argument.
+2. **Rank-recovery benchmark**, now properly specified: plant known subset
+   and global signals into real non-malignant plasma background **including
+   the artefact libraries**, and require the ranking to put planted genes
+   above artefact-driven ones. The direct test of "the best genes are the
+   best genes", and the way to validate item 1's statistic.
+3. **Restricted (within-stratum) permutation.** Permute labels within study
+   or protocol. The defensible contrasts on this cohort need it, ETV4's
+   cross-study replication is the positive control, and it is the same
+   machinery single cell's donor permutation needs (`docs/scaling.md` §5.3).
+4. **The depth experiment.** Group-associated depth appears in both
+   contrasts (1.7× one way, 1.3× the other; cohort spans 0.8M–89M), but
+   ETV4's drivers sit *below* median depth, so depth is not a simple
+   monotone confound. Planted depth imbalance, false-positive rates per
+   stage, guards led by depth-equalizing binomial thinning (the count-exact
+   form of the user's Poisson-noise instinct).
+5. **P-value resolution** (§3, `docs/scaling.md` §4) — 18.8% of genes at the
+   mean-shift floor, observed. Deliberately **demoted**: it buys ordering
+   that magnitude and the z-scores now supply for free, and the user's own
+   framing is that magnitude matters more than p. Worth doing for
+   defensible small-cohort inference, not for ranking this cohort.
+6. **47% zeros**: the §5.1 sparse walk buys ~2× here, not 10× — worth
+   having, not urgent.
+
+### Performance leftovers
+
+* **The resident-matrix question** (`docs/scaling.md` §2.3, sharpened): the
+  chunked driver's peak is four full `genes x samples` float64 residents —
+  counts, jitter, `tpm`, pseudocount, all carried by `WadeResult` — plus the
+  int32 thinned counts. Jitter is a seeded stream and the pseudocount a
+  rank-1 outer product; neither has to be materialized. A contract question
+  about what a result carries, not a kernel question.
+* **The subset kernel is the wall-clock wall** at full scale: B × O(n) per
+  gene, intrinsic for dense data (~40 min of a ~50-min total at B = 2,000).
+  The real answer is §5.1's sparse zero-run walk (the single-cell path
+  anyway); the cheap dense shortcut is a smaller `B` for stage 2 than for
+  stage 1.
 
 Not taken, deliberately: the fit bracket (a missed bracket is
 anti-conservative, `docs/scaling.md` §3.3) and a Poisson or hybrid bootstrap
