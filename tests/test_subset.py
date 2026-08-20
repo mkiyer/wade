@@ -4,6 +4,21 @@ These are new work with no R counterpart, so there is nothing to be in parity
 *with*. They are validated on their own terms, against planted ground truth,
 and the assertions are the properties the design claims rather than remembered
 numbers.
+
+**On negative-binomial counts**, which is WADE's scope (``docs/method.md``
+S10): dispersion 0.1, mean 50 counts unless a test says otherwise, and the
+default correction — binomial thinning of the counts, with a one-count
+pseudocount on the log-ratio curve. An earlier version of this file generated
+continuous lognormal values, a pure multiplicative model in which the
+division correction is exact and the count regime is never exercised; that is
+how the low-expression failure in S10.2 went unnoticed. ``test_scale.py``
+covers the expression levels below a few counts, this file the ordinary one.
+
+Library sizes are fixed at 1 and ``norm_factor`` at 1, so a normalized value
+**is** a count and the pseudocount is exactly +1. That also decouples the
+genes, which is deliberate: composition is tested on purpose in
+``test_composition_shifts_the_characterization_and_this_is_real`` and would
+otherwise contaminate every other assertion here.
 """
 
 from __future__ import annotations
@@ -16,30 +31,52 @@ from wade.subset import bridge, log_ratio_curve, subset_test
 
 N1 = N0 = 400
 COND = np.r_[np.ones(N1, int), np.zeros(N0, int)]
+PHI = 0.1            # NB dispersion; biological CV ~ 0.32
+MU = 50.0            # counts per sample, unless a test overrides it
+PSEUDO = 1.0         # one count, since values are counts here
 
 
-def _mk(rng, kind, arg=None, n1=N1, n0=N0, sdlog=0.6):
-    ctrl = rng.lognormal(3, sdlog, n0)
-    case = rng.lognormal(3, sdlog, n1)
+def _nb(rng, mu, size):
+    """Negative binomial as a Poisson-Gamma mixture: Var = mu + PHI mu^2."""
+    return rng.poisson(rng.gamma(1 / PHI, PHI * mu, size=size)).astype(float)
+
+
+def _mk(rng, kind, arg=None, n1=N1, n0=N0, mu=MU):
+    """One gene's raw counts, cases first. ``kind`` plants the ground truth."""
+    ctrl = _nb(rng, mu, n0)
+    case = _nb(rng, mu, n1)
     if kind == "global":
-        case = case * arg
+        case = _nb(rng, mu * arg, n1)
     elif kind == "var":
-        case = rng.lognormal(3, sdlog * arg, n1)
+        # Wider spread, same *median*: half the cases up by arg, half down by
+        # arg. Not the same thing as raising the NB dispersion at a fixed mean,
+        # which also skews the distribution — measured, that reads direction
+        # -0.4 to -0.65 rather than 0, because the median falls while the mean
+        # is held. This is the symmetric-spread scenario direction is for.
+        hi, lo = _nb(rng, mu * arg, n1), _nb(rng, mu / arg, n1)
+        case = np.where(rng.random(n1) < 0.5, hi, lo)
     elif kind in ("up", "down"):
         k = max(1, round(arg * n1))
         idx = rng.choice(n1, k, replace=False)
-        case[idx] = case[idx] * 8.0 if kind == "up" else case[idx] / 8.0
+        case[idx] = _nb(rng, mu * 8.0 if kind == "up" else mu / 8.0, k)
     elif kind == "both":
         k = max(1, round(arg * n1))
         idx = rng.choice(n1, 2 * k, replace=False)
-        case[idx[:k]] *= 8.0
-        case[idx[k:]] /= 8.0
+        case[idx[:k]] = _nb(rng, mu * 8.0, k)
+        case[idx[k:]] = _nb(rng, mu / 8.0, k)
     return np.r_[case, ctrl]
 
 
+def _run(x, nperms=300, **kw):
+    """Through the raw-count entry point, with counts as the normalized unit."""
+    return wade.wade(x, np.ones(x.shape[0]), COND, lib_sizes=np.ones(x.shape[1]),
+                     norm_factor=1.0, nperms=nperms, seed=1, **kw)
+
+
 def _curve(rng, kind, arg=None, rep=80, cond=None, **kw):
+    """The log-ratio curve as the tool computes it: counts, plus one count."""
     x = np.array([_mk(rng, kind, arg, **kw) for _ in range(rep)])
-    st = wade.wade_stats(x, COND if cond is None else cond)
+    st = wade.wade_stats(x + PSEUDO, COND if cond is None else cond)
     return x, log_ratio_curve(st.Q1, st.Q0)
 
 
@@ -109,7 +146,7 @@ def test_affected_fraction_on_the_raw_scale_would_lose_the_anchor():
     """
     rng = np.random.default_rng(13)
     x = np.array([_mk(rng, "global", 2.0) for _ in range(80)])
-    st = wade.wade_stats(x, COND)
+    st = wade.wade_stats(x + PSEUDO, COND)
     on_log = np.median(wade.affected_fraction(log_ratio_curve(st.Q1, st.Q0)))
     on_raw = np.median(wade.affected_fraction(st.D))
     assert on_log > 0.93
@@ -174,7 +211,10 @@ def test_variance_change_and_one_sided_subset_are_distinguishable():
     'a global shift does not explain this', which a variance change satisfies.
     """
     rng = np.random.default_rng(18)
-    _, r_var = _curve(rng, "var", 1.6)
+    # 1.3 is the spread that puts this scenario at the same affected_fraction
+    # as a 30% subset on counts (0.30 against 0.31); the point of the test is
+    # that the two are indistinguishable on that statistic alone.
+    _, r_var = _curve(rng, "var", 1.3)
     _, r_sub = _curve(rng, "up", 0.30)
     pi_var, pi_sub = np.median(wade.affected_fraction(r_var)), np.median(wade.affected_fraction(r_sub))
     assert abs(pi_var - pi_sub) < 0.15, "the two should be similar on affected_fraction alone"
@@ -186,12 +226,12 @@ def test_variance_change_and_one_sided_subset_are_distinguishable():
 # The subset test
 # ---------------------------------------------------------------------
 
-def _rates(rng, kind, arg, rep=120, n_perms=300, alpha=0.05):
+def _rates(rng, kind, arg, rep=120, n_perms=300, alpha=0.05, **kw):
+    """Rate at which the subset stage fires, through the public entry point so
+    the shipped correction (thinning) and pseudocount are what is tested."""
     x = np.array([_mk(rng, kind, arg) for _ in range(rep)])
-    perms = wade.draw_perms(COND, n_perms, seed=7)
-    res = subset_test(x, COND, perms)
-    p = (1 + (res.null >= res.statistic[:, None]).sum(1)) / (n_perms + 1)
-    return float(np.mean(p <= alpha)), res
+    res = _run(x, nperms=n_perms, **kw)
+    return float(np.mean(res.p_subset <= alpha)), res.subset
 
 
 def test_shape_test_holds_nominal_level_under_the_null():
@@ -228,41 +268,64 @@ def test_shape_test_sees_downward_subsets_the_mean_test_cannot():
 
 
 def test_the_shift_correction_is_what_delivers_specificity():
-    """Assert the mechanism, not just the outcome.
+    """Assert the mechanism, not just the outcome — and rank the three of them.
 
-    Building the null by permuting the raw data — which tests against
-    no-difference rather than against a global shift — inflates the false
-    positive rate on real fold changes several-fold. This pins the difference so
-    the correction cannot be removed as a 'simplification'.
+    Stage 2's null is *a global fold change*, not no-difference, and how that
+    null is built is the whole design (docs/method.md S3, S10.3). Three ways to
+    build it, measured here on a genuine 2x at 50 counts:
+
+    * **no correction** — permute the raw matrix, which tests against
+      no-difference and fires on real fold changes;
+    * **division** — the continuous-data correction, better but not exact for
+      counts, because a fold change in an NB mean is not a multiplicative
+      shift of the NB distribution;
+    * **thinning** — the count-native one, which is what wade() does.
+
+    The ordering is the claim. Removing the correction, or reverting thinning
+    to division, must fail here.
     """
     from wade.permutation import _subset_null_numpy
     from wade.quantiles import probability_grid
+    from wade.thinning import fit_fold_change, thin_counts
 
     rng = np.random.default_rng(25)
-    x = np.array([_mk(rng, "global", 2.0) for _ in range(120)])
+    counts = np.array([_mk(rng, "global", 2.0) for _ in range(120)])
+    x = counts + PSEUDO
     perms = wade.draw_perms(COND, 300, seed=3)
     q = probability_grid(min(N1, N0))
     st = wade.wade_stats(x, COND)
     r_obs = log_ratio_curve(st.Q1, st.Q0)
-    b_obs = bridge(r_obs)
 
-    def rate(matrix):
-        stat, null, *_ = _subset_null_numpy(matrix, b_obs, perms, q, 'two-sided')
+    def rate(matrix, b):
+        stat, null, *_ = _subset_null_numpy(matrix, b, perms, q, "two-sided")
         p = (1 + (null >= stat[:, None]).sum(1)) / 301
         return float(np.mean(p <= 0.05))
 
-    corrected = wade.subset.shift_correct(x, COND, r_obs)
-    assert rate(corrected) < 0.12, "the corrected null must hold nominal level"
-    assert rate(x) > rate(corrected), (
-        "permuting the raw data must be measurably worse — that is why the "
-        "correction exists"
+    def bridge_of(matrix):
+        s = wade.wade_stats(matrix, COND)
+        return bridge(log_ratio_curve(s.Q1, s.Q0))
+
+    b_obs = bridge(r_obs)
+    none = rate(x, b_obs)
+    division = rate(wade.subset.shift_correct(x, COND, r_obs), b_obs)
+
+    normalize = lambda c: c + 0.0                      # counts already are the scale
+    fold = fit_fold_change(counts, COND, normalize, seed=0)
+    thinned = thin_counts(counts, COND, fold, np.random.default_rng(1)) + PSEUDO
+    thinning = rate(thinned, bridge_of(thinned))
+
+    assert abs(np.median(fold) - 2.0) < 0.15, f"f-hat {np.median(fold):.2f}"
+    assert thinning < 0.12, f"the count-native null must hold nominal level; got {thinning:.3f}"
+    assert thinning < division < none, (
+        f"expected thinning < division < no correction; got {thinning:.3f}, "
+        f"{division:.3f}, {none:.3f}"
     )
 
 
 def test_shape_test_refuses_a_grid_too_small_to_have_a_bridge():
     rng = np.random.default_rng(26)
     cond = np.r_[np.ones(6, int), np.zeros(2, int)]
-    x = rng.lognormal(3, 0.6, size=(4, 8))
+    x = _nb(rng, MU, (4, 8)) + PSEUDO
     with pytest.raises(ValueError, match="at least 3 grid points"):
         subset_test(x, cond, wade.draw_perms(cond, 10, seed=1))
 
@@ -281,11 +344,11 @@ def test_affected_fraction_is_robust_to_signal_shape_and_the_scan_argmax_is_not(
     perms = wade.draw_perms(COND, 150, seed=2)
 
     def gen(shape, frac):
-        case = rng.lognormal(3, 0.6, N1)
+        case = _nb(rng, MU, N1)
         k = max(1, round(frac * N1))
         idx = rng.choice(N1, k, replace=False)
-        case[idx] = case[idx] * 8.0 if shape == "multiply" else rng.lognormal(6.2, 0.3, k)
-        return np.r_[case, rng.lognormal(3, 0.6, N0)]
+        case[idx] = _nb(rng, MU * 8.0, k) if shape == "multiply" else _nb(rng, MU * 20.0, k)
+        return np.r_[case, _nb(rng, MU, N0)]
 
     err = {"argmax": 0.0, "affected_fraction": 0.0}
     for shape in ("multiply", "replace"):
@@ -314,7 +377,10 @@ def test_wade_reports_the_two_stages_and_the_characterization():
         for _ in range(n):
             rows.append(_mk(rng, kind, arg)); lab.append(kind)
     x = np.array(rows); lab = np.array(lab)
-    res = wade.wade(x, np.full(x.shape[0], 4.0), COND, nperms=300)
+    # The real library sizes here, not unit ones: this is the end-to-end path,
+    # composition included, which is why the direction assertion below is
+    # relative to the null genes rather than absolute.
+    res = wade.wade(x, np.ones(x.shape[0]), COND, nperms=300, seed=1)
 
     for name in ("subset_stat", "p_subset", "padj_subset", "affected_fraction", "direction"):
         assert name in res.columns()
@@ -338,10 +404,10 @@ def test_wade_reports_the_two_stages_and_the_characterization():
 
 def test_subset_can_be_switched_off_and_is_skipped_without_permutations():
     rng = np.random.default_rng(32)
-    x = rng.lognormal(3, 0.6, size=(20, N1 + N0))
-    assert wade.wade(x, np.full(20, 4.0), COND, nperms=0).subset is None
-    assert wade.wade(x, np.full(20, 4.0), COND, nperms=50, subset=False).subset is None
-    assert wade.wade(x, np.full(20, 4.0), COND, nperms=50).subset is not None
+    x = _nb(rng, MU, (20, N1 + N0))
+    assert wade.wade(x, np.ones(20), COND, nperms=0).subset is None
+    assert wade.wade(x, np.ones(20), COND, nperms=50, subset=False).subset is None
+    assert wade.wade(x, np.ones(20), COND, nperms=50).subset is not None
 
 
 def test_composition_shifts_the_characterization_and_this_is_real():
@@ -359,8 +425,8 @@ def test_composition_shifts_the_characterization_and_this_is_real():
         rows = [_mk(rng, "null") for _ in range(200)]
         rows += [_mk(rng, "up", 0.5) for _ in range(n_signal)]
         x = np.array(rows)
-        r = wade.wade(x, np.full(x.shape[0], 4.0), COND, nperms=0, subset=False)
-        st = wade.wade_stats(r.tpm, COND)
+        r = wade.wade(x, np.ones(x.shape[0]), COND, nperms=0, subset=False)
+        st = wade.wade_stats(r.tpm + r.pseudocount, COND)
         return float(np.median(wade.direction(log_ratio_curve(st.Q1, st.Q0))[:200]))
 
     none, some, saturated = (null_gene_direction(n) for n in (0, 5, 300))

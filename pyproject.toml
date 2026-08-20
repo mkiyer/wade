@@ -13,6 +13,16 @@ dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
 test = ["pytest>=7", "scipy>=1.10"]
+# Plotting is optional and imported inside the plotting functions, so the
+# statistic keeps its one-dependency surface. Either backend alone works;
+# `plot` installs both (plotly is the default when both are present).
+plot = ["plotly>=6", "matplotlib>=3.8"]
+# Results out: to_frame() and write_results() build a polars DataFrame. Reading
+# data files is deliberately NOT WADE's job (ROADMAP.md 1) — polars is here for
+# the output side, and whatever you use to read your counts is your choice.
+io = ["polars>=1.0"]
+plotly = ["plotly>=6"]
+matplotlib = ["matplotlib>=3.8"]
 
 [tool.maturin]
 python-source = "src"

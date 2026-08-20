@@ -29,6 +29,15 @@ dependencies:
   # Optional. WadeResult.to_polars() uses it, and the I/O layer will; the
   # statistic does not, so the package imports and runs without it.
   - polars
+  # Optional: the plotting backends (src/wade/plotting.py). Both are imported
+  # inside the plotting functions, never by `import wade`. plotly is the
+  # interactive default; matplotlib is the static/publication one. Either
+  # alone is enough. python-kaleido is only for plotly's static export
+  # (fig.write_image) and needs a Chrome/Chromium on the machine — drop it if
+  # you only need HTML/notebook output or use matplotlib for static figures.
+  - plotly>=6
+  - matplotlib-base>=3.8
+  - python-kaleido>=1.0
   # Test-only. scipy is used by ONE thing: the Kolmogorov-Smirnov test in
   # the ported null-calibration simulation (tests/test_layer9_validation.py).
   # It is not a runtime dependency of the package and the statistic does

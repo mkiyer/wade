@@ -12,10 +12,18 @@ shifted 2× in all of them can produce the same mean difference, and a
 first-moment test cannot tell them apart. Nothing here requires the user to
 declare in advance which they are looking for.
 
+> **Scope.** WADE is for **discrete count data**. The entry point takes raw
+> counts, the continuity jitter is applied at count precision (§8), the subset
+> stage's null is built by thinning reads (§10.3) and the log-ratio curve
+> carries a one-count pseudocount (§10.4) — none of which means anything for a
+> continuous measurement. Continuous input is neither tested nor tuned for.
+
 > **Status.** All of this is implemented. Sections 1–2 and 6, 8 are
-> additionally verified against the R reference; sections 3–5 are new work with
-> no R counterpart, validated against planted ground truth in
-> `tests/test_subset.py`. `ROADMAP.md` tracks what remains.
+> additionally verified against the R reference; sections 3–5 and 10 are new
+> work with no R counterpart, validated against planted ground truth in
+> `tests/test_subset.py`, `tests/test_scale.py` and `tests/test_thinning.py`.
+> Section 10 supersedes §3's division correction for the raw-count entry
+> point. `ROADMAP.md` tracks what remains.
 
 ---
 
@@ -130,6 +138,14 @@ The fix uses the fact that $B$ is **exactly invariant** to a global fold change
 observed statistic needs no adjustment; only the null does. Divide the case
 columns by the estimated fold change, which makes the two groups exchangeable
 under $H_0$, and permute *that*.
+
+> **This division is the correction for continuous data**, and it is what
+> `wade_from_matrix` uses. For raw counts it is superseded: a division does not
+> make count groups exchangeable at low expression, and §10.3 replaces it with
+> binomial thinning, which `wade()` does by default. The reasoning below —
+> that stage 2's null is a fitted global shift rather than no-difference — is
+> unchanged and is the whole point; only the operation that realizes it
+> changes.
 
 The shift is estimated by the **median** of $R$, not the mean: a subset signal
 moves the top quantiles and leaves the median alone, so estimating the shift
@@ -377,3 +393,320 @@ $q_{\text{tail}}$ and the `tail.conc` guard factor appear nowhere in §3–4.
 **No parameter in the shape test or the characterization asks the user what
 shape of difference to look for.** They survive only in the superseded
 machinery of §7, which the parity fixtures pin.
+
+---
+
+## 10. Scale — and what counts at low expression do to stage 2
+
+Everything above is a functional of two quantile functions, and quantiles
+commute with any monotone transform: $Q_{g(X)}(p) = g(Q_X(p))$. A transform
+therefore enters WADE only through the difference curve
+$D_g(p) = g(Q_1(p)) - g(Q_0(p))$; the grid, the permutation, the GPD and BH are
+the same for every $g$. The one-parameter families people reach for —
+Box–Cox $g_\lambda(x) = (x^\lambda - 1)/\lambda$, or $\log(x + c)$ with $c$
+running from $0$ to $\infty$ — are a knob between the linear scale
+($\lambda = 1$) and the log scale ($\lambda \to 0$). WADE sits at two
+points on it on purpose: **stage 1 is $\lambda = 1$** (the area under $D$ is
+the difference of means) and **stage 2 and the characterization are
+$\lambda = 0$** (the curve $R$). This section says why, with numbers, and
+what breaks at low counts.
+
+### 10.1 Stage 1: the transform is a power choice, never a level choice
+
+Under label permutation the test is exact for *any* statistic, so $g$ cannot
+change the false-positive rate. Measured, null rejection at $\alpha = 0.05$
+is 0.03–0.07 for every transform at every expression level tried. What $g$
+changes is power, and the mechanism is one ratio. For a body at level $x_b$
+with noise sd $\sigma_b$ and a fraction $\pi$ of cases at $x_s$, the
+permutation z-score of the area statistic on scale $g$ is
+
+$$z_g \;\approx\; \frac{\pi\,\rho_g\sqrt{n/2}}{\sqrt{1 + \pi_{\text{pool}}(1-\pi_{\text{pool}})\,\rho_g^2}},
+\qquad
+\rho_g = \frac{g(x_s) - g(x_b)}{g'(x_b)\,\sigma_b}$$
+
+— the subset's contrast in units of the body's noise *on that scale* (delta
+method). Two regimes. When $\rho_g$ is small, $z \propto \rho_g$ and the
+transform with the most tail weight wins: for a body at 2 TPM and a subset at
+1000, linear has $\rho \approx 1000$ and log $\rho \approx \ln 500 /
+\mathrm{CV} \approx 20$ — and at low counts log also inflates the
+denominator, because $\mathrm{Var}[\log X] \approx 1/\mu + \phi$ is
+dominated by the one-count-is-one-log floor below $\mu \approx 1/\phi$.
+When $\rho_g$ is large, $z$ saturates at
+$\sqrt{n/2}\,\pi/\sqrt{\pi_{\text{pool}}(1-\pi_{\text{pool}})}$: the
+p-value is then only "how many of the big values landed in the case group",
+the combinatorial floor of §6, and *no* transform can move it. Past that
+point more tail weight ($\lambda > 1$) only adds variance.
+
+Measured, NB counts with dispersion $\phi = 0.1$, 200 v 200, $B = 500$,
+two-sided, power at $\alpha = 0.05$:
+
+| gene | linear | sqrt | $\log_2(x{+}10)$ | $\log_2(x{+}1)$ | $\log_2$ |
+|---|---|---|---|---|---|
+| $\mu = 2$, 5% of cases at 8× | **0.73** | 0.37 | 0.53 | 0.29 | 0.07 |
+| $\mu = 20$, 5% at 8× | **0.91** | 0.79 | 0.67 | 0.46 | 0.45 |
+| $\mu = 500$, 5% at 8× | **0.97** | 0.88 | 0.60 | 0.57 | 0.57 |
+| $\mu = 20$, $\phi = 0.5$, global 1.3× | **0.88** | — | 0.84 | — | 0.68 |
+| square ($\lambda = 2$), $\mu = 20$, 5% at 8× | 0.81 against 0.92 linear | | | | |
+
+Linear is best or tied in every row, including the weak global shift with heavy
+tails that theory gives log its only edge on (it is tiny at realistic fold
+changes); square is worse than linear everywhere. **Stage 1 stays on the
+linear scale.** The pseudocount family is strictly intermediate, and the
+"subsets are much more pronounced in linear space" experience that motivated
+this section is the small-$\rho$ regime above, measured.
+
+### 10.2 Stage 2 needs the log scale — and why that is not enough for counts
+
+$g(fx) - g(x)$ is constant in $x$ only for $g = a\log x + b$. That uniqueness
+is why §3 reads the bridge off $R$: it is the one scale on which a global fold
+change is flat, so that "departure from flat" means "not a global fold change".
+The knob is not available here. Measured, the bridge on $\log_2(x + 10)$
+fires on genuine 2× shifts at 0.99 below 2 counts and 0.21 at 20 counts, and
+on the linear scale at 1.00 everywhere (which is the "0.70 against 0.98" of
+§1, seen from the other side).
+
+But the premise — *a global fold change is a multiplicative shift of the whole
+distribution* — is true of continuous data and **false of counts at low
+expression**, for two reasons. The continuity jitter turns a control count of
+0 into $U(0, 0.01)$, so a case count of 1 against it is $R \approx +7.6$, a
+spike at the low quantiles; and at $\mu \lesssim 1$ the median of $R$ sits
+inside the zero floor, so the shift correction of §3 estimates $f \approx 1$
+and removes nothing. Separately, a fold change in an NB *mean* is not a
+multiplicative shift of the NB *distribution* — $\mathrm{Var} = \mu +
+\phi\mu^2$, so the shifted group is relatively tighter at the bottom — and
+$R$ slopes from about 1.2 at low $p$ to 0.95 at high $p$ for a 2× shift at 20
+counts with no zeros at all. A large enough sample resolves that slope as "not
+a global shift".
+
+Measured on the current implementation, the rate at which the subset stage
+fires on a **genuine 2× NB mean shift**, two-sided, $\alpha = 0.05$:
+
+| $\mu$ (counts) | 200 v 200 | 1000 v 1000 |
+|---|---|---|
+| 0.5 | 0.98 | — |
+| 2 | 0.95–0.99 | 1.00 |
+| 20 | 0.17–0.19 | 0.72–0.83 |
+| 100 | — | 0.12–0.17 |
+| 500 | 0.04 | 0.00 |
+
+The rate **grows with $n$**, so it bites hardest in the large-cohort regime
+WADE is for. The artifact is bottom-heavy: `alternative="greater"`, the
+cancer-outlier direction, is clean at $\mu \ge 2$ (0.03–0.04 at 200 v 200)
+but not at the extreme floor. The characterization has the same blind spot —
+median `affected_fraction` for a global 2× is 0.99 at 500 counts, 0.95 at 20,
+**0.16 at 2 and 0.24 at 0.5** — so the "a global change reads 1.0" anchor of §4
+holds only above a few tens of counts.
+
+`tests/test_subset.py` validated stage 2 on continuous lognormal data with no
+zeros and pure multiplicative noise, which is exactly the regime where the
+premise holds; this one was not exercised. The fix is not a transform. It is a
+noise-model choice, and it was prototyped and measured before being written
+here.
+
+### 10.3 The correction for counts: binomial thinning
+
+The division trick of §3 worked because the bridge is *exactly invariant* to
+division, so only the null needed correcting. The analogue for counts is
+**binomial thinning**: NB is closed under thinning with the same dispersion
+(thin a Poisson–Gamma by $q$ and it is NB$(q\mu, \phi)$), so thinning the
+higher group's *raw counts* by $1/f$ produces a matrix that is exactly
+exchangeable under "a fold change in the count model", zeros included, and
+the Poisson component along with it. WADE takes raw counts precisely so that
+this kind of operation is possible.
+
+This is what `wade()` does by default (`thin=True`, `wade.thinning`). Three
+things the prototype established, in order of how much they cost to learn:
+
+1. **Thin the observed statistic as well as the null.** The bridge is not
+   invariant to thinning — that is the point — so the observed curve must be
+   read off the thinned matrix with the original labels, and the null off the
+   same matrix permuted. Thinning only the null, as first specified, did
+   nothing at 20 counts and inflated the null at the floor. Drawn once,
+   before any permutation, like the jitter (§6).
+2. **$f$ must be unbiased on a true global shift; its robustness matters
+   less than it looks.** Two separate questions, measured separately.
+   *Accuracy*: forcing $\hat f$ 30% too large or too small on a genuine 2×
+   gives false-subset rates of 0.26 and 0.28 at 200 v 200 — a residual NB-mean
+   shift between thinned cases and controls is itself a non-multiplicative
+   shape, so an inaccurate $\hat f$ is **anti-conservative**, and more so at
+   larger $n$. So the estimator must be unbiased. The ratio of interquartile
+   means is not (2.08 for a true 2: the middle of a skewed distribution does
+   not scale with its mean) and at 1000 v 1000 that alone is 0.07–0.15 false
+   subsets; the ratio of means is unbiased but a 5% subset at 8× moves it to
+   1.35. The estimator that is unbiased *and* out of reach of a subset below
+   25% is **the thinning factor that makes the two groups' interquartile means
+   agree** — bisection on $\log f$ with thinning inside the loop and common
+   random numbers; it asks "after thinning, do the middles agree?", which
+   assumes nothing about how the middle scales. It reads 2.00.
+   *Contamination*: a subset larger than 25% does move it (33% at 2×: 1.24;
+   60%: 1.55; 80% at 2× with 20% unchanged: 1.79) — and that costs nothing,
+   because such a gene *is* a mixture, over-thinning leaves a two-level
+   structure the bridge still sees, and the thinned test calls it non-global
+   (power 0.97, 0.97 and 0.64 respectively at 200 v 200 and 20 counts; the
+   80/20 gene is 0.28 today). The window is not data being thrown away — every
+   sample enters the test and the characterization — it is the range over
+   which "one global shift" and "a mixture" can still be told apart.
+   An estimator-free alternative, $p = \max_f p_f$ over candidate fold
+   changes (reject only if no $f$ explains the data), is valid by construction
+   and measured too conservative to be the default (0.24 against 0.64 on the
+   80/20 gene, 0.24 against 0.76 on a 5% subset at 2 counts); it is kept in
+   the prototype as `p_profile`.
+3. **Inverse-variance node weights do not substitute for this.** Weights from
+   the permutation variance of $R(p)$ are label-free but not signal-free — a
+   subset's own values inflate the null variance of the top nodes, so the
+   signal region is down-weighted and the weighted `affected_fraction` reads
+   ~0 for genuine subsets. Delta-method weights $1/(1/\mu + \phi)$ are far
+   too generous at 1–3 counts. Both measured, both set aside.
+
+Measured, with the matched estimator, the rate at which the subset stage fires
+on a genuine 2× NB mean shift — the same cells as the table above:
+
+| $\mu$ | 200 v 200, division | 200 v 200, thinned | 1000 v 1000, division | 1000 v 1000, thinned |
+|---|---|---|---|---|
+| 0.5 | 0.98 | **0.05** | — | 0.03 |
+| 2 | 0.95 | **0.05** | 1.00 | 0.10† |
+| 20 | 0.17 | **0.05** | 0.72 | 0.02 |
+| 100 | — | — | 0.17 | 0.05 |
+
+† 60 genes; within Monte Carlo error of 0.05, and the one cell worth
+re-measuring with more replicates before it is quoted anywhere else.
+
+The null stays at 0.02–0.07. Power is preserved above 2 counts (5% at 8×,
+$\mu = 2$: 0.69 thinned against 0.64; 15%: 0.98 against 0.91) and is lower at
+the extreme floor (5% at 8×, $\mu = 0.5$: 0.03 against 0.13), where the old
+number was not power — it came with the 0.98 false-subset rate on global
+shifts.
+
+**The cost.** The fit is sixteen thinning-and-renormalizing passes, so at
+20,000 genes, 100 v 100 and $B = 2000$ the run goes from 9.7 s to 16.6 s.
+Speed is a later problem than behaviour and is deferred to `ROADMAP.md`.
+
+**Where it does not apply.** `wade_from_matrix` has no counts to thin: it keeps
+the division and inherits the low-expression caveat that `docs/limits.md`
+states. `thin=False` does the same on the raw-count path. On genuinely
+continuous data — which is **out of WADE's scope**, see the note at the head of
+this document — the division is already exact under a multiplicative model and
+thinning would add Poisson noise the data does not have; that is the one
+situation where `thin=False` is the better choice, and it is untested
+territory.
+
+Two implementation points worth stating, both pinned by tests. The fold-change
+fit runs on the **jitter-free** normalized scale — a hundredth of a count has
+no business in a fold-change estimate, and on an all-zero gene it would
+otherwise decide which group is "higher" and keep deciding it at every
+bisection step. And non-integer counts (salmon, kallisto) are **rounded for
+the thinning only**; the observed matrix and the characterization use the
+values as given.
+
+### 10.4 One zero is enough: the pseudocount for the log
+
+The characterization's failure at low counts has a sharper cause than "the
+floor", and it reaches far above low counts. At 20,000 v 20,000 and a mean of
+20, NB$(20, 0.1)$ produces at least one zero in the control group about 30% of
+the time; under the jitter that minimum is $\approx 0.005$, the case minimum is
+$\approx 5$, and the bottom node reads $R = \log_2(5/0.005) \approx 10$.
+The fourth moment raises that to $10^4$ — half the weight of the other
+20,000 nodes combined — and a global 2× reads **0.39, 0.59, 0.70** instead of
+0.97 on three of six seeds. **The tie-breaking jitter is being read as a
+measurement.** The same mechanism, several nodes wide, is the 0.16 at 2
+counts.
+
+A count of zero means "less than one"; its logarithm should be bounded, not
+$-7$. So the $R$ curve is computed with a **pseudocount of one count**:
+
+$$R(p) = \log_2\big(Q_1(p) + 1\big) - \log_2\big(Q_0(p) + 1\big)$$
+
+with the "1" meaning *one count, converted per sample into the normalized
+units* — not 1 TPM; the normalization knows the conversion
+(`wade.thinning.one_count`, exposed on the result as `pseudocount` and used by
+`wade_gene` so a plotted curve is the one the statistics were read from). It
+is `pseudocount=1.0` on `wade()`, in counts, and `0` disables it. A sample
+with a zero library size has no count scale and gets no pseudocount. Two candidates
+were measured side by side: this, and a floor at half a count
+($\max(x, \tfrac12)$ before the log, which leaves every nonzero value on the
+pure log scale). They behave the same within Monte Carlo error everywhere, the
+pseudocount is slightly better where they differ (a global 2× at 5 counts
+reads 0.86 against 0.74), it has no negative logarithms, and it is the
+convention. Measured, 200 v 200:
+
+| | raw log | log$_2$(x+1) |
+|---|---|---|
+| global 2× at 2 counts, `affected_fraction` | 0.17 | **0.70** |
+| global 2× at 5 counts | 0.07 | **0.86** |
+| global 2× at 20 counts, 20,000 v 20,000, worst of six seeds | 0.39 | **0.97** |
+| 5% at 8× at 2 counts | 0.04 | 0.10 |
+| 5% at 8× at 20 counts | 0.05 | 0.05 |
+| thinned stage-2 power, 15% at 8×, mean 0.5 | 0.32 | **0.84** |
+| thinned stage-2 power, 5% at 8×, mean 2 | 0.79 | 0.87 |
+| thinned stage-2 level, global 2×, all means | 0.01–0.05 | 0.01–0.06 |
+
+Above about 20 counts every number is identical: the pseudocount only ever
+touches the bottom of the distribution. Under thinning the test stays exact —
+a deterministic transform applied to observed and permuted thinned data alike
+cannot move the level — and its power at the extreme floor rises a lot,
+because those spikes were noise in the bridge too.
+
+Two consequences for §8. The jitter is **irrelevant to stage 2 once there is
+a pseudocount** (`log₂(0.005 + 1) ≈ 0.007`; measured, the $R$ curve with and
+without jitter gives the same numbers), so it stays where it is needed — the
+continuity of stage 1's null for the GPD tail fit — and stops being read as a
+measurement. And adding Poisson(1) noise in its place, which was considered,
+is measured to cost power at the floor (15% at 8× at a mean of 0.5: 0.84 →
+0.49) while removing neither zeros (37% survive) nor ties; it is not used.
+
+What remains at $\lesssim 5$ counts is the limit the section opened with: on
+the log scale a Poisson count of 2 carries noise of about $\pm 0.7$ per node,
+so the characterization is **noise-dominated** there — a 5% subset at 8× reads
+0.10 rather than 0.05, the null reads 0.08, and a subset has to be roughly 16×
+to stand clear. That is a resolution limit, to be reported with its
+confidence interval (§10.5) rather than hidden, not an artifact to be fixed.
+The "global reads 1.0" anchor of §4 is therefore *approximate below ~5 counts
+and exact above*, and the measured table at the end of §4 — all at
+lognormal(3, 0.6), i.e. around 20 units with no zeros — should be read with
+that qualifier.
+
+### 10.5 Confidence intervals for the descriptors
+
+`affected_fraction`, `direction` and `log2_fc` are estimates and should carry
+intervals.
+
+**What is resampled, and how much of it.** The ordinary nonparametric
+bootstrap: each replicate draws $n_1$ case columns from the $n_1$ cases **with
+replacement** and $n_0$ control columns from the $n_0$ controls, so the
+resampled groups are the *same size* as the real ones. That is the point — the
+interval should describe the sampling variability of an estimate made at the
+sample size you actually have, and drawing fewer would describe a smaller
+study. It is not a hold-out: about 63% of the distinct samples appear in any
+one replicate, and the rest are absent, but that is a consequence of sampling
+with replacement rather than a chosen fraction. Groups are resampled
+independently so the group sizes — and therefore the grid $m$ — never move.
+
+Two variants exist for cases this one is known to fail — the $m$-out-of-$n$
+bootstrap and subsampling without replacement, both of which draw fewer than
+$n$ — and neither is used here. If narrow intervals ever look untrustworthy,
+`docs/scaling.md` §6 records the specific reason to suspect this estimator:
+resampling with replacement duplicates samples, which puts flat runs into the
+quantile function, and that is the degeneracy §8's jitter exists to break. `wade(..., n_boot=300)` computes them (opt-in: 200 replicates cost
+about as much as the whole rest of a 20,000-gene run) and reports them as
+`ci_affected_fraction`, `ci_direction`, `ci_log2_fc`, and as `*_lo` / `*_hi`
+columns. The bootstrap — resample samples within each group with
+replacement, recompute the curve, read the three numbers; percentile
+intervals — is cheap (the curve is two quantile grids) and behaves. Measured at
+a mean of 20, 300 bootstrap replicates, median 95% interval:
+
+| gene | 200 v 200 | 1000 v 1000 | covers the estimand |
+|---|---|---|---|
+| 5% at 8× | [0.03, 0.09] | [0.04, 0.07] | yes (≈1.00) |
+| 33% at 8× | [0.28, 0.42] | [0.31, 0.37] | yes |
+| 33% at 2× | [0.25, 0.69] | [0.37, 0.62] | yes — but the estimand is ≈ 0.5, not 0.33 |
+
+Two caveats the last row carries, both properties of the estimator rather than
+of the interval. A 2× step against 30% noise is not a step but a ramp, and the
+participation ratio of a ramp is larger than the planted fraction (0.5 for
+33%; 0.93 for 80% at 2×): the interval covers *the estimand*, and the
+estimand is biased upward for small fold changes. And the participation ratio
+summarizes a **single-level** departure by construction: "global 2× plus 5%
+at 8×" reads 0.43, which is neither number — it is the effective fraction of
+the curve's energy. Both are true today and belong beside §4's table. The
+permutation p-values need no interval beyond their Monte Carlo error,
+$\sqrt{p(1-p)/B}$, and the resolution floors of §6.

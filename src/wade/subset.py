@@ -40,6 +40,7 @@ __all__ = [
     "shift_correct",
     "SubsetResult",
     "subset_test",
+    "characterization_ci",
 ]
 
 
@@ -165,7 +166,11 @@ def shift_correct(x: np.ndarray, cond: np.ndarray, r: np.ndarray) -> np.ndarray:
     """Divide out the estimated global fold change, per gene.
 
     **This is the whole reason the shape test works**, and getting it wrong is
-    not subtle.
+    not subtle. It is the correction for *continuous* data and for an
+    already-normalized matrix (:func:`wade.wade_from_matrix`); for raw counts
+    :func:`wade.wade` uses binomial thinning instead
+    (:mod:`wade.thinning`, ``docs/method.md`` §10.3), because a division does
+    not make count groups exchangeable at low expression.
 
     Permutation generates the null of *no difference at all*. The shape test's
     null is *a pure global shift* — the mean shift is the hypothesis being
@@ -193,16 +198,27 @@ def shift_correct(x: np.ndarray, cond: np.ndarray, r: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True)
 class SubsetResult:
-    """Everything the subset test produces."""
+    """Everything the subset test produces.
+
+    Two curves are kept. ``r`` is the **characterization** curve — the
+    log-ratio of the observed quantiles (with the pseudocount), which
+    ``affected_fraction`` and ``direction`` are read from and which
+    :func:`wade.plot_gene` draws. ``r_test`` is the curve the **statistic** was
+    computed on: the same thing for the division correction (the bridge is
+    exactly invariant to it) but the thinned matrix's curve under thinning,
+    which is not (``docs/method.md`` §10.3).
+    """
 
     statistic: np.ndarray     # (g,)   max_k standardized bridge
     null: np.ndarray | None   # (g, B) the permutation null
-    r: np.ndarray             # (g, m) the log-ratio curve
-    b: np.ndarray             # (g, m) the bridge
+    r: np.ndarray             # (g, m) the log-ratio curve (characterization)
+    b: np.ndarray             # (g, m) its bridge
     affected_fraction: np.ndarray  # (g,) effective fraction of samples that differ
     direction: np.ndarray          # (g,) -1 all down .. +1 all up
     argmax_k: np.ndarray      # (g,)   width at which the scan peaked
-    shift: np.ndarray         # (g,)   the fold change divided out to build the null
+    shift: np.ndarray         # (g,)   the fitted global fold change the null was built under
+    r_test: np.ndarray | None = None   # (g, m) the curve the statistic was computed on
+    correction: str = "division"       # "division" or "thinning"
 
     @property
     def scan_fraction(self) -> np.ndarray:
@@ -238,6 +254,25 @@ def _bridge_from(x: np.ndarray, cond: np.ndarray, q: np.ndarray) -> np.ndarray:
                                   type7_quantiles(x[:, i0], q)))
 
 
+def _resolve_pseudocount(pseudocount, shape) -> np.ndarray | None:
+    """``None``/``0`` → no pseudocount; a scalar → the same everywhere (the
+    matrix's units); a per-sample vector or a genes x samples array → per cell."""
+    if pseudocount is None:
+        return None
+    pc = np.asarray(pseudocount, dtype=np.float64)
+    if pc.ndim == 0:
+        return None if float(pc) == 0.0 else np.full(shape, float(pc))
+    if pc.ndim == 1:
+        if pc.shape[0] != shape[1]:
+            raise ValueError(f"a per-sample pseudocount needs {shape[1]} values, got {pc.shape[0]}")
+        return np.broadcast_to(pc[None, :], shape).copy()
+    if pc.shape != shape:
+        raise ValueError(f"pseudocount must be a scalar, a per-sample vector or a {shape} array; got {pc.shape}")
+    if np.any(pc < 0) or not np.all(np.isfinite(pc)):
+        raise ValueError("pseudocount must be finite and non-negative")
+    return pc
+
+
 def subset_test(
     x: np.ndarray,
     cond: np.ndarray,
@@ -245,6 +280,9 @@ def subset_test(
     *,
     alternative: str = "two-sided",
     backend: str = "auto",
+    pseudocount=None,
+    corrected: np.ndarray | None = None,
+    shift: np.ndarray | None = None,
 ) -> SubsetResult:
     """Scan the bridge over every window width, against a global-shift null.
 
@@ -274,6 +312,23 @@ def subset_test(
     and so does a downward subset — the first is a real finding about
     heterogeneity, the second is signal the mean test cannot see at all.
     :func:`direction` distinguishes them.
+
+    Parameters
+    ----------
+    pseudocount
+        Added to every value before the log-ratio curve is taken — a scalar
+        in the matrix's units, a per-sample vector, or a genes x samples
+        array. :func:`wade.wade` passes one count in each cell's normalized
+        units (``docs/method.md`` §10.4); ``None`` means none.
+    corrected, shift
+        A matrix already made exchangeable under the fitted global shift
+        (thinned counts, normalized — :mod:`wade.thinning`) and the fold
+        change it was built under. When given, **both** the observed
+        statistic and the null are computed on it, because the bridge is not
+        invariant to thinning. When omitted, the continuous-data correction
+        applies: divide the case columns by ``2**median(R)`` for the null and
+        leave the observed statistic alone, which the bridge's exact
+        invariance to division permits.
     """
     x = np.asarray(x, dtype=np.float64)
     cond = np.asarray(cond)
@@ -285,24 +340,99 @@ def subset_test(
             f"any interior; min(n_case, n_ctrl) = {m}. Use the mean-shift test alone."
         )
     q = probability_grid(m)
+    pc = _resolve_pseudocount(pseudocount, x.shape)
+    xp = x if pc is None else x + pc
 
-    r_obs = log_ratio_curve(type7_quantiles(x[:, i1], q), type7_quantiles(x[:, i0], q))
+    # The characterization curve: observed quantiles, pseudocounted.
+    r_obs = log_ratio_curve(type7_quantiles(xp[:, i1], q), type7_quantiles(xp[:, i0], q))
     b_obs = bridge(r_obs)
-
-    # The null is generated under the fitted global shift, not under
-    # no-difference. b_obs is unchanged by this because bridge() is exactly
-    # shift-invariant; only the null moves.
-    shift = 2.0 ** np.median(r_obs, axis=1)
-    xs = x.copy()
-    xs[:, i1] /= shift[:, None]
 
     from .permutation import subset_null_backend
 
+    if corrected is not None:
+        # Thinning: the matrix is exchangeable under the fitted shift, and the
+        # observed statistic is read off it too (docs/method.md 10.3).
+        corrected = np.asarray(corrected, dtype=np.float64)
+        if corrected.shape != x.shape:
+            raise ValueError(f"corrected must have the matrix's shape {x.shape}, got {corrected.shape}")
+        if shift is None:
+            raise ValueError("pass the fitted fold change as shift= alongside corrected=")
+        shift = np.asarray(shift, dtype=np.float64)
+        xs = corrected if pc is None else corrected + pc
+        r_test = log_ratio_curve(type7_quantiles(xs[:, i1], q), type7_quantiles(xs[:, i0], q))
+        b_test = bridge(r_test)
+        how = "thinning"
+    else:
+        # Division: the null is generated under the fitted global shift, not
+        # under no-difference. b_obs is unchanged by this because bridge() is
+        # exactly shift-invariant; only the null moves. With a pseudocount the
+        # invariance is not exact (x/f + c is not a constant log shift), so
+        # the observed curve is then re-read off the corrected matrix too.
+        shift = 2.0 ** np.median(r_obs, axis=1)
+        xs = x.copy()
+        xs[:, i1] /= shift[:, None]
+        if pc is None:
+            r_test, b_test = r_obs, b_obs
+        else:
+            xs = xs + pc
+            r_test = log_ratio_curve(type7_quantiles(xs[:, i1], q), type7_quantiles(xs[:, i0], q))
+            b_test = bridge(r_test)
+        how = "division"
+
     stat, null, mu, sd, argmax = subset_null_backend(
-        xs, b_obs, perms, q, alternative=alternative, backend=backend
+        xs, b_test, perms, q, alternative=alternative, backend=backend
     )
     return SubsetResult(
         statistic=stat, null=null, r=r_obs, b=b_obs,
         affected_fraction=affected_fraction(r_obs), direction=direction(r_obs),
-        argmax_k=argmax, shift=shift,
+        argmax_k=argmax, shift=shift, r_test=r_test, correction=how,
     )
+
+
+def characterization_ci(
+    x: np.ndarray,
+    cond: np.ndarray,
+    *,
+    pseudocount=None,
+    n_boot: int = 300,
+    rng: np.random.Generator | None = None,
+    level: float = 0.95,
+) -> dict[str, np.ndarray]:
+    """Bootstrap percentile intervals for ``affected_fraction``, ``direction``
+    and ``log2_fc`` — ``docs/method.md`` §10.5.
+
+    Samples are resampled **within each group** with replacement, the
+    log-ratio curve is recomputed on the same grid with the same pseudocount,
+    and the three numbers are read off it. Returns a dict of ``(2, genes)``
+    arrays, lower row first.
+
+    The interval is about sampling uncertainty in the *estimator*; it does
+    not remove the estimator's known biases (a 2× step against 30% noise is a
+    ramp and reads larger than the planted fraction; a two-level departure
+    reads as one effective fraction). ``log2_fc`` is bootstrapped as the log
+    ratio of group means, which is what the grid quadrature is on a balanced
+    design.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    cond = np.asarray(cond)
+    i1, i0 = split_groups(cond)
+    n1, n0 = i1.size, i0.size
+    q = probability_grid(min(n1, n0))
+    pc = _resolve_pseudocount(pseudocount, x.shape)
+    xp = x if pc is None else x + pc
+    rng = np.random.default_rng(0) if rng is None else rng
+    g = x.shape[0]
+    aff = np.empty((n_boot, g)); dirn = np.empty((n_boot, g)); lfc = np.empty((n_boot, g))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for b in range(n_boot):
+            j1 = i1[rng.integers(0, n1, n1)]
+            j0 = i0[rng.integers(0, n0, n0)]
+            r = log_ratio_curve(type7_quantiles(xp[:, j1], q), type7_quantiles(xp[:, j0], q))
+            aff[b] = affected_fraction(r)
+            dirn[b] = direction(r)
+            lfc[b] = np.log2(x[:, j1].mean(axis=1) / x[:, j0].mean(axis=1))
+    lo_q, hi_q = 100 * (1 - level) / 2, 100 * (1 + level) / 2
+    out = {}
+    for name, arr in (("affected_fraction", aff), ("direction", dirn), ("log2_fc", lfc)):
+        out[name] = np.nanpercentile(arr, [lo_q, hi_q], axis=0)
+    return out

@@ -56,7 +56,30 @@ If your design has repeated measures, aggregate to one value per subject before
 running, or restrict the permutation to exchange whole subjects — again, a
 different null.
 
-### 2.3 Normalization lives inside the test, and couples genes
+### 2.3 The subset stage at low expression: what it does and does not fix
+
+The subset stage tests "is a global fold change an adequate explanation?" by
+building a null in which the two groups are exchangeable under that
+hypothesis. For raw counts it does this by **binomial thinning**
+(`method.md` §10.3), which is exact for counts where the division it replaced
+was not; before that fix a genuine 2× shift was called "not a global shift"
+0.95 of the time at 2 counts and 0.72 at 20 counts with 1000 v 1000. Measured
+after: 0.02–0.05 at every expression level and sample size tried.
+
+Two things this does **not** fix, both properties of the data rather than the
+method:
+
+* **`wade_from_matrix` cannot thin.** It has no counts, so it keeps the
+  division and inherits the old behaviour at low expression. If your matrix
+  is count-derived and sparse, go through `wade()` with the counts.
+* **Below about five counts per sample the characterization is
+  noise-dominated.** On the log scale a Poisson count of 2 carries roughly
+  ±0.7 per node, so `affected_fraction` reads a global 2× as 0.70 rather than
+  1.0, a 5% subset at 8× as 0.10 rather than 0.05, and a null gene as 0.08.
+  The ordering survives; the numbers are not quantitative. Run with
+  `n_boot=300` and read the interval, which is wide exactly there.
+
+### 2.4 Normalization lives inside the test, and couples genes
 
 WADE ships its own normalization (`method.md` §8) because the continuity jitter
 has to be applied at count precision. That means a normalization decision is

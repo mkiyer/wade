@@ -19,18 +19,28 @@ grid of `min(n_case, n_ctrl)` probabilities. Inference is by label permutation,
 with a Generalized Pareto fit refining p-values whose empirical resolution has
 run out, then BH-FDR.
 
+**Scope: discrete count data.** WADE takes raw counts and is built around what
+counts are — the tie-breaking jitter, and a subset stage whose null is built by
+binomial thinning of reads ([`docs/method.md`](docs/method.md) §10), neither of
+which has a meaning for continuous measurements. `wade_from_matrix` and
+`thin=False` will run on continuous data and are not tested or tuned for it.
+
 ## Install
 
 ```bash
 mamba env create -f mamba_env.yaml
 conda activate wade
 pip install -e . --no-build-isolation
-pytest                       # ~25 s
+pytest                       # ~6 s
 ```
 
-The Rust kernel is optional. Without a toolchain the package installs and runs
-on the NumPy path, which is the correctness baseline the kernel is validated
-against — just slower.
+The Rust kernels are optional. Without a toolchain the package installs and
+runs on the NumPy path, which is the correctness baseline the kernels are
+validated against — just slower (about 80× on the subset test).
+
+Plotting is optional too: `pip install 'wade[plot]'` (or `conda install plotly
+matplotlib-base`) adds both backends; either one alone is enough. `wade[io]`
+adds polars for writing results. Nothing in the statistic imports any of them.
 
 ## Use it
 
@@ -55,6 +65,10 @@ res = wade(counts, normalizer, cond, nperms=2000)
 | `direction` | `+1` all up, `-1` all down, `0` two-sided |
 | `log2_fc`, `w1` | fold change; 1-Wasserstein distance |
 
+With `n_boot=300` the three descriptive statistics also carry bootstrap 95%
+intervals (`ci_affected_fraction`, `ci_direction`, `ci_log2_fc`, and `*_lo` /
+`*_hi` columns).
+
 Four patterns, read off the two p-values and the two descriptors:
 
 | `p_mean_shift` | `p_subset` | what you are looking at |
@@ -70,8 +84,47 @@ design exists to avoid.
 
 ```python
 res.columns()          # dict of equal-length arrays
-res.to_polars()        # if polars is installed
+res.report()           # the same table in the written column order
+res.to_frame()         # ... as a polars DataFrame
 ```
+
+### Getting data in, and results out
+
+**WADE reads no files.** polars and pandas already read CSV, TSV, Parquet,
+Arrow, Excel and gzip better than this package would, so WADE *accepts* what
+your reader produced and concentrates on the part that is actually its job:
+interpreting the matrix unambiguously, aligning your sample sheet by name, and
+writing results.
+
+```python
+import polars as pl, wade
+
+counts  = pl.read_csv("counts.tsv", separator="\t")   # gene id + one column per sample
+samples = pl.read_excel("samples.xlsx")               # sample_id, condition, ...
+
+cond = wade.condition(samples, key="sample_id", column="condition",
+                      case="tumor", control="normal")
+
+res = wade.wade(counts, "Length", cond, nperms=2000, n_boot=300)
+wade.write_results(res, "results.tsv")                # + results.manifest.json
+```
+
+`counts` may be a NumPy array, a polars or pandas DataFrame, a sparse matrix,
+or a `wade.Counts` from `wade.as_counts()` — which is also where you say
+`genes="columns"` for a transposed matrix, or `sample_columns=[...]` for a
+frame with annotation columns in the middle (a featureCounts file). Gene and
+sample labels are **optional**; without them WADE numbers them positionally.
+`normalizer` may be a vector, a matrix, a scalar, or the **name of a column**
+carried alongside the counts.
+
+The alignment is strict on purpose. A sample in the matrix with no metadata
+row, a metadata row matching no sample, a duplicate id, or a third level in the
+condition column all raise and name the offenders — a silently dropped sample
+is a silently different analysis, and because library sizes are computed on the
+samples handed in, a silently different normalization too.
+
+`wade_contrast()` takes sample **names** for its two groups (or integer
+positions, if that is what you have).
 
 ### Worked example
 
@@ -107,6 +160,62 @@ The planted 5% subset shows the point: the mean-shift test largely misses it
 while the subset test finds it, and `affected_fraction` recovers roughly 0.05.
 A genuine global shift is the mirror image — found by the mean test, and
 correctly **not** flagged as a subset.
+
+### Seeing it
+
+Three figures, each answering one question about a result. All three take the
+`WadeResult` and return the backend's figure object.
+
+```python
+from wade import plot_gene, plot_volcano, plot_stages
+
+plot_gene(res, gene=[300, 320])             # what does this gene's difference look like?
+plot_volcano(res, stage="both", label=5)    # which genes?
+plot_stages(res)                            # what kind of difference?
+```
+
+(`gene` takes names or indices; 300 and 320 are the first global and the
+first subset gene of the worked example.)
+
+**`plot_gene`** is the figure that makes the method legible. The top row is
+the log-ratio curve `R(p) = log2 Q_case(p) − log2 Q_ctrl(p)` against quantile;
+the bottom row is the two quantile functions it is the ratio of. A **flat**
+curve is a global fold change; a curve that sits at zero and then **climbs**
+is a subset. The dashed line is the median of `R` — the global shift the
+subset test takes as its null — so the curve's departure from it is exactly
+what `p_subset` prices.
+
+![plot_gene: a global 2× gene, a 15% subset at 8×, and a 5% subset at 8×](docs/figures/gene.png)
+
+The first two genes have the **same log₂ fold change** (+0.92 and +0.94). The
+mean-shift test cannot tell them apart; the curve, `p_subset` and
+`affected_fraction` (0.98 against 0.15) can.
+
+**`plot_volcano`** is effect size against significance for one stage, or both
+side by side, **coloured by `affected_fraction`** so the shape of each
+difference is visible in the overview. On the mean-shift stage the global
+genes (light) and the 15% subsets (dark) sit on top of each other; on the
+subset stage they separate completely.
+
+![plot_volcano, both stages](docs/figures/volcano.png)
+
+**`plot_stages`** is `p_mean_shift` against `p_subset`: the four quadrants of
+the reading table above, drawn, with each stage's BH cutoff as the dividing
+line.
+
+![plot_stages](docs/figures/stages.png)
+
+Two backends, one data layer. `backend="plotly"` (the default when installed)
+is interactive — hover any point for the gene name and every statistic, zoom,
+and a 20,000-gene volcano renders through WebGL — and is what a notebook
+wants. `backend="matplotlib"` gives vector PDF/SVG with no browser involved,
+which is what a manuscript wants. The arrays behind every figure are
+available without either library (`wade.plotting.volcano_data(res).table()`
+and friends), for your own tooling or as the table view of the chart.
+
+The figures above are generated by `tools/make_readme_figures.py`; the
+design is 300 v 300 with signal genes kept to 7% of the matrix, for the
+reason given in [`docs/limits.md`](docs/limits.md) §2.3.
 
 ### Choosing direction
 
@@ -148,6 +257,14 @@ the floor is still 0.032 with 15 affected samples. It is driven by group
 [`docs/limits.md`](docs/limits.md) has both in full, plus the checklist of when
 to reach for something else.
 
+**And one thing to know about low-expression genes.** Below about five counts
+per sample the log scale is noise-dominated — one count is one log unit — so
+`affected_fraction` is qualitative there (a global 2× reads ≈0.70 rather than
+1.0). The *test* is unaffected: the subset stage's null is built by binomial
+thinning of the counts, which is exact at every expression level
+([`docs/method.md`](docs/method.md) §10). Run with `n_boot=300` and read the
+interval, which is wide exactly where the estimate is soft.
+
 ## Documentation
 
 - [`docs/method.md`](docs/method.md) — what WADE computes and why. The contract.
@@ -159,15 +276,23 @@ to reach for something else.
 ## Status
 
 Implemented and tested: the statistic, both stages, the characterization, the
-normalizers, permutation inference with GPD refinement and BH, and a Rust kernel
-for the permutation loop. **499 tests.**
+normalizers, permutation inference with GPD refinement and BH, Rust kernels
+for both permutation loops, the count-native subset stage (binomial thinning,
+the one-count pseudocount, bootstrap intervals), the plotting layer, and the
+data-in/results-out boundary. **617 tests, about 12 s.**
+
+At 20,000 genes, 100 v 100 and 2,000 permutations a full run takes about 17 s
+on a 16-core laptop (9.7 s with `thin=False`); the permutation loops, which
+were 98% of the runtime on NumPy — about 5 minutes — now take 8 s and are held
+bitwise to the NumPy path.
 
 Ported from an R implementation that remains in `reference/` as the oracle the
 golden fixtures were generated from. Worst-case relative deviation across 325
 parity comparisons: **9.2e-15**, with the normalized matrix, the quantile grids
 and the permutation null bit-for-bit identical.
 
-Not yet built: plotting, file I/O, and a demo notebook. See the roadmap.
+Not yet built: the demo notebook, and format-specific reader helpers for
+featureCounts and MatrixMarket. See the roadmap.
 
 ## Provenance
 

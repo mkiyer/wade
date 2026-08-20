@@ -1,12 +1,12 @@
 """Single-gene diagnostic: the quantile pair and the cumulative signed area.
 
 R's ``wade_gene()``. The downstream reading of this panel is what makes
-the statistic legible — a broad location shift accumulates steadily
-across all quantiles, a rare high-expressing subset stays flat and then
-climbs inside the tail window, and a single-outlier gene stays flat and
-then spikes at the last node. The second and third are not
-distinguishable from this curve alone; separating them is the permutation
-p-value's job.
+the statistic legible — on the log-ratio curve ``r`` a global fold change
+is flat, a rare high-expressing subset sits at zero and then climbs near
+``p = 1``, and a single-outlier gene stays flat and then spikes at the
+last node. The second and third are not distinguishable from this curve
+alone; separating them is the permutation p-value's job.
+:func:`wade.plot_gene` draws it.
 """
 
 from __future__ import annotations
@@ -37,10 +37,14 @@ def wade_gene(
     cond: np.ndarray,
     *,
     allow_single_sample_group: bool = False,
+    pseudocount=None,
 ) -> GeneDetail:
     """Per-gene detail from one **already-normalized** row.
 
-    Takes normalized values, not counts, and not the matrix.
+    Takes normalized values, not counts, and not the matrix. ``pseudocount``
+    (a scalar, or one value per sample) is added before the log-ratio curve
+    ``r`` is taken, as the subset stage does (``docs/method.md`` §10.4); the
+    quantile functions ``y1``/``y0`` and the cumulative area stay raw.
 
     Why the reversal happens *after* the statistic, not before
     ----------------------------------------------------------
@@ -73,8 +77,15 @@ def wade_gene(
     )
     y1 = st.Q1[0][::-1]
     y0 = st.Q0[0][::-1]
+    if pseudocount is None or np.all(np.asarray(pseudocount) == 0):
+        ry1, ry0 = y1, y0
+    else:
+        pc = np.broadcast_to(np.asarray(pseudocount, dtype=np.float64), row.shape)
+        stp = wade_stats((row + pc)[None, :], cond,
+                         allow_single_sample_group=allow_single_sample_group)
+        ry1, ry0 = stp.Q1[0][::-1], stp.Q0[0][::-1]
     with np.errstate(divide="ignore", invalid="ignore"):
-        r = np.log2(y1) - np.log2(y0)
+        r = np.log2(ry1) - np.log2(ry0)
     return GeneDetail(
         p=st.q[::-1].copy(),
         y1=y1.copy(),

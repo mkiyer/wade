@@ -40,8 +40,19 @@ from .api import (
     wade_from_matrix,
 )
 from .diagnostics import GeneDetail, wade_gene
+from .io import (
+    RESULT_COLUMNS,
+    Condition,
+    Counts,
+    as_counts,
+    condition,
+    manifest,
+    to_frame,
+    write_results,
+)
 from .normalize import cpm, draw_jitter, library_sizes, rle, tpm_like
 from .permutation import draw_perms, null_statistics
+from .plotting import plot_gene, plot_stages, plot_volcano
 from .pvalues import ALTERNATIVES, GPDFit, bh_adjust, gpd_tail_p, perm_pvalues
 from .quantiles import probability_grid, type7_quantiles
 from .stats import WadeStats, wade_stats
@@ -49,15 +60,19 @@ from .subset import (
     SubsetResult,
     affected_fraction,
     bridge,
+    characterization_ci,
     direction,
     log_ratio_curve,
     subset_test,
 )
+from .thinning import fit_fold_change, one_count, thin_counts
 
 __version__ = "0.2.0.dev0"
 
 __all__ = [
     "ALTERNATIVES",
+    "Condition",
+    "Counts",
     "DEFAULT_NPERMS",
     "GPDFit",
     "GeneDetail",
@@ -65,20 +80,32 @@ __all__ = [
     "WadeResult",
     "WadeStats",
     "affected_fraction",
+    "as_counts",
     "bh_adjust",
     "bridge",
+    "characterization_ci",
+    "condition",
     "cpm",
     "direction",
     "draw_jitter",
+    "fit_fold_change",
     "draw_perms",
     "gpd_tail_p",
     "library_sizes",
     "log_ratio_curve",
+    "manifest",
     "null_statistics",
+    "one_count",
     "perm_pvalues",
+    "plot_gene",
+    "plot_stages",
+    "plot_volcano",
     "probability_grid",
+    "RESULT_COLUMNS",
     "rle",
     "subset_test",
+    "thin_counts",
+    "to_frame",
     "tpm_like",
     "type7_quantiles",
     "wade",
@@ -86,4 +113,5 @@ __all__ = [
     "wade_from_matrix",
     "wade_gene",
     "wade_stats",
+    "write_results",
 ]
