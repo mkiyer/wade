@@ -50,6 +50,36 @@ on which at least one group is exact. This makes $m$ a **property of the design,
 not a parameter** — no argument raises it, and it is the resolution limit on
 everything below.
 
+**The cap: `max_probs`.** At large cohorts the design's grid becomes a
+liability rather than a resolution — at 40,000 per group every per-gene curve
+is the size of the data matrix, and nothing needs an affected fraction
+resolved to 1/40,000. The realized grid is therefore
+
+$$m = \min(n_0,\; n_1,\; \texttt{max\_probs})$$
+
+with `max_probs = 2000` by default, so **every design at or under 2,000 per
+group — including everything this document's measurements were made on — is
+untouched.** Above it, the grid is capped and two things change, both
+measured (`docs/scaling.md` §2.1):
+
+* `affected_fraction`'s resolution becomes $1/\texttt{max\_probs}$. The
+  fidelity rule is $m \gtrsim 2.5 / \pi_{\min}$ for the smallest fraction of
+  interest $\pi_{\min}$: at $m = 1000$ the estimate is faithful to a 0.1%
+  subset (measured drift $\le 0.0003$ down to that fraction), and a global
+  shift survives $m = 100$.
+* `mean_shift`'s quadrature coarsens, and the error is **one-sided**: a
+  uniform-in-$p$ grid gives the extreme node weight $1/m$ while its value is
+  large, so the number inflates for concentrated signals (17.5 → 21.2 at
+  $m = 100$ for a 5% subset at 8×). **Inference is unaffected** — the
+  permutation null inherits the same quadrature and the inflation cancels in
+  the p-value — but on a capped grid `mean_shift` should be read as signed
+  quantile area, not a mean-difference estimate, and the §2 balanced-design
+  identity holds only approximately.
+
+The cap is never applied silently: the realized $m$ is `result.nprobs` and is
+recorded with `max_probs` in `result.params` and the manifest. `max_probs=None`
+removes it.
+
 **Why the descending order is load-bearing.** Position 0 is the group maximum.
 An implementation that builds an ascending grid and keeps the same indexing
 computes a lower-tail statistic under an upper-tail name, silently.

@@ -292,8 +292,12 @@ def test_kernel_rejects_a_mismatched_permutation_matrix():
     swapped[2] = 1 - swapped[2]                       # sizes (7, 5) instead of (5, 7)
     with pytest.raises(ValueError, match="group sizes"):
         _kernel.subset_null(xs, b_obs, swapped, q, "two-sided")
+    # A grid *capped below* the design is legal (max_probs, method.md §1); a
+    # denser-than-design grid is never produced by WADE and still raises.
+    q_dense = probability_grid(q.shape[0] + 1)
+    b_dense = np.zeros((xs.shape[0], q_dense.shape[0]))
     with pytest.raises(ValueError, match="min\\(n1, n0\\)"):
-        _kernel.subset_null(xs, b_obs[:, :3], perms, probability_grid(3), "two-sided")
+        _kernel.subset_null(xs, b_dense, perms, q_dense, "two-sided")
     with pytest.raises(ValueError, match="at least one row"):
         _kernel.subset_null(xs, b_obs, perms[:0], q, "two-sided")
 

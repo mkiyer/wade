@@ -29,7 +29,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .quantiles import probability_grid, type7_quantiles
+from .quantiles import capped_nprobs, probability_grid, type7_quantiles
 from .stats import split_groups
 
 __all__ = [
@@ -283,6 +283,7 @@ def subset_test(
     pseudocount=None,
     corrected: np.ndarray | None = None,
     shift: np.ndarray | None = None,
+    max_probs: int | None = None,
 ) -> SubsetResult:
     """Scan the bridge over every window width, against a global-shift null.
 
@@ -329,15 +330,19 @@ def subset_test(
         applies: divide the case columns by ``2**median(R)`` for the null and
         leave the observed statistic alone, which the bridge's exact
         invariance to division permits.
+    max_probs
+        Caps the grid at large cohorts, exactly as :func:`wade.wade_stats`
+        does (``docs/method.md`` §1). ``affected_fraction``'s resolution
+        becomes ``1/min(n0, n1, max_probs)``.
     """
     x = np.asarray(x, dtype=np.float64)
     cond = np.asarray(cond)
     i1, i0 = split_groups(cond)
-    m = min(i1.size, i0.size)
+    m = capped_nprobs(i1.size, i0.size, max_probs)
     if m < 3:
         raise ValueError(
             f"the subset test needs at least 3 grid points to have a bridge with "
-            f"any interior; min(n_case, n_ctrl) = {m}. Use the mean-shift test alone."
+            f"any interior; the grid has {m}. Use the mean-shift test alone."
         )
     q = probability_grid(m)
     pc = _resolve_pseudocount(pseudocount, x.shape)
@@ -397,6 +402,9 @@ def characterization_ci(
     n_boot: int = 300,
     rng: np.random.Generator | None = None,
     level: float = 0.95,
+    max_probs: int | None = None,
+    gene_chunk: int | None = None,
+    threads: int | None = None,
 ) -> dict[str, np.ndarray]:
     """Bootstrap percentile intervals for ``affected_fraction``, ``direction``
     and ``log2_fc`` — ``docs/method.md`` §10.5.
@@ -412,25 +420,58 @@ def characterization_ci(
     reads as one effective fraction). ``log2_fc`` is bootstrapped as the log
     ratio of group means, which is what the grid quadrature is on a balanced
     design.
+
+    ``gene_chunk`` bounds the working set (``docs/scaling.md`` §2.2) and is
+    bit-identical to the unchunked call: the replicate index sets do not
+    depend on the genes, so they are drawn once, up front, in the same stream
+    order the unchunked loop draws them.
+
+    ``threads`` (default: all cores) runs the replicates concurrently —
+    ``docs/scaling.md`` §3.4. Also bit-identical, whatever the thread count:
+    the indices are predrawn, every replicate's arithmetic is self-contained,
+    and each writes its own rows. NumPy's sort releases the GIL, which is
+    where the time goes. ``threads=1`` runs serially.
     """
     x = np.asarray(x, dtype=np.float64)
     cond = np.asarray(cond)
     i1, i0 = split_groups(cond)
     n1, n0 = i1.size, i0.size
-    q = probability_grid(min(n1, n0))
+    q = probability_grid(capped_nprobs(n1, n0, max_probs))
     pc = _resolve_pseudocount(pseudocount, x.shape)
-    xp = x if pc is None else x + pc
     rng = np.random.default_rng(0) if rng is None else rng
     g = x.shape[0]
+
+    from .thinning import gene_chunks
+    chunks = gene_chunks(g, gene_chunk)
+    J1 = np.empty((n_boot, n1), dtype=np.intp)
+    J0 = np.empty((n_boot, n0), dtype=np.intp)
+    for b in range(n_boot):
+        J1[b] = i1[rng.integers(0, n1, n1)]
+        J0[b] = i0[rng.integers(0, n0, n0)]
+
     aff = np.empty((n_boot, g)); dirn = np.empty((n_boot, g)); lfc = np.empty((n_boot, g))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        for b in range(n_boot):
-            j1 = i1[rng.integers(0, n1, n1)]
-            j0 = i0[rng.integers(0, n0, n0)]
-            r = log_ratio_curve(type7_quantiles(xp[:, j1], q), type7_quantiles(xp[:, j0], q))
-            aff[b] = affected_fraction(r)
-            dirn[b] = direction(r)
-            lfc[b] = np.log2(x[:, j1].mean(axis=1) / x[:, j0].mean(axis=1))
+    if threads is None:
+        import os
+        threads = os.cpu_count() or 1
+    for ch in chunks:
+        x_ch = x[ch]
+        xp_ch = x_ch if pc is None else x_ch + pc[ch]
+
+        def one_replicate(b, x_ch=x_ch, xp_ch=xp_ch, ch=ch):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                r = log_ratio_curve(type7_quantiles(xp_ch[:, J1[b]], q),
+                                    type7_quantiles(xp_ch[:, J0[b]], q))
+                aff[b, ch] = affected_fraction(r)
+                dirn[b, ch] = direction(r)
+                lfc[b, ch] = np.log2(x_ch[:, J1[b]].mean(axis=1) / x_ch[:, J0[b]].mean(axis=1))
+
+        if threads <= 1:
+            for b in range(n_boot):
+                one_replicate(b)
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=threads) as pool:
+                list(pool.map(one_replicate, range(n_boot)))
     lo_q, hi_q = 100 * (1 - level) / 2, 100 * (1 + level) / 2
     out = {}
     for name, arr in (("affected_fraction", aff), ("direction", dirn), ("log2_fc", lfc)):

@@ -38,6 +38,7 @@ def wade_gene(
     *,
     allow_single_sample_group: bool = False,
     pseudocount=None,
+    max_probs: int | None = None,
 ) -> GeneDetail:
     """Per-gene detail from one **already-normalized** row.
 
@@ -45,6 +46,9 @@ def wade_gene(
     (a scalar, or one value per sample) is added before the log-ratio curve
     ``r`` is taken, as the subset stage does (``docs/method.md`` §10.4); the
     quantile functions ``y1``/``y0`` and the cumulative area stay raw.
+    ``max_probs`` caps the grid as the test does (``§1``); pass the run's
+    value — :meth:`wade.WadeResult.gene_detail` does — so the curves here are
+    the ones the statistics were read from.
 
     Why the reversal happens *after* the statistic, not before
     ----------------------------------------------------------
@@ -74,6 +78,7 @@ def wade_gene(
 
     st = wade_stats(
         row[None, :], cond, allow_single_sample_group=allow_single_sample_group,
+        max_probs=max_probs,
     )
     y1 = st.Q1[0][::-1]
     y0 = st.Q0[0][::-1]
@@ -82,7 +87,8 @@ def wade_gene(
     else:
         pc = np.broadcast_to(np.asarray(pseudocount, dtype=np.float64), row.shape)
         stp = wade_stats((row + pc)[None, :], cond,
-                         allow_single_sample_group=allow_single_sample_group)
+                         allow_single_sample_group=allow_single_sample_group,
+                         max_probs=max_probs)
         ry1, ry0 = stp.Q1[0][::-1], stp.Q0[0][::-1]
     with np.errstate(divide="ignore", invalid="ignore"):
         r = np.log2(ry1) - np.log2(ry0)

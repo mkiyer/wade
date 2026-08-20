@@ -47,6 +47,35 @@ from .stats import split_groups
 
 __all__ = ["midmean", "fit_fold_change", "thin_counts", "one_count"]
 
+
+def gene_chunks(g: int, gene_chunk: int | None) -> list[slice]:
+    """Row slices of at most ``gene_chunk + 1`` genes; one slice when ``None``.
+
+    The chunked paths are **bit-identical** to the unchunked ones — chunking
+    is a memory layout, never a numerical choice (``docs/scaling.md`` §2.2) —
+    so this helper is shared to keep every consumer slicing the same way.
+
+    **No chunk is ever a single row.** NumPy's row reductions take a
+    different code path for a ``(1, m)`` array than for the same row inside a
+    larger matrix, and the two can differ in the last ulp — measured on
+    ``D.sum(axis=1)`` at m = 40. Reductions over blocks of two or more rows
+    are layout-independent (verified 2026-08-20, ``tests/test_chunking.py``),
+    so ``gene_chunk`` must be at least 2 and a trailing one-row remainder is
+    folded into the last chunk.
+    """
+    if gene_chunk is None or g <= 1:
+        return [slice(0, g)]
+    gene_chunk = int(gene_chunk)
+    if gene_chunk < 2:
+        raise ValueError(
+            f"gene_chunk must be at least 2, got {gene_chunk}: a single-row chunk "
+            f"changes NumPy's reduction path and the last bits of every sum"
+        )
+    chunks = [slice(s, min(s + gene_chunk, g)) for s in range(0, g, gene_chunk)]
+    if len(chunks) > 1 and chunks[-1].stop - chunks[-1].start == 1:
+        chunks[-2:] = [slice(chunks[-2].start, g)]
+    return chunks
+
 #: Bisection range for the fitted fold change, in natural log. 1024× covers
 #: anything a global shift plausibly is; a gene absent from one group pins at
 #: the bound and is a stage-1 finding, not a stage-2 one.
@@ -72,6 +101,9 @@ def thin_counts(
     cond: np.ndarray,
     fold: np.ndarray,
     rng: np.random.Generator,
+    *,
+    gene_chunk: int | None = None,
+    out: np.ndarray | None = None,
 ) -> np.ndarray:
     """Binomial-thin the higher group of every gene by its fitted fold change.
 
@@ -80,6 +112,15 @@ def thin_counts(
     with keep probability ``fold[g]``. Nothing is ever scaled up, and a
     ``fold`` of exactly 1 leaves the gene untouched. Returns a new
     integer-valued float matrix of the same shape.
+
+    ``gene_chunk`` bounds the transient working set (``docs/scaling.md``
+    §2.2) and is **bit-identical** to the unchunked call: the case blocks of
+    every chunk are drawn first and the control blocks after, so the one
+    generator's stream is consumed in exactly the order the single
+    full-matrix call consumes it. ``out`` is an optional preallocated
+    ``(genes, samples)`` output — any dtype that holds the counts exactly
+    (the chunked driver passes int32 to halve the resident matrix); the
+    values are identical whatever the dtype.
     """
     counts = np.asarray(counts, dtype=np.float64)
     cond = np.asarray(cond)
@@ -88,26 +129,170 @@ def thin_counts(
         raise ValueError(f"fold must have one value per gene; got {fold.shape} for {counts.shape[0]} genes")
     if not np.all(np.isfinite(fold)) or np.any(fold <= 0):
         raise ValueError("fold must be finite and positive")
-    if np.any(counts != np.round(counts)):
-        raise ValueError("thinning needs integer counts; pass raw counts, not a normalized matrix")
     i1, i0 = split_groups(cond)
     keep_case = np.where(fold >= 1.0, 1.0 / fold, 1.0)
     keep_ctrl = np.where(fold < 1.0, fold, 1.0)
-    out = counts.copy()
-    c = counts.astype(np.int64)
-    out[:, i1] = rng.binomial(c[:, i1], keep_case[:, None])
-    out[:, i0] = rng.binomial(c[:, i0], keep_ctrl[:, None])
+    chunks = gene_chunks(counts.shape[0], gene_chunk)
+    if out is None:
+        out = np.empty(counts.shape, dtype=np.float64)
+    elif out.shape != counts.shape:
+        raise ValueError(f"out must have the counts' shape {counts.shape}, got {out.shape}")
+    # Two phases, not one loop: the unchunked call draws every gene's case
+    # block and then every gene's control block from one stream, and the
+    # chunked call must consume that stream in the same order to stay
+    # bit-identical.
+    for ch in chunks:
+        c1 = counts[ch][:, i1]
+        if np.any(c1 != np.round(c1)):
+            raise ValueError("thinning needs integer counts; pass raw counts, not a normalized matrix")
+        out[ch][:, i1] = rng.binomial(c1.astype(np.int64), keep_case[ch][:, None])
+    for ch in chunks:
+        c0 = counts[ch][:, i0]
+        if np.any(c0 != np.round(c0)):
+            raise ValueError("thinning needs integer counts; pass raw counts, not a normalized matrix")
+        out[ch][:, i0] = rng.binomial(c0.astype(np.int64), keep_ctrl[ch][:, None])
     return out
+
+
+def _middle_mean(x: np.ndarray) -> np.ndarray:
+    """Row-wise interquartile mean by selection instead of a full sort.
+
+    The same middle **set** as :func:`midmean` — ``np.partition`` at the two
+    quartile bounds is exact selection — summed in a different order, so the
+    two agree to the last ulp of a mean rather than bitwise. The middle block
+    is copied contiguous before reducing: reductions over fresh C-contiguous
+    rows are independent of how many rows share the array (verified, and
+    pinned by ``tests/test_chunking.py``), which is what makes the fit's
+    per-side row subsets chunk-invariant.
+    """
+    x = np.ascontiguousarray(x)
+    n = x.shape[1]
+    lo, hi = n // 4, n - n // 4
+    part = np.partition(x, (lo, max(hi - 1, lo)), axis=1)
+    return np.ascontiguousarray(part[:, lo:hi]).mean(axis=1)
+
+
+def _fit_fold_change_alpha(counts, cond, alpha, *, seed, iters, max_log_fold,
+                           gene_chunk, backend="numpy"):
+    """The fit on a per-cell affine scale — ``docs/scaling.md`` §3.3, fix 2.
+
+    ``wade()``'s fold-change fit normalizes **without** the jitter, and
+    jitter-free ``tpm_like`` is exactly ``x[g, j] = counts[g, j] * alpha[g, j]``
+    with ``alpha = norm_factor / (normalizer * lib)`` fixed. So nothing needs
+    re-normalizing inside the bisection: the untouched group's interquartile
+    mean is computed once, and each step only redraws the thinned group and
+    multiplies by its alpha — half the binomial draws and no full-matrix
+    normalization, with the interquartile means read by selection rather than
+    a full sort.
+
+    Chunk-invariant like the general path: the two per-step streams are
+    consumed in gene order across chunks, each restricted to the genes whose
+    side it thins (a deterministic set, fixed before the loop).
+
+    ``backend="rust"`` runs the bisection in the compiled kernel — parallel
+    over genes, each gene's stream a function of ``(seed, global gene
+    index)`` alone, so equally chunk-invariant. **Not bitwise against the
+    NumPy path** (no two binomial samplers consume randomness alike), which
+    is why it is opt-in and never dispatched automatically: the realized
+    ``f`` for a given seed depends on the backend, and a backend must never
+    change an answer silently.
+    """
+    counts = np.asarray(counts, dtype=np.float64)
+    i1, i0 = split_groups(np.asarray(cond))
+    g, n = counts.shape
+    chunks = gene_chunks(g, gene_chunk)
+    if backend not in ("numpy", "rust"):
+        raise ValueError(f"fit backend must be 'numpy' or 'rust'; got {backend!r}")
+
+    up = np.empty(g, dtype=bool)
+    nothing = np.empty(g, dtype=bool)
+    m_static = np.empty(g)                         # the untouched group's midmean
+    for ch in chunks:
+        cc = counts[ch]
+        if np.any(cc != np.round(cc)):
+            raise ValueError("fit_fold_change needs integer counts; pass raw counts, not a normalized matrix")
+        a = alpha(ch)
+        # A zero library size makes its column's alpha infinite, so a zero
+        # count there scales to NaN — anticipated, and discarded with the top
+        # quarter by the selection (np.partition orders NaN last).
+        with np.errstate(invalid="ignore"):
+            m1 = _middle_mean(cc[:, i1] * a[:, i1])
+            m0 = _middle_mean(cc[:, i0] * a[:, i0])
+        u = m1 >= m0
+        up[ch] = u
+        nothing[ch] = (m1 == 0) & (m0 == 0)
+        m_static[ch] = np.where(u, m0, m1)
+
+    if backend == "rust":
+        from .permutation import _rust
+
+        if _rust is None:
+            raise RuntimeError(
+                "the compiled kernel is not available; build it with "
+                "`pip install -e .` (needs cargo/rustc), or use fit_backend='numpy'"
+            )
+        case_mask = np.zeros(n, dtype=bool)
+        case_mask[i1] = True
+        ctrl_mask = np.zeros(n, dtype=bool)
+        ctrl_mask[i0] = True
+        half = np.empty(g)
+        for ch in chunks:
+            active = np.where(up[ch][:, None], case_mask[None, :], ctrl_mask[None, :])
+            half[ch] = _rust.fit_bisect(
+                np.ascontiguousarray(counts[ch]), np.ascontiguousarray(alpha(ch)),
+                active, m_static[ch], int(seed), int(ch.start), int(iters),
+                float(max_log_fold))
+        f = np.exp(half)
+        f = np.where(nothing, 1.0, f)
+        return np.where(up, f, 1.0 / f)
+
+    lo = np.zeros(g)
+    hi = np.full(g, float(max_log_fold))
+    d = np.empty(g)
+    for _ in range(iters):
+        mid = 0.5 * (lo + hi)
+        keep = np.exp(-mid)
+        r_case = np.random.default_rng(seed)
+        r_ctrl = np.random.default_rng(seed)
+        for ch in chunks:
+            cc = counts[ch]
+            a = alpha(ch)
+            u = up[ch]
+            rows_up = np.flatnonzero(u)
+            rows_dn = np.flatnonzero(~u)
+            m_thin = np.empty(cc.shape[0])
+            with np.errstate(invalid="ignore"):        # 0 * inf on a dead sample
+                if rows_up.size:
+                    sub = np.ix_(rows_up, i1)
+                    t = r_case.binomial(cc[sub].astype(np.int64),
+                                        keep[ch][rows_up][:, None])
+                    m_thin[rows_up] = _middle_mean(t * a[sub])
+                if rows_dn.size:
+                    sub = np.ix_(rows_dn, i0)
+                    t = r_ctrl.binomial(cc[sub].astype(np.int64),
+                                        keep[ch][rows_dn][:, None])
+                    m_thin[rows_dn] = _middle_mean(t * a[sub])
+            # d is m1 - m0 after thinning, exactly as the general path forms it.
+            d[ch] = np.where(u, m_thin - m_static[ch], m_static[ch] - m_thin)
+        too_little = np.where(up, d > 0, d < 0)
+        lo = np.where(too_little, mid, lo)
+        hi = np.where(too_little, hi, mid)
+    f = np.exp(0.5 * (lo + hi))
+    f = np.where(nothing, 1.0, f)
+    return np.where(up, f, 1.0 / f)
 
 
 def fit_fold_change(
     counts: np.ndarray,
     cond: np.ndarray,
-    normalize,
+    normalize=None,
     *,
+    alpha=None,
     seed: int = 0,
     iters: int = 16,
     max_log_fold: float = MAX_LOG_FOLD,
+    gene_chunk: int | None = None,
+    backend: str = "numpy",
 ) -> np.ndarray:
     """Per gene, the thinning factor at which the two groups' interquartile
     means agree on the normalized scale.
@@ -123,37 +308,79 @@ def fit_fold_change(
     ``f`` up to the thinning algorithm's own discreteness, which sixteen
     halvings of a 10-bit range absorb.
 
+    ``gene_chunk`` bounds the working set to a few thousand genes at a time
+    (``docs/scaling.md`` §2.2) and is **bit-identical** to the unchunked fit:
+    within each bisection step the case draws and the control draws come from
+    two independent streams (both seeded with ``seed``, exactly as the
+    unchunked step's two fresh generators are), and each stream is consumed
+    across the chunks in gene order — the same order the full-matrix call
+    consumes it. When ``gene_chunk`` is given, ``normalize`` must accept a
+    second argument: the row slice being normalized, so a per-gene normalizer
+    can be subset to the chunk.
+
+    ``alpha`` — pass **exactly one** of ``normalize`` and ``alpha`` — is the
+    fast path for a normalization that is per-cell affine, which jitter-free
+    ``tpm_like`` is: a callable from a row slice to the ``(rows, samples)``
+    scale array, ``x = counts * alpha``. It fits the same objective several
+    times faster (``docs/scaling.md`` §3.3) by computing the untouched
+    group's interquartile mean once and redrawing only the thinned group, and
+    it is what :func:`wade.wade` uses; the ``normalize`` path remains for any
+    normalization that is not affine. The two paths agree to the resolution
+    of the bisection, not bitwise — the draws are laid out differently.
+
     Returns ``f`` with the convention of :func:`thin_counts`: ``f >= 1`` means
     cases are higher and get thinned by ``1/f``; ``f < 1`` means controls are
     higher and get thinned by ``f``. A gene whose two middles are both zero
     returns ``1``: nothing to correct, and nothing to say.
     """
+    if (normalize is None) == (alpha is None):
+        raise ValueError("pass exactly one of normalize= or alpha=")
+    if alpha is not None:
+        return _fit_fold_change_alpha(counts, cond, alpha, seed=seed, iters=iters,
+                                      max_log_fold=max_log_fold, gene_chunk=gene_chunk,
+                                      backend=backend)
+    if backend != "numpy":
+        raise ValueError("backend='rust' needs the alpha= path; the general "
+                         "normalize= objective has no kernel")
     counts = np.asarray(counts, dtype=np.float64)
     cond = np.asarray(cond)
-    if np.any(counts != np.round(counts)):
-        raise ValueError("fit_fold_change needs integer counts; pass raw counts, not a normalized matrix")
     i1, i0 = split_groups(cond)
-    g = counts.shape[0]
-    c = counts.astype(np.int64)
-    c1, c0 = c[:, i1], c[:, i0]
+    g, n = counts.shape
+    chunks = gene_chunks(g, gene_chunk)
+    if gene_chunk is None:
+        call_norm = lambda cc, rows: normalize(cc)       # noqa: E731 — old single-arg contract
+    else:
+        call_norm = normalize
 
-    x = normalize(counts)
-    m1, m0 = midmean(x[:, i1]), midmean(x[:, i0])
-    up = m1 >= m0                                        # which group gets thinned
-    nothing = (m1 == 0) & (m0 == 0)                      # both middles empty: f = 1
+    up = np.empty(g, dtype=bool)                         # which group gets thinned
+    nothing = np.empty(g, dtype=bool)                    # both middles empty: f = 1
+    for ch in chunks:
+        cc = counts[ch]
+        if np.any(cc != np.round(cc)):
+            raise ValueError("fit_fold_change needs integer counts; pass raw counts, not a normalized matrix")
+        x = call_norm(cc, ch)
+        m1, m0 = midmean(x[:, i1]), midmean(x[:, i0])
+        up[ch] = m1 >= m0
+        nothing[ch] = (m1 == 0) & (m0 == 0)
 
     lo = np.zeros(g)
     hi = np.full(g, float(max_log_fold))
-    thinned = counts.copy()
+    d = np.empty(g)
     for _ in range(iters):
         mid = 0.5 * (lo + hi)
-        keep = np.exp(-mid)[:, None]
-        r = np.random.default_rng(seed)
-        thinned[:, i1] = np.where(up[:, None], r.binomial(c1, keep), c1)
-        r = np.random.default_rng(seed)
-        thinned[:, i0] = np.where(up[:, None], c0, r.binomial(c0, keep))
-        xt = normalize(thinned)
-        d = midmean(xt[:, i1]) - midmean(xt[:, i0])
+        keep = np.exp(-mid)
+        r_case = np.random.default_rng(seed)
+        r_ctrl = np.random.default_rng(seed)
+        for ch in chunks:
+            c1 = counts[ch][:, i1].astype(np.int64)
+            c0 = counts[ch][:, i0].astype(np.int64)
+            keep_ch = keep[ch][:, None]
+            up_ch = up[ch][:, None]
+            thinned = np.empty((c1.shape[0], n), dtype=np.float64)
+            thinned[:, i1] = np.where(up_ch, r_case.binomial(c1, keep_ch), c1)
+            thinned[:, i0] = np.where(up_ch, c0, r_ctrl.binomial(c0, keep_ch))
+            xt = call_norm(thinned, ch)
+            d[ch] = midmean(xt[:, i1]) - midmean(xt[:, i0])
         too_little = np.where(up, d > 0, d < 0)          # still higher: thin more
         lo = np.where(too_little, mid, lo)
         hi = np.where(too_little, hi, mid)

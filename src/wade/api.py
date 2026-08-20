@@ -15,18 +15,27 @@ import numpy as np
 
 from . import normalize as _normalize
 from .io import Condition, as_counts, result_columns
-from .permutation import draw_perms, null_statistics, validate_perms
+from .permutation import (draw_perms, mean_diff_null, mean_diff_stat,
+                          null_statistics, validate_perms)
 from .pvalues import ALTERNATIVES, DEFAULT_N_EXC_MIN, DEFAULT_N_TAIL, bh_adjust, perm_pvalues
 from .stats import WadeStats, split_groups, wade_stats
 from .subset import SubsetResult, characterization_ci, subset_test
 from .thinning import fit_fold_change, one_count, thin_counts
 
-__all__ = ["WadeResult", "wade", "wade_from_matrix", "wade_contrast", "DEFAULT_NPERMS"]
+__all__ = ["WadeResult", "wade", "wade_from_matrix", "wade_contrast",
+           "DEFAULT_NPERMS", "DEFAULT_MAX_PROBS"]
 
 #: Permutations. Sets both the empirical p-value floor ``1/(B+1)`` and the
 #: GPD extrapolation floor ``1/(B * n_tail)``, so it changes every small
 #: p-value rather than only the runtime. Below 500 the refinement never fires.
 DEFAULT_NPERMS = 2000
+
+#: Cap on the quantile grid (``docs/method.md`` §1). Designs at or under
+#: 2,000 per group — every design the method was developed on — are
+#: untouched; above it the grid stops growing with the cohort and
+#: ``affected_fraction``'s resolution is ``1/max_probs``, faithful to a 0.1%
+#: subset at half this value (``docs/scaling.md`` §2.1).
+DEFAULT_MAX_PROBS = 2000
 
 
 @dataclass
@@ -119,11 +128,13 @@ class WadeResult:
 
     @property
     def nprobs(self) -> int:
-        """The quantile-grid resolution, ``min(n_case, n_ctrl)``.
+        """The realized quantile-grid resolution, ``min(n_case, n_ctrl, max_probs)``.
 
-        A property of the design, not a parameter: no argument raises it, and
-        it is the resolution limit on the affected fraction — nothing finer
-        than ``1/nprobs`` is estimable.
+        The resolution limit on the affected fraction — nothing finer than
+        ``1/nprobs`` is estimable. No argument raises it beyond the design's
+        ``min(n_case, n_ctrl)``; ``max_probs`` (``docs/method.md`` §1) can cap
+        it below that at large cohorts, and when it does, the cap and the
+        realized value are both recorded here and in the manifest.
         """
         return self.stats.nprobs
 
@@ -161,7 +172,8 @@ class WadeResult:
         from .diagnostics import wade_gene
         i = self.gene_index(gene)
         pc = None if self.pseudocount is None else self.pseudocount[i]
-        return wade_gene(self.tpm[i], self.cond, pseudocount=pc)
+        return wade_gene(self.tpm[i], self.cond, pseudocount=pc,
+                         max_probs=self.params.get("max_probs"))
 
     def columns(self) -> dict[str, np.ndarray]:
         """The result frame as a plain dict of equal-length arrays."""
@@ -216,6 +228,35 @@ class WadeResult:
         return result_columns(self)
 
 
+def _fit_alpha(normalizer, lib, norm_factor, n_samples):
+    """The fold-change fit's per-cell scale: jitter-free ``tpm_like`` is
+    exactly ``counts * alpha`` with ``alpha = norm_factor / (normalizer * lib)``,
+    served by row slice so a chunked fit never materializes more than a chunk."""
+    def alpha(rows=slice(None)):
+        nrm = normalizer[rows]
+        nrm = _normalize._broadcast_normalizer(nrm, (nrm.shape[0], n_samples))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return norm_factor / (nrm * lib[None, :])
+    return alpha
+
+
+def _validate_stage1(stage1: str, cond, fit_backend: str = "numpy") -> None:
+    if fit_backend not in ("numpy", "rust"):
+        raise ValueError(f"fit_backend must be 'numpy' or 'rust'; got {fit_backend!r}")
+    if stage1 not in ("grid", "gemm"):
+        raise ValueError(f"stage1 must be 'grid' or 'gemm'; got {stage1!r}")
+    if stage1 == "gemm":
+        cond = np.asarray(cond)
+        n1, n0 = int(np.sum(cond == 1)), int(np.sum(cond == 0))
+        if n1 != n0:
+            raise ValueError(
+                f"stage1='gemm' needs a balanced design: the mean-difference "
+                f"statistic equals the grid statistic only when the groups are "
+                f"equal-sized, and this design is {n1} v {n0}. Use the default "
+                f"stage1='grid' (docs/scaling.md §3.1)."
+            )
+
+
 def _resolve_gene_names(gene_names, g: int) -> np.ndarray:
     """Synthesize positional identifiers rather than drop the column."""
     if gene_names is None:
@@ -254,35 +295,36 @@ def _resolve_input(counts, normalizer, cond, gene_names, sample_names):
     return c, np.asarray(normalizer, dtype=np.float64), np.asarray(cond), meta
 
 
-def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
-         alternative, allow_single_sample_group, keep_null, gene_names,
-         backend, subset, jitter, tpm, pseudocount=None, corrected=None,
-         shift=None, n_boot=0, boot_rng=None, sample_names=None,
-         condition_meta=None) -> WadeResult:
-    cond = np.asarray(cond)
-    g = x.shape[0]
-    obs = wade_stats(x, cond, allow_single_sample_group=allow_single_sample_group)
+def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
+            alternative, keep_null, gene_names, tpm, jitter, pseudocount,
+            n_boot, sample_names, condition_meta, max_probs,
+            gene_chunk=None, stage1_stat=None, stage1="grid",
+            fit_backend="numpy") -> WadeResult:
+    """P-values, BH and the result object, from assembled per-gene arrays.
 
-    if nperms > 0:
-        if perms is None:
-            perms = draw_perms(cond, nperms, seed=seed, rng=perm_rng)
-        perms = validate_perms(perms, cond, nperms)
-        null = null_statistics(x, perms, backend=backend)
+    Shared by the one-pass path (:func:`_run`) and the gene-chunked driver
+    (:func:`_wade_chunked`), so the two cannot drift on anything downstream
+    of the per-gene statistics.
+
+    ``stage1_stat`` is the observed stage-1 vector when it is not the grid
+    quadrature — the ``stage1="gemm"`` exact mean difference — and it is then
+    both what the p-value compares against the null and what the result
+    reports as ``mean_shift``, because the two must be one statistic.
+    """
+    g = obs.mean_shift.shape[0]
+    stat = obs.mean_shift if stage1_stat is None else stage1_stat
+    if null is not None:
         p_mean, nexc, refined = perm_pvalues(
-            obs.mean_shift, null, n_exc_min=n_exc_min, n_tail=n_tail,
+            stat, null, n_exc_min=n_exc_min, n_tail=n_tail,
             alternative=alternative,
         )
     else:
-        perms = None
-        null = None
         p_mean = np.full(g, np.nan)
         nexc = np.zeros(g, dtype=np.int64)
         refined = np.zeros(g, dtype=bool)
 
-    sub = p_subset = padj_subset = None
-    if nperms > 0 and subset and obs.nprobs >= 3:
-        sub = subset_test(x, cond, perms, alternative=alternative, backend=backend,
-                          pseudocount=pseudocount, corrected=corrected, shift=shift)
+    p_subset = padj_subset = None
+    if sub is not None:
         # The subset statistic is already a maximum over widths, oriented by
         # `alternative` inside the scan, so its p-value is an upper-tail one.
         p_subset, _, _ = perm_pvalues(
@@ -294,13 +336,9 @@ def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
             from dataclasses import replace
             sub = replace(sub, null=None)
 
-    ci = {}
-    if n_boot > 0 and obs.nprobs >= 2:
-        ci = characterization_ci(x, cond, pseudocount=pseudocount, n_boot=n_boot, rng=boot_rng)
-
     return WadeResult(
         gene=_resolve_gene_names(gene_names, g),
-        mean_shift=obs.mean_shift, w1=obs.w1, fc=obs.fc, log2_fc=obs.log2_fc,
+        mean_shift=stat, w1=obs.w1, fc=obs.fc, log2_fc=obs.log2_fc,
         case_mean=obs.case_mean, ctrl_mean=obs.ctrl_mean,
         p_mean_shift=p_mean, padj_mean_shift=bh_adjust(p_mean),
         nexc_mean_shift=nexc, refined_mean_shift=refined,
@@ -313,9 +351,206 @@ def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
         ci_log2_fc=ci.get("log2_fc"),
         params=dict(nperms=nperms, seed=seed, alternative=alternative,
                     n_exc_min=n_exc_min, n_tail=n_tail,
-                    nprobs=obs.nprobs, n1=obs.n1, n0=obs.n0, n_boot=n_boot,
+                    nprobs=obs.nprobs, max_probs=max_probs, n1=obs.n1, n0=obs.n0,
+                    n_boot=n_boot, gene_chunk=gene_chunk, stage1=stage1,
+                    fit_backend=fit_backend,
                     correction=None if sub is None else sub.correction,
                     **(condition_meta or {})),
+    )
+
+
+def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
+         alternative, allow_single_sample_group, keep_null, gene_names,
+         backend, subset, jitter, tpm, pseudocount=None, corrected=None,
+         shift=None, n_boot=0, boot_rng=None, sample_names=None,
+         condition_meta=None, max_probs=None, stage1="grid",
+         fit_backend="numpy") -> WadeResult:
+    cond = np.asarray(cond)
+    obs = wade_stats(x, cond, allow_single_sample_group=allow_single_sample_group,
+                     max_probs=max_probs)
+    stage1_stat = mean_diff_stat(x, cond) if stage1 == "gemm" else None
+
+    if nperms > 0:
+        if perms is None:
+            perms = draw_perms(cond, nperms, seed=seed, rng=perm_rng)
+        perms = validate_perms(perms, cond, nperms)
+        null = (mean_diff_null(x, perms) if stage1 == "gemm"
+                else null_statistics(x, perms, backend=backend, max_probs=max_probs))
+    else:
+        perms = None
+        null = None
+
+    sub = None
+    if nperms > 0 and subset and obs.nprobs >= 3:
+        sub = subset_test(x, cond, perms, alternative=alternative, backend=backend,
+                          pseudocount=pseudocount, corrected=corrected, shift=shift,
+                          max_probs=max_probs)
+
+    ci = {}
+    if n_boot > 0 and obs.nprobs >= 2:
+        ci = characterization_ci(x, cond, pseudocount=pseudocount, n_boot=n_boot,
+                                 rng=boot_rng, max_probs=max_probs)
+
+    return _finish(
+        obs=obs, null=null, perms=perms, sub=sub, ci=ci, cond=cond,
+        nperms=nperms, seed=seed, n_exc_min=n_exc_min, n_tail=n_tail,
+        alternative=alternative, keep_null=keep_null, gene_names=gene_names,
+        tpm=tpm, jitter=jitter, pseudocount=pseudocount, n_boot=n_boot,
+        sample_names=sample_names, condition_meta=condition_meta,
+        max_probs=max_probs, stage1_stat=stage1_stat, stage1=stage1,
+        fit_backend=fit_backend,
+    )
+
+
+def _concat_stats(parts: list[WadeStats]) -> WadeStats:
+    first = parts[0]
+    if len(parts) == 1:
+        return first
+    cat = lambda name: np.concatenate([getattr(p, name) for p in parts], axis=0)  # noqa: E731
+    return WadeStats(
+        q=first.q, nprobs=first.nprobs, n1=first.n1, n0=first.n0,
+        Q1=cat("Q1"), Q0=cat("Q0"), D=cat("D"),
+        mean_shift=cat("mean_shift"), w1=cat("w1"), fc=cat("fc"),
+        case_mean=cat("case_mean"), ctrl_mean=cat("ctrl_mean"),
+    )
+
+
+def _concat_subsets(parts: list[SubsetResult]) -> SubsetResult:
+    first = parts[0]
+    if len(parts) == 1:
+        return first
+    cat = lambda name: np.concatenate([getattr(p, name) for p in parts], axis=0)  # noqa: E731
+    return SubsetResult(
+        statistic=cat("statistic"), null=cat("null"), r=cat("r"), b=cat("b"),
+        affected_fraction=cat("affected_fraction"), direction=cat("direction"),
+        argmax_k=cat("argmax_k"), shift=cat("shift"), r_test=cat("r_test"),
+        correction=first.correction,
+    )
+
+
+def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
+                  nperms, perms, seed, perm_rng, thin_rng, boot_rng,
+                  n_exc_min, n_tail, alternative, allow_single_sample_group,
+                  keep_null, gene_names, backend, subset, thin, pseudocount,
+                  n_boot, sample_names, condition_meta, max_probs,
+                  gene_chunk, stage1="grid", fit_backend="numpy") -> WadeResult:
+    """The gene-chunked driver — ``docs/scaling.md`` §2.2.
+
+    **Bit-identical to the unchunked path**, by construction rather than by
+    tolerance, and pinned by ``tests/test_chunking.py``:
+
+    * the jitter is drawn once for the whole matrix and *indexed* per chunk;
+    * library sizes are one full-matrix pass, fixed before any chunking;
+    * the fold-change fit and the thinning consume their random streams in
+      gene order across chunks (see :func:`wade.thinning.fit_fold_change` and
+      :func:`wade.thinning.thin_counts` for how);
+    * everything else — normalization, the observed statistics, both
+      permutation nulls, the bootstrap — is per-gene arithmetic on shared
+      permutations, so chunk boundaries cannot reach it.
+
+    Peak memory is the handful of full ``genes x samples`` residents (counts,
+    jitter, ``tpm``, the pseudocount, the thinned counts as int32) plus a few
+    chunk-sized transients, instead of the ~8 full-matrix transients of the
+    one-pass path.
+    """
+    from .quantiles import capped_nprobs
+    from .thinning import gene_chunks
+
+    g, n = counts.shape
+    chunks = gene_chunks(g, gene_chunk)
+    i1, i0 = split_groups(cond)
+    m_real = capped_nprobs(i1.size, i0.size, max_probs)
+
+    def normalize_chunk(c, rows, jit):
+        return _normalize.tpm_like(c, normalizer[rows], lib, noise=noise,
+                                   norm_factor=norm_factor, jitter=jit)
+
+    # The count-native shift correction runs before the chunk loop: its two
+    # random streams are consumed in gene order across chunks, and the
+    # thinned matrix is held as int32 (counts are integers, so the values
+    # are exact) at half the footprint of a float64 resident.
+    shift = thinned = None
+    if thin and nperms > 0 and subset and min(i1.size, i0.size) >= 3:
+        c_int = np.round(counts)
+        shift = fit_fold_change(c_int, cond,
+                                alpha=_fit_alpha(normalizer, lib, norm_factor, n),
+                                seed=int(thin_rng.integers(2**31)),
+                                gene_chunk=gene_chunk, backend=fit_backend)
+        # The guard tests the *rounded* values (what the buffer will hold —
+        # an unrounded 2**31 - 0.4 rounds past int32) and tolerates an empty
+        # matrix via `initial`.
+        dtype = (np.int32 if c_int.max(initial=0.0) <= np.iinfo(np.int32).max
+                 else np.float64)
+        thinned = np.empty(counts.shape, dtype=dtype)
+        thin_counts(c_int, cond, shift, thin_rng, gene_chunk=gene_chunk,
+                    out=thinned)
+        del c_int
+
+    pc_full = (one_count(normalizer, lib, counts.shape, norm_factor=norm_factor)
+               * pseudocount if pseudocount > 0 else None)
+
+    if nperms > 0:
+        if perms is None:
+            perms = draw_perms(cond, nperms, seed=seed, rng=perm_rng)
+        perms = validate_perms(perms, cond, nperms)
+    else:
+        perms = None
+    do_subset = nperms > 0 and subset and m_real >= 3
+
+    W_null = w_obs = stage1_stat = None
+    if stage1 == "gemm":
+        from .permutation import _mean_diff_weights
+        w_obs = _mean_diff_weights(cond)
+        stage1_stat = np.empty(g, dtype=np.float64)
+        if perms is not None:
+            W_null = np.ascontiguousarray(_mean_diff_weights(perms).T)
+
+    tpm = np.empty((g, n), dtype=np.float64)
+    null = np.empty((g, nperms), dtype=np.float64) if nperms > 0 else None
+    stats_parts: list[WadeStats] = []
+    sub_parts: list[SubsetResult] = []
+    for ch in chunks:
+        jit = jitter[ch]
+        x_ch = normalize_chunk(counts[ch], ch, jit)
+        tpm[ch] = x_ch
+        stats_parts.append(wade_stats(
+            x_ch, cond, allow_single_sample_group=allow_single_sample_group,
+            max_probs=max_probs))
+        if stage1 == "gemm":
+            stage1_stat[ch] = x_ch @ w_obs
+            if W_null is not None:
+                null[ch] = x_ch @ W_null
+        elif nperms > 0:
+            null[ch] = null_statistics(x_ch, perms, backend=backend,
+                                       max_probs=max_probs)
+        if do_subset:
+            pc_ch = None if pc_full is None else pc_full[ch]
+            corrected_ch = shift_ch = None
+            if thinned is not None:
+                corrected_ch = normalize_chunk(
+                    np.asarray(thinned[ch], dtype=np.float64), ch, jit)
+                shift_ch = shift[ch]
+            sub_parts.append(subset_test(
+                x_ch, cond, perms, alternative=alternative, backend=backend,
+                pseudocount=pc_ch, corrected=corrected_ch, shift=shift_ch,
+                max_probs=max_probs))
+    obs = _concat_stats(stats_parts)
+    sub = _concat_subsets(sub_parts) if do_subset else None
+
+    ci = {}
+    if n_boot > 0 and obs.nprobs >= 2:
+        ci = characterization_ci(tpm, cond, pseudocount=pc_full, n_boot=n_boot,
+                                 rng=boot_rng, max_probs=max_probs,
+                                 gene_chunk=gene_chunk)
+
+    return _finish(
+        obs=obs, null=null, perms=perms, sub=sub, ci=ci, cond=cond,
+        nperms=nperms, seed=seed, n_exc_min=n_exc_min, n_tail=n_tail,
+        alternative=alternative, keep_null=keep_null, gene_names=gene_names,
+        tpm=tpm, jitter=jitter, pseudocount=pc_full, n_boot=n_boot,
+        sample_names=sample_names, condition_meta=condition_meta,
+        max_probs=max_probs, gene_chunk=gene_chunk,
+        stage1_stat=stage1_stat, stage1=stage1, fit_backend=fit_backend,
     )
 
 
@@ -343,6 +578,10 @@ def wade(
     pseudocount: float = 1.0,
     n_boot: int = 0,
     sample_names=None,
+    max_probs: int | None = DEFAULT_MAX_PROBS,
+    gene_chunk: int | None = None,
+    stage1: str = "grid",
+    fit_backend: str = "numpy",
 ) -> WadeResult:
     """Run WADE on a raw count matrix. The primary entry point.
 
@@ -393,6 +632,43 @@ def wade(
         ``direction`` and ``log2_fc`` (``§10.5``); ``0`` (default) skips them.
         Resampled within groups. A few hundred is enough; the cost is a few
         quantile grids per replicate.
+    max_probs
+        Cap on the quantile grid (``docs/method.md`` §1). The realized grid is
+        ``min(n_case, n_ctrl, max_probs)``, reported as ``result.nprobs`` and
+        recorded in the manifest. Designs at or under the default 2,000 per
+        group are untouched; above it the cap bounds every per-gene array and
+        sets ``affected_fraction``'s resolution to ``1/max_probs`` — keep
+        ``max_probs >= 2.5 / (smallest fraction of interest)``. ``None``
+        removes the cap.
+    gene_chunk
+        Process the genes in blocks of this many, so peak memory stops
+        depending on the number of genes (``docs/scaling.md`` §2.2). **Not a
+        numerical choice**: the chunked run is bit-identical to the unchunked
+        one — the jitter is indexed, never redrawn, and every random stream
+        is consumed in gene order across chunks. A few thousand is a good
+        block; ``None`` (default) processes the whole matrix at once.
+    stage1
+        How the stage-1 statistic and its null are computed. ``"grid"`` (the
+        default) is the quantile-grid quadrature, parity-pinned against the R
+        reference. ``"gemm"`` — **balanced designs only** — computes the
+        statistic as the exact difference of group means and the entire null
+        as one matrix product (``docs/scaling.md`` §3.1; measured 139–185×
+        faster at large n). On a balanced, uncapped design the two agree to
+        ~1e-9 relative — not bitwise, because BLAS reassociates — and under a
+        ``max_probs`` cap the GEMM statistic is arguably the better number:
+        it is the exact mean difference where the capped quadrature drifts.
+        ``result.mean_shift`` then reports the statistic the p-value actually
+        tested; the grid quadrature stays available as
+        ``result.stats.mean_shift``. Stage 2 is unaffected either way.
+    fit_backend
+        ``"numpy"`` (default) or ``"rust"`` for the fold-change fit's
+        bisection (``docs/scaling.md`` §3.3). **Opt-in, and unlike**
+        ``backend`` **it changes the realized fit**: no two binomial samplers
+        consume randomness alike, so the fitted fold changes for a given seed
+        differ between the two at the resolution of the bisection — which is
+        why the kernel is never dispatched automatically. Both are
+        deterministic given the seed and chunk-invariant; the kernel is
+        parallel over genes and several times faster.
     """
     data, normalizer, cond, cond_meta = _resolve_input(
         counts, normalizer, cond, gene_names, sample_names)
@@ -407,6 +683,7 @@ def wade(
     if pseudocount < 0:
         raise ValueError(f"pseudocount must be non-negative, got {pseudocount}")
     split_groups(cond)
+    _validate_stage1(stage1, cond, fit_backend)
 
     # Four independent streams from one seed: jitter, permutations, thinning,
     # bootstrap. Spawned children are deterministic by index, so adding the
@@ -421,23 +698,36 @@ def wade(
     if jitter is None:
         jitter = _normalize.draw_jitter(counts.shape, noise=noise, rng=jitter_rng)
     else:
-        jitter = np.asarray(jitter, dtype=np.float64)
+        # Validated here, against the full matrix, so both drivers refuse a
+        # mis-shaped jitter identically — the chunked driver only ever hands
+        # tpm_like row slices, which would let a wrong shape through.
+        jitter = _normalize._resolve_jitter(jitter, counts.shape, noise, None, None)
 
     # Library sizes are fixed from the original counts and reused for every
     # thinned matrix: thinning one gene is a counterfactual about that gene,
-    # not about the library.
+    # not about the library. Computed on the full matrix in both drivers —
+    # a column sum's association depends on how it is blocked, so chunking
+    # it would move every normalized value by an ulp.
     lib = (_normalize.library_sizes(counts, normalizer) if lib_sizes is None
            else np.asarray(lib_sizes, dtype=np.float64))
+
+    if gene_chunk is not None:
+        return _wade_chunked(
+            counts=counts, normalizer=normalizer, cond=cond, lib=lib,
+            jitter=jitter, noise=noise, norm_factor=norm_factor,
+            nperms=nperms, perms=perms, seed=seed, perm_rng=perm_rng,
+            thin_rng=thin_rng, boot_rng=boot_rng, n_exc_min=n_exc_min,
+            n_tail=n_tail, alternative=alternative,
+            allow_single_sample_group=allow_single_sample_group,
+            keep_null=keep_null, gene_names=gene_names, backend=backend,
+            subset=subset, thin=thin, pseudocount=pseudocount, n_boot=n_boot,
+            sample_names=sample_names, condition_meta=cond_meta,
+            max_probs=max_probs, gene_chunk=gene_chunk, stage1=stage1,
+            fit_backend=fit_backend)
+
     normalize = lambda c: _normalize.tpm_like(  # noqa: E731
         c, normalizer, lib, noise=noise, norm_factor=norm_factor, jitter=jitter)
     tpm = normalize(counts)
-    # The fold-change fit compares the groups' middles on the normalized scale
-    # *without* the jitter: a hundredth of a count has no business in a
-    # fold-change estimate, and on an all-zero gene it would otherwise decide
-    # which group is "higher" and keep deciding it at every bisection step.
-    no_jitter = np.zeros(counts.shape)
-    normalize_for_fit = lambda c: _normalize.tpm_like(  # noqa: E731
-        c, normalizer, lib, noise=noise, norm_factor=norm_factor, jitter=no_jitter)
 
     pc = one_count(normalizer, lib, counts.shape, norm_factor=norm_factor) * pseudocount \
         if pseudocount > 0 else None
@@ -448,8 +738,18 @@ def wade(
         # (salmon, kallisto) are not integers; they are rounded for the
         # thinning only — the observed matrix and the characterization use
         # the values as given.
+        # The fit compares the groups' middles on the normalized scale
+        # *without* the jitter (a hundredth of a count has no business in a
+        # fold-change estimate, and on an all-zero gene it would decide which
+        # group is "higher" at every bisection step) — and jitter-free
+        # normalization is per-cell affine, so the fit takes the scale
+        # directly (docs/scaling.md §3.3).
         c_int = np.round(counts)
-        shift = fit_fold_change(c_int, cond, normalize_for_fit, seed=int(thin_rng.integers(2**31)))
+        shift = fit_fold_change(c_int, cond,
+                                alpha=_fit_alpha(normalizer, lib, norm_factor,
+                                                 counts.shape[1]),
+                                seed=int(thin_rng.integers(2**31)),
+                                backend=fit_backend)
         corrected = normalize(thin_counts(c_int, cond, shift, thin_rng))
 
     return _run(
@@ -459,7 +759,8 @@ def wade(
         gene_names=gene_names, backend=backend, subset=subset,
         jitter=jitter, tpm=tpm, pseudocount=pc, corrected=corrected, shift=shift,
         n_boot=n_boot, boot_rng=boot_rng, sample_names=sample_names,
-        condition_meta=cond_meta,
+        condition_meta=cond_meta, max_probs=max_probs, stage1=stage1,
+        fit_backend=fit_backend,
     )
 
 
@@ -481,6 +782,8 @@ def wade_from_matrix(
     pseudocount: float = 0.0,
     n_boot: int = 0,
     sample_names=None,
+    max_probs: int | None = DEFAULT_MAX_PROBS,
+    stage1: str = "grid",
 ) -> WadeResult:
     """Run WADE on a matrix that is **already on a comparable scale**.
 
@@ -510,6 +813,7 @@ def wade_from_matrix(
     if alternative not in ALTERNATIVES:
         raise ValueError(f"alternative must be one of {ALTERNATIVES}; got {alternative!r}")
     split_groups(cond)
+    _validate_stage1(stage1, cond)
     if pseudocount < 0:
         raise ValueError(f"pseudocount must be non-negative, got {pseudocount}")
     if seed is None:
@@ -525,7 +829,7 @@ def wade_from_matrix(
         gene_names=gene_names, backend=backend, subset=subset,
         jitter=np.zeros_like(x), tpm=x, pseudocount=pc,
         n_boot=n_boot, boot_rng=boot_rng, sample_names=sample_names,
-        condition_meta=cond_meta,
+        condition_meta=cond_meta, max_probs=max_probs, stage1=stage1,
     )
 
 

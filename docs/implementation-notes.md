@@ -277,11 +277,15 @@ Boundary decisions:
   hot loop at the cost of two definitions that must agree — held to bitwise
   equality by a dedicated test across group sizes 1–34 and three data regimes.
 - **Summation is sequential**, matching R (§2.6).
-- **Parallel across permutations** with rayon, which changes nothing
-  numerically: each permutation's arithmetic is self-contained.
+- **Parallel across genes** with rayon (originally across permutations;
+  redesigned 2026-08-20 to the subset kernel's one-sort-per-gene layout below,
+  6–7.5× on top of the original at large `n`, outputs bitwise unchanged —
+  same quantile arithmetic through precomputed type-7 plans, same sequential
+  grid summation). It now returns gene-major directly; the Python-side
+  transpose is gone.
 
-Measured, 16 threads: 18–22× the NumPy path, and null matrices **bitwise
-identical to R** on every permutation scenario.
+Measured, 16 threads (original design): 18–22× the NumPy path, and null
+matrices **bitwise identical to R** on every permutation scenario.
 
 | scale | NumPy | Rust |
 |---|---|---|
@@ -322,7 +326,18 @@ kernel is about 11× the NumPy path per thread before parallelism.
 **Memory is the unsolved half.** The null is always materialized: peak RSS
 tracks `g · B · 8` bytes plus overhead. `keep_null` controls retention, not
 construction. A streaming path needs two passes anyway, because the GPD needs
-full null vectors for refined genes.
+full null vectors for refined genes. (The rest of the memory story — the
+grid cap and the bit-identical gene chunking — is `docs/scaling.md` §2.)
+
+**A third kernel breaks the bitwise rule, and says so** (`fit_bisect`,
+2026-08-20): the fold-change fit's bisection, parallel over genes, each
+gene's stream a pure function of `(seed, global gene index)` — deterministic
+and chunk-invariant, but **not bitwise against the NumPy fit**, because no
+two binomial samplers consume randomness alike. That is why it is opt-in
+(`fit_backend="rust"`) and never auto-dispatched, unlike the two permutation
+kernels: `backend="auto"` must never let the machine choose the answer. It
+is held to the NumPy path statistically instead (`tests/test_fit_kernel.py`;
+`docs/scaling.md` §3.3).
 
 ---
 

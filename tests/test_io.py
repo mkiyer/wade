@@ -338,7 +338,8 @@ def test_write_results_writes_a_manifest_beside_the_table(result, tmp_path):
     assert man["run"]["nperms"] == 100 and man["run"]["seed"] == 1
     assert man["run"]["correction"] == "thinning" and man["run"]["n_boot"] == 20
     assert man["design"] == {"n_genes": G, "n_case": N // 2, "n_ctrl": N // 2,
-                             "nprobs": N // 2, "case_label": None,
+                             "nprobs": N // 2, "max_probs": wade.DEFAULT_MAX_PROBS,
+                             "case_label": None,
                              "control_label": None, "condition_column": None}
     assert man["results"]["alpha"] == 0.05
     assert "n_significant_subset" in man["results"]

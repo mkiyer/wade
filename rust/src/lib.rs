@@ -45,9 +45,12 @@
 //!   matrices bitwise identical. Do not replace these loops with anything
 //!   that reassociates.
 //!
-//! Permutations are independent, so the loop is parallelized across them
-//! with rayon. That changes nothing numerically: each permutation's
-//! arithmetic is self-contained and no accumulation crosses iterations.
+//! Both kernels are parallelized across **genes** with rayon, because both
+//! sort each gene's row once and re-partition it per permutation (see the
+//! subset kernel's notes below — the mean-shift kernel adopted the same
+//! design 2026-08-20, ~10× over its original permutation-major loop). That
+//! changes nothing numerically: each gene's arithmetic is self-contained
+//! and no accumulation crosses threads.
 //!
 //! # The second kernel: the subset test
 //!
@@ -80,13 +83,15 @@
 //!   whose `log2` was computed once when the row was sorted, and because
 //!   `log2` is monotone the group's sorted logs are the logs of its sorted
 //!   values elementwise. Only where interpolation fires is `log2` called, on
-//!   the interpolated value, exactly as the NumPy path does. The grid has
-//!   `m = min(n1, n0)` nodes, so the smaller group's nodes land on its order
+//!   the interpolated value, exactly as the NumPy path does. On the full
+//!   grid, `m = min(n1, n0)`, the smaller group's nodes land on its order
 //!   statistics and need no `log2` (bar the handful where NumPy's `linspace`
 //!   puts the node an ulp off an integer); on a balanced design that is both
 //!   groups, and on an unbalanced one only the larger group's nodes
-//!   interpolate. Either way the inputs to `log2` are the same as the NumPy
-//!   path's, so the outputs are the same bits.
+//!   interpolate. A grid capped below the design (`max_probs`,
+//!   `docs/method.md` §1) interpolates more nodes and saves fewer calls, but
+//!   either way the inputs to `log2` are the same as the NumPy path's, so
+//!   the outputs are the same bits.
 //!
 //! Everything else — the type-7 guard, the sequential cumulative sum, the
 //! `k/m` division before the multiplication, the `±0.0` that an unusable
@@ -140,62 +145,79 @@ fn sort_ascending(buf: &mut [f64]) {
     buf.sort_unstable_by(|a, b| a.partial_cmp(b).expect("non-finite value in kernel input"));
 }
 
-fn one_permutation(
-    x: &ArrayView2<'_, f64>,
-    labels: &[i64],
-    probs: &[f64],
-    idx1: &mut Vec<usize>,
-    idx0: &mut Vec<usize>,
-    buf1: &mut Vec<f64>,
-    buf0: &mut Vec<f64>,
-    q1: &mut Vec<f64>,
-    q0: &mut Vec<f64>,
-    out: &mut [f64],
+/// The mean-shift statistics of one gene under every permutation.
+///
+/// One sort per gene, not one per permutation per group: a permutation only
+/// re-partitions the same values, so the row is sorted once and each
+/// permutation's two sorted groups fall out of a single O(n) two-ended
+/// partition walk — the same trick, and the same buffer layout, as
+/// [`gene_bridge`] in the subset kernel (cases fill `part` from the front
+/// ascending, controls from the back descending, and the two [`Type7Plan`]s
+/// know where their group sits). Ties are equal values, so the partition
+/// reads exactly what per-permutation sorts would.
+///
+/// The quantile arithmetic is [`type7_sorted`]'s term for term (the plans
+/// store the same `lo`/`hi`/`h`), and the accumulation over the grid is
+/// sequential left to right, so the outputs are bitwise what the
+/// permutation-major kernel produced.
+#[allow(clippy::too_many_arguments)]
+fn one_gene_mean_shift(
+    row: &[f64],
+    masks: &[u8],
+    plan1: &Type7Plan,
+    plan0: &Type7Plan,
+    order: &mut [usize],
+    sorted: &mut [f64],
+    part: &mut [f64],
+    out_row: &mut [f64],
 ) {
-    idx1.clear();
-    idx0.clear();
-    for (j, &lab) in labels.iter().enumerate() {
-        if lab == 1 {
-            idx1.push(j);
-        } else if lab == 0 {
-            idx0.push(j);
-        }
+    let n = row.len();
+    let m = plan1.h.len();
+    for (i, slot) in order.iter_mut().enumerate() {
+        *slot = i;
+    }
+    order.sort_unstable_by(|&a, &b| {
+        row[a].partial_cmp(&row[b]).expect("non-finite value in kernel input")
+    });
+    for i in 0..n {
+        sorted[i] = row[order[i]];
     }
 
-    let nprobs = probs.len();
-    buf1.resize(idx1.len(), 0.0);
-    buf0.resize(idx0.len(), 0.0);
-    q1.resize(nprobs, 0.0);
-    q0.resize(nprobs, 0.0);
-
-    for gene in 0..x.nrows() {
-        let row = x.row(gene);
-        for (slot, &j) in buf1.iter_mut().zip(idx1.iter()) {
-            *slot = row[j];
+    for (b, slot) in out_row.iter_mut().enumerate() {
+        let mask = &masks[b * n..(b + 1) * n];
+        let mut front = 0usize;
+        let mut back = n;
+        for i in 0..n {
+            let c = (mask[order[i]] == 1) as usize;
+            back -= 1 - c;
+            let pos = c * front + (1 - c) * back;
+            part[pos] = sorted[i];
+            front += c;
         }
-        for (slot, &j) in buf0.iter_mut().zip(idx0.iter()) {
-            *slot = row[j];
-        }
-        sort_ascending(buf1);
-        sort_ascending(buf0);
-        type7_sorted(buf1, probs, q1);
-        type7_sorted(buf0, probs, q0);
+        debug_assert_eq!(front, back);
 
         // Sequential accumulation, matching R's rowSums association.
         let mut total = 0.0_f64;
-        for i in 0..nprobs {
-            total += q1[i] - q0[i];
+        for k in 0..m {
+            let a1 = part[plan1.lo[k]];
+            let b1 = part[plan1.hi[k]];
+            let h1 = plan1.h[k];
+            let q1 = if h1 > 0.0 && b1 != a1 { (1.0 - h1) * a1 + h1 * b1 } else { a1 };
+            let a0 = part[plan0.lo[k]];
+            let b0 = part[plan0.hi[k]];
+            let h0 = plan0.h[k];
+            let q0 = if h0 > 0.0 && b0 != a0 { (1.0 - h0) * a0 + h0 * b0 } else { a0 };
+            total += q1 - q0;
         }
-        out[gene] = total / nprobs as f64;
+        *slot = total / m as f64;
     }
 }
 
 /// The mean-shift null for a supplied set of label permutations.
 ///
-/// Returns a `(n_perms, n_genes)` matrix. The Python wrapper transposes it to
-/// the `(genes, permutations)` orientation the rest of the package uses;
-/// transposing a view is free, and building permutation-major here keeps each
-/// permutation's writes contiguous, which is what makes the parallel loop cheap.
+/// Returns the `(n_genes, n_perms)` matrix directly — the kernel is parallel
+/// over genes (each gene sorts its row once and walks every permutation), so
+/// gene-major writes are the contiguous ones.
 #[pyfunction]
 fn null_statistics<'py>(
     py: Python<'py>,
@@ -222,6 +244,9 @@ fn null_statistics<'py>(
     if nprobs == 0 {
         return Err(PyValueError::new_err("probs must be non-empty"));
     }
+    if !probs_slice.iter().all(|p| p.is_finite() && (0.0..=1.0).contains(p)) {
+        return Err(PyValueError::new_err("probs must be finite and within [0, 1]"));
+    }
     if !xv.iter().all(|v| v.is_finite()) {
         return Err(PyValueError::new_err(
             "the normalized matrix contains non-finite values",
@@ -229,15 +254,22 @@ fn null_statistics<'py>(
     }
 
     // Group sizes are preserved by label exchange, so nprobs is a constant of
-    // the run. Verified rather than assumed: a malformed matrix would
-    // otherwise index past the end of a quantile buffer.
+    // the run. The grid may be *capped* below min(n1, n0) (`max_probs`,
+    // docs/method.md §1) but never exceeds it: a denser-than-design grid is
+    // never produced by WADE and signals a caller bug.
+    let mut n1 = 0usize;
+    let mut n0 = 0usize;
+    let mut masks = vec![0u8; n_perms * n];
     for (b, row) in pv.rows().into_iter().enumerate() {
-        let mut n1 = 0usize;
-        let mut n0 = 0usize;
-        for &lab in row.iter() {
+        let mut r1 = 0usize;
+        let mut r0 = 0usize;
+        for (j, &lab) in row.iter().enumerate() {
             match lab {
-                1 => n1 += 1,
-                0 => n0 += 1,
+                1 => {
+                    r1 += 1;
+                    masks[b * n + j] = 1;
+                }
+                0 => r0 += 1,
                 other => {
                     return Err(PyValueError::new_err(format!(
                         "perms must contain only 0 and 1; row {} has {}",
@@ -246,40 +278,52 @@ fn null_statistics<'py>(
                 }
             }
         }
-        if n1.min(n0) != nprobs {
+        if b == 0 {
+            n1 = r1;
+            n0 = r0;
+        } else if r1 != n1 || r0 != n0 {
             return Err(PyValueError::new_err(format!(
-                "permutation row {} gives min(n1, n0) = {} but probs has {} entries",
+                "permutation row {} has group sizes (n1, n0) = ({}, {}) but row 0 has \
+                 ({}, {}); label exchange preserves the group sizes",
+                b, r1, r0, n1, n0
+            )));
+        }
+        if r1.min(r0) < nprobs {
+            return Err(PyValueError::new_err(format!(
+                "permutation row {} gives min(n1, n0) = {} but probs has {} entries; \
+                 the grid may be capped below the design but never above it",
                 b,
-                n1.min(n0),
+                r1.min(r0),
                 nprobs
             )));
         }
     }
+    if n1 == 0 || n0 == 0 {
+        return Err(PyValueError::new_err("both groups must be non-empty"));
+    }
 
-    let mut out = vec![0.0_f64; n_perms * g];
+    let plan1 = Type7Plan::new(n1, &probs_slice, 0, false);
+    let plan0 = Type7Plan::new(n0, &probs_slice, n1, true);
+
+    let mut out = vec![0.0_f64; g * n_perms];
 
     py.detach(|| {
-        let labels: Vec<Vec<i64>> = pv
-            .rows()
-            .into_iter()
-            .map(|r| r.iter().copied().collect())
-            .collect();
-
-        out.par_chunks_mut(g).enumerate().for_each(|(b, chunk)| {
-            let mut idx1 = Vec::with_capacity(n);
-            let mut idx0 = Vec::with_capacity(n);
-            let mut buf1 = Vec::with_capacity(n);
-            let mut buf0 = Vec::with_capacity(n);
-            let mut q1 = Vec::with_capacity(nprobs);
-            let mut q0 = Vec::with_capacity(nprobs);
-            one_permutation(
-                &xv, &labels[b], &probs_slice, &mut idx1, &mut idx0, &mut buf1,
-                &mut buf0, &mut q1, &mut q0, chunk,
-            );
-        });
+        out.par_chunks_mut(n_perms).enumerate().for_each_init(
+            || (vec![0usize; n], vec![0.0_f64; n], vec![0.0_f64; n], vec![0.0_f64; n]),
+            |(order, sorted, part, row_buf), (gene, out_row)| {
+                // Copy through a buffer so the hot loop sees a contiguous
+                // slice whatever the input strides.
+                for (slot, v) in row_buf.iter_mut().zip(xv.row(gene).iter()) {
+                    *slot = *v;
+                }
+                one_gene_mean_shift(
+                    row_buf, &masks, &plan1, &plan0, order, sorted, part, out_row,
+                );
+            },
+        );
     });
 
-    let arr = Array2::from_shape_vec((n_perms, g), out)
+    let arr = Array2::from_shape_vec((g, n_perms), out)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(arr.into_pyarray(py))
 }
@@ -783,9 +827,10 @@ fn subset_null<'py>(
                 b, r1, r0, n1, n0
             )));
         }
-        if r1.min(r0) != m {
+        if r1.min(r0) < m {
             return Err(PyValueError::new_err(format!(
-                "permutation row {} gives min(n1, n0) = {} but probs has {} entries",
+                "permutation row {} gives min(n1, n0) = {} but probs has {} entries; \
+                 the grid may be capped below the design but never above it",
                 b,
                 r1.min(r0),
                 m
@@ -851,10 +896,183 @@ fn subset_null<'py>(
     ))
 }
 
+// ---------------------------------------------------------------------
+// The fold-change fit
+// ---------------------------------------------------------------------
+
+/// Mean of the middle half of `buf` (positions `n/4 .. n - n/4` of the
+/// sorted order), by selection: pin the upper quartile bound over the whole
+/// buffer, then the lower bound within the left partition, and sum what
+/// lies between. The same middle set `_middle_mean` selects on the NumPy
+/// side; the sum order differs, which is within the fit paths' documented
+/// tolerance (they already differ through the draws).
+///
+/// `total_cmp`, not `partial_cmp`: a sample with a zero library size gives
+/// that column an infinite `alpha`, so its zero counts scale to NaN — an
+/// input the NumPy path tolerates because `np.partition` orders NaN last.
+/// `total_cmp` orders NaN last the same way, so such a column falls in the
+/// discarded top quarter exactly as it does on the NumPy side instead of
+/// panicking the rayon workers.
+#[inline]
+fn middle_mean(buf: &mut [f64]) -> f64 {
+    let n = buf.len();
+    let lo = n / 4;
+    let hi = n - n / 4;
+    if hi < n {
+        buf.select_nth_unstable_by(hi, f64::total_cmp);
+    }
+    if lo > 0 {
+        buf[..hi].select_nth_unstable_by(lo, f64::total_cmp);
+    }
+    let mut total = 0.0_f64;
+    for &v in &buf[lo..hi] {
+        total += v;
+    }
+    total / (hi - lo) as f64
+}
+
+/// One gene's bisection for the thinning-matched fold change — the loop of
+/// `wade.thinning._fit_fold_change_alpha`, given that gene's active-side
+/// counts and scale and the untouched side's interquartile mean. Returns
+/// `0.5 * (lo + hi)` in natural log.
+///
+/// The generator is re-seeded identically at every bisection step (common
+/// random numbers, as the NumPy paths do), and the seed is a function of
+/// `(seed, global gene index)` alone — so the result does not depend on how
+/// the genes were chunked or which thread ran them.
+fn one_gene_fit(
+    c_active: &[i64],
+    a_active: &[f64],
+    m_static: f64,
+    seed: u64,
+    gene_index: u64,
+    iters: usize,
+    max_log_fold: f64,
+    thinned: &mut Vec<f64>,
+) -> f64 {
+    use rand::SeedableRng;
+    use rand_distr::Distribution;
+
+    // splitmix64 over (seed, gene) to decorrelate the per-gene streams.
+    let mut z = seed ^ gene_index.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut next = || {
+        z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut x = z;
+        x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        x ^ (x >> 31)
+    };
+    let gene_seed: [u8; 16] = {
+        let a = next().to_le_bytes();
+        let b = next().to_le_bytes();
+        let mut s = [0u8; 16];
+        s[..8].copy_from_slice(&a);
+        s[8..].copy_from_slice(&b);
+        s
+    };
+
+    let mut lo = 0.0_f64;
+    let mut hi = max_log_fold;
+    for _ in 0..iters {
+        let mid = 0.5 * (lo + hi);
+        let keep = (-mid).exp();
+        let mut rng = rand_pcg::Pcg64Mcg::from_seed(gene_seed);
+        thinned.clear();
+        for (&c, &a) in c_active.iter().zip(a_active.iter()) {
+            let t = if c > 0 {
+                rand_distr::Binomial::new(c as u64, keep)
+                    .expect("keep probability out of range in fit kernel")
+                    .sample(&mut rng) as f64
+            } else {
+                0.0
+            };
+            thinned.push(t * a);
+        }
+        let m_thin = middle_mean(thinned);
+        if m_thin > m_static {
+            lo = mid; // the thinned side is still higher: thin more
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
+/// The fold-change fit's bisection, parallel over genes — `docs/scaling.md`
+/// §3.3. Opt-in (`fit_backend="rust"`): unlike the two permutation kernels it
+/// is **not** bitwise against the NumPy path, because no two binomial
+/// samplers consume randomness alike; it fits the same objective and is held
+/// to the NumPy path statistically. Deterministic given `seed` and the
+/// global gene indices, whatever the chunking or thread schedule.
+///
+/// `counts` and `alpha` are the chunk's rows; `active` marks each gene's
+/// thinned side's columns (row-wise bool mask); `m_static` is the untouched
+/// side's interquartile mean. Returns `0.5 * (lo + hi)` per gene in natural
+/// log; the caller applies `exp`, the both-middles-empty override and the
+/// direction convention.
+#[pyfunction]
+fn fit_bisect<'py>(
+    py: Python<'py>,
+    counts: PyReadonlyArray2<'py, f64>,
+    alpha: PyReadonlyArray2<'py, f64>,
+    active: PyReadonlyArray2<'py, bool>,
+    m_static: PyReadonlyArray1<'py, f64>,
+    seed: u64,
+    gene_offset: u64,
+    iters: usize,
+    max_log_fold: f64,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let cv = counts.as_array();
+    let av = alpha.as_array();
+    let actv = active.as_array();
+    let msv = m_static.as_array();
+    let g = cv.nrows();
+    let n = cv.ncols();
+    if av.nrows() != g || av.ncols() != n || actv.nrows() != g || actv.ncols() != n {
+        return Err(PyValueError::new_err(
+            "counts, alpha and active must share one (genes, samples) shape",
+        ));
+    }
+    if msv.len() != g {
+        return Err(PyValueError::new_err("m_static must have one value per gene"));
+    }
+    for &v in cv.iter() {
+        if !v.is_finite() || v < 0.0 || v != v.round() {
+            return Err(PyValueError::new_err(
+                "the fit kernel needs finite, non-negative integer counts",
+            ));
+        }
+    }
+
+    let ms: Vec<f64> = msv.iter().copied().collect();
+    let mut out = vec![0.0_f64; g];
+    py.detach(|| {
+        out.par_iter_mut().enumerate().for_each_init(
+            || (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n)),
+            |(c_buf, a_buf, thinned), (gene, slot)| {
+                c_buf.clear();
+                a_buf.clear();
+                for j in 0..n {
+                    if actv[(gene, j)] {
+                        c_buf.push(cv[(gene, j)] as i64);
+                        a_buf.push(av[(gene, j)]);
+                    }
+                }
+                *slot = one_gene_fit(
+                    c_buf, a_buf, ms[gene], seed, gene_offset + gene as u64, iters,
+                    max_log_fold, thinned,
+                );
+            },
+        );
+    });
+    Ok(Array1::from_vec(out).into_pyarray(py))
+}
+
 #[pymodule]
 fn _kernel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(null_statistics, m)?)?;
     m.add_function(wrap_pyfunction!(subset_null, m)?)?;
+    m.add_function(wrap_pyfunction!(fit_bisect, m)?)?;
     m.add_function(wrap_pyfunction!(type7_quantiles, m)?)?;
     m.add_function(wrap_pyfunction!(num_threads, m)?)?;
     m.add("__doc__", "Native permutation kernel for WADE.")?;

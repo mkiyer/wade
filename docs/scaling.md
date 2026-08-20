@@ -1,8 +1,12 @@
 # Scaling WADE
 
 Measurements, hypotheses and directions for running WADE on cohorts far larger
-than it was built for. Nothing here is implemented; everything here that claims
-a number was measured on 2026-08-19 by the scripts named beside it.
+than it was built for. Every number was measured — the 2026-08-19 baselines by
+scratchpad scripts whose recipes are `tools/bench_scaling.py` now, and each
+section's **"Landed 2026-08-20"** block records what shipped from it, how it
+was validated, and the before/after. §§2.1–2.2 and 3.1–3.4 are implemented;
+§2.3 (residents), §4 (p-value resolution) and §5 (single cell) are still
+agenda.
 
 The method is in [`method.md`](method.md); what WADE cannot do is in
 [`limits.md`](limits.md); the work queue is [`../ROADMAP.md`](../ROADMAP.md).
@@ -25,8 +29,10 @@ a statistical trap that no amount of engineering fixes.
 
 ## 1. The wall, measured
 
-`prototypes/` has none of this; the scripts lived in the session scratchpad.
-Reproduce with the recipe at the end of each section.
+Reproduce with `tools/bench_scaling.py` (per-stage: default; whole pipeline:
+`--full`, plus `--max-probs / --gene-chunk / --stage1 / --fit-backend /
+--n-boot` for each landed change) and `tools/bootstrap_scheme_study.py` for
+§6's table.
 
 Per-stage scaling at G = 1,000 genes, B = 200 permutations, NB counts
 (dispersion 0.1), seconds:
@@ -40,6 +46,21 @@ Per-stage scaling at G = 1,000 genes, B = 200 permutations, NB counts
 
 Extrapolated to 30,000 x 80,000 at B = 2,000: **about 3.7 hours, needing about
 163 GB** against the 128 GB on the development machine. It does not run.
+
+**After the queue landed (2026-08-20), measured, not extrapolated**: a full
+`wade()` at exactly that shape — NB counts, 30,000 × (40,000 v 40,000),
+B = 2,000, `gene_chunk=2000`, `stage1="gemm"`, `fit_backend="rust"`,
+`max_probs` at its default 2,000 —
+
+```
+python tools/bench_scaling.py --genes 30000 --n 40000 --nperms 2000 \
+    --gene-chunk 2000 --stage1 gemm --fit-backend rust
+# wade() total   1780.53 s   m = 2000   peak RSS 55.59 GB
+```
+
+**29.7 minutes and 55.6 GB.** The wall-clock is dominated by the subset
+kernel's B × O(n) per gene, as §3.3's closing note predicts; the memory
+peak is the full-matrix residents of §2.3. The dataset runs.
 
 **The wall is not speed, it is `m`.** The quantile grid is
 `m = min(n_case, n_ctrl)`, so at 40,000 per group **every `(genes x m)` array is
@@ -104,6 +125,30 @@ the result and the manifest, refuse silently degrading it, and default
 with the cap active at a size where the uncapped grid is also computable, and
 asserting the table above rather than remembering it.
 
+**Landed 2026-08-20** (`max_probs`, default 2,000, `None` uncapped). Threaded
+through `wade_stats`, both nulls, `subset_test`, `characterization_ci` and
+`wade_gene`; both kernels now accept a grid capped below the design (and
+still refuse one above it); the realized `m` is `result.nprobs` and is
+recorded with `max_probs` in `params` and the manifest; the contract change
+is stated in `method.md` §1. `tests/test_grid_cap.py` pins: bitwise identity
+when the cap does not bind, backend agreement on a capped grid, faithfulness
+of `affected_fraction`, the one-sided `mean_shift` inflation, and stage-2
+level on genuine global shifts under the cap (the §6 thinning-interaction
+question — level held at 0.03–0.08 in the suite-sized check).
+
+The fidelity table above was **re-measured through the shipped path**
+(scratchpad `cap_fidelity.py`, same design) and reproduces to the third
+decimal — worst affected_fraction drift at m = 1,000 for fractions ≥ 0.1% is
+0.0003; mean_shift 49.94 → 50.19 (global), 17.51 → 21.29 (5% at 8×) across
+4,000 → 100, matching the prototype's 17.48 → 21.21.
+
+Runtime effect at G = 1,000, n = 6,000 v 6,000, B = 200 (same recipe as §1,
+now `tools/bench_scaling.py`): total 19.8 s uncapped → 18.7 s at m = 1,000
+(subset stage 1.73 → 0.98 s, peak RSS 1.85 → 1.47 GB). As predicted, the cap
+is not a speed change at these sizes — the fit and the per-permutation sorts
+scale with `n`, not `m` — it is the memory change that makes the target's
+`(genes x m)` arrays 40× smaller and gene chunking (§2.2) worth doing.
+
 ### 2.2 Chunk over genes
 
 **Hypothesis.** Peak memory should not depend on the number of genes at all.
@@ -123,6 +168,44 @@ The one trap is the jitter: it is drawn once for the whole matrix and must be
 **Payoff.** Removes the 19.2 GB matrix copies from the peak entirely — at
 2,000 genes per chunk each working matrix is 1.28 GB.
 
+**Landed 2026-08-20** (`wade(..., gene_chunk=N)`). Bit-identical to the
+unchunked run by construction — `assert_array_equal`, not tolerance, in
+`tests/test_chunking.py` — because every coupling was made structural:
+
+* the jitter is drawn once and indexed per chunk, as planned;
+* **two couplings the plan missed were in the thinning's random streams.**
+  The fold-change fit draws fresh case/control generators inside each
+  bisection step, and `thin_counts` draws case blocks then control blocks
+  from one stream. Both were restructured to consume their streams in gene
+  order across chunks (iteration-outer/chunk-inner in the fit; two phases in
+  the thinning), which is bit-identical because sequential chunked
+  `Generator` calls reproduce a full-matrix call's stream exactly (verified
+  for `uniform` and `binomial`, scratchpad `verify_fit_refactor.py`, which
+  also holds the refactors bitwise against the pre-refactor code);
+* library sizes stay a full-matrix pass — a column sum's association depends
+  on blocking, so chunking it would move every normalized value by an ulp;
+* **no chunk is ever a single row.** NumPy's row reductions take a different
+  code path for a `(1, m)` array than for the same row inside a larger
+  matrix (measured: last-ulp drift in `D.sum(axis=1)` at m = 40); blocks of
+  ≥ 2 rows are layout-independent (verified k = 2..24 over two shapes), so
+  `gene_chunk >= 2` and a trailing one-row remainder folds into the last
+  chunk;
+* the thinned matrix is held int32 (counts are integers, values exact) at
+  half the float64 footprint; the residents that remain full-size are
+  counts, jitter, `tpm` and the pseudocount — all carried by `WadeResult` —
+  plus the two `(genes × B)` nulls.
+
+Measured at G = 5,000, n = 6,000 v 6,000, B = 200 (`tools/bench_scaling.py
+--full` / `--gene-chunk 1000`): **peak RSS 7.18 → 3.82 GB, 104 → 98 s** —
+chunking is slightly faster, not slower (chunk-sized transients stay in
+cache). At the 30,000 × 80,000 target the projected residents are counts +
+jitter + tpm + pseudocount (19.2 GB each) + thinned int32 (4.8 GB) ≈ 82 GB
+against 128 GB — the dataset fits; the end-to-end run should be measured
+once §3.3 lands, because the fit still dominates wall-clock. The obvious
+next memory cut, if one is needed: the jitter and the pseudocount are both
+derivable (a seeded stream; a rank-1 outer product) and could stop being
+materialized residents — that is §2.3's question in a sharper form.
+
 ### 2.3 float32 storage
 
 **Hypothesis.** The stored count and normalized matrices can be float32 (9.6 GB
@@ -134,6 +217,16 @@ end-to-end. Likely a storage-only option with the kernels widening on read.
 
 **Open question.** Whether it earns its complexity once §2.1 and §2.2 land, or
 whether the answer is simply "the matrix is 19.2 GB, own it".
+
+**Sharpened 2026-08-20, not implemented.** After §2.1 and §2.2, the peak is
+no longer transients but the four full `genes × samples` float64 residents
+`WadeResult` carries — counts, jitter, `tpm`, pseudocount — plus the int32
+thinned counts during the run. The jitter is a seeded stream and the
+pseudocount a rank-1 outer product (`norm_factor / (normalizer · lib)`), so
+neither has to be materialized; whether to make them lazy is a question about
+the result object's contract (`gene_detail`, the parity fixtures' explicit
+`jitter=` path), not about the kernels. That, rather than float32, is the
+next memory cut if one is ever needed — the target now fits without either.
 
 ---
 
@@ -178,6 +271,23 @@ designs — but it breaks parity with the R reference on unbalanced fixtures,
 which is a decision about what the fixtures are for, not a performance call.
 **Do not make it silently.**
 
+**Landed 2026-08-20** as `wade(..., stage1="gemm")`, opt-in, balanced designs
+only (refused otherwise), grid path unchanged and still the default. The
+observed statistic and the null are both evaluated as products with the
+signed indicator (`mean_diff_stat` / `mean_diff_null`), so they stay
+commensurable; `result.mean_shift` then reports the statistic the p-value
+actually tested (the exact mean difference) and the grid quadrature stays
+available as `result.stats.mean_shift`. Re-measured through the shipped
+path: **134× / 225×** at (G=2,000, n=4,000, B=500) / (G=5,000, n=8,000,
+B=500), max relative deviation 2.5e-9; exceedance counts identical to the
+grid path, so p-values move only through the GPD's smooth tail fit
+(`tests/test_stage1_gemm.py`). Two prices, both stated in the docstring: not
+bitwise (BLAS reassociates), and in gemm mode a chunked run agrees with an
+unchunked one to 1e-12 rather than exactly, because dgemm's blocking depends
+on the matrix shape. Under a §2.1 cap the GEMM statistic is arguably the
+better number — it stays the exact mean difference where the capped
+quadrature drifts.
+
 ### 3.2 One sort per gene in the mean-shift kernel
 
 **Hypothesis.** The mean-shift kernel re-sorts both groups for every
@@ -190,6 +300,18 @@ partition walk, because a permutation only re-partitions the same values.
 
 **Evidence it works:** the subset kernel is bitwise identical to its NumPy path
 over 111 comparisons and 80x faster.
+
+**Landed 2026-08-20.** The mean-shift kernel now shares the subset kernel's
+design: parallel over genes, one sort per gene, one O(n) two-ended partition
+walk per permutation, type-7 read through the same precomputed plans, and it
+returns gene-major so the Python-side transpose is gone. The quantile
+arithmetic and the sequential grid summation are unchanged term for term, so
+outputs are bitwise what the permutation-major kernel produced — every
+existing kernel and parity test passes untouched. Measured (same recipe as
+§3.1's table): 2.15 → 0.36 s at (G=1,000, n=6,000, B=200), 7.16 → 1.11 s at
+(G=2,000, n=4,000, B=500), 41.3 → 5.5 s at (G=5,000, n=8,000, B=500) —
+**6–7.5×**, and it applies on unbalanced designs and capped grids where
+§3.1's GEMM does not.
 
 ### 3.3 The fold-change fit is the largest single term
 
@@ -213,6 +335,48 @@ re-normalizing it.
 An inaccurate `f̂` is *anti-conservative* (30% off gives 0.26–0.28 false
 subsets), and `tests/test_thinning.py` pins it.
 
+**Landed 2026-08-20**, as fix 2 plus fix 3; fix 1 (the bracket) was
+deliberately **not** taken — a bracket that misses the root converges to a
+wrong `f̂`, and a wrong `f̂` is anti-conservative, so a ~2× saving was not
+worth a correctness cliff. Measured at (G = 1,000, n = 6,000 v 6,000): the
+fit went **15.2 s → 6.3 s → 0.44 s**.
+
+* **Fix 2, the affine path** (`fit_fold_change(..., alpha=...)`, what
+  `wade()` now uses): jitter-free `tpm_like` is exactly
+  `x = counts * alpha` with `alpha = norm_factor / (normalizer · lib)`
+  fixed, so nothing is re-normalized inside the bisection — the untouched
+  group's interquartile mean is computed once, each step redraws only the
+  thinned group (half the binomial draws), and the interquartile means are
+  read by `np.partition` selection instead of a full sort. 15.2 → 6.3 s;
+  after it, the **binomial draw is ~85% of what remains** (measured 0.64 s
+  of a 0.75 s iteration), and NumPy's sampler is single-threaded — which is
+  what makes fix 3 the real fix. The `normalize=` path survives unchanged
+  for objectives that are not affine (the tests' unit-normalizer closures).
+  One trap worth recording: the affine path reduces per-side row *subsets*,
+  so its interquartile mean had to be made independent of row grouping —
+  fresh C-contiguous reductions are (pinned by a test); F-ordered ones are
+  not (see §2.2's single-row finding).
+* **Fix 3, the kernel** (`wade(..., fit_backend="rust")`): the bisection
+  loop parallel over genes, each gene's stream a function of
+  `(seed, global gene index)` alone — deterministic, chunk- and
+  thread-schedule-invariant. 6.3 → **0.44 s (14×; 34× against the start)**.
+  **Opt-in, unlike the other two kernels**, because it cannot be bitwise
+  against NumPy (no two binomial samplers consume randomness alike): the
+  realized `f̂` for a given seed differs between backends by up to the
+  bisection cell (measured max |log ratio| 0.035), so auto-dispatch would
+  let the machine choose the answer. Held to the NumPy path statistically
+  (`tests/test_fit_kernel.py`), and stage-2 level on genuine global shifts
+  holds under it.
+
+With every fast path on (`max_probs` default, `stage1="gemm"`,
+`fit_backend="rust"`), a full `wade()` at (G = 1,000, 6,000 v 6,000,
+B = 200) is **2.27 s against 19.8 s** at the start of the day, and
+(G = 5,000, `gene_chunk=1000`) is 11.7 s against 104 s, at 3.7 GB peak
+against 7.2. The remaining wall-clock at the 30,000 × 80,000 target is the
+**subset kernel's** B × O(n) per gene — intrinsic for dense data (§5.1's
+zero-run walk is the answer for sparse) — projected ~40 min of a ~50-min
+total at B = 2,000.
+
 ### 3.4 `n_boot` is serial and embarrassingly parallel
 
 200 bootstrap replicates cost about as much as the rest of a 20,000-gene run.
@@ -223,6 +387,15 @@ A thread pool or a kernel would make it nearly free.
 replacement interacts badly with the quantile grid, since duplicated samples
 create flat runs in the quantile function — the same degeneracy the continuity
 jitter exists to break.
+
+**Landed 2026-08-20** (`characterization_ci(..., threads=)`, default all
+cores): the replicate index sets are predrawn (which is also what makes the
+call chunk-invariant, §2.2), each replicate's arithmetic is self-contained
+and writes its own rows, so threading is **bit-identical** at any thread
+count. Measured at the HANDOFF's size (20,000 genes, 100 v 100,
+`n_boot=200`): 19.7 → 4.0 s (**4.9×** — fancy-indexing holds the GIL; the
+sorts release it). The §6 open question is answered below: no measurable
+tie degradation, and resampling with replacement stays the default.
 
 ---
 
@@ -421,6 +594,53 @@ started until §2 and §3 land, but it is the reason to do them well.
   functional of the curve's shape, so ties could bias it. Measure the bootstrap
   distribution against a subsampling (`m`-out-of-`n`, without replacement)
   alternative before trusting narrow intervals.
+
+  **Answered 2026-08-20** (`tools/bootstrap_scheme_study.py`; 200 v 200, NB
+  dispersion 0.1, 200 datasets × 400 replicates per cell, truth = the
+  estimator's sampling distribution over 2,000 independent datasets). Four
+  schemes on raw counts with wade's jitter and pseudocount: **resample**
+  (with replacement, what ships), **poisson** (keep every sample, redraw
+  each count as Poisson(count) — proposed by the user as a fair,
+  tie-free resample), **hybrid** (resample columns, then Poisson-redraw the
+  drawn counts), and **m-of-n** (n/2 without replacement, √(m/n)-rescaled).
+  95% CI coverage of the sampling-distribution median / (bootstrap SD ÷
+  true SD):
+
+  | scenario, estimand | resample | poisson | hybrid | m-of-n |
+  |---|---|---|---|---|
+  | null nb(50), aff | 0.96 / 0.86 | 0.98 / 0.74 | 1.00 / 1.03 | 0.81 / 0.93 |
+  | null nb(50), lfc | 0.94 / 1.00 | **0.56 / 0.41** | 0.95 / 1.07 | 0.84 / 1.01 |
+  | global 2× nb(50), aff | 0.91 / 0.76 | 0.83 / 0.79 | 0.98 / 1.23 | 0.77 / 0.75 |
+  | global 2× nb(50), lfc | 0.98 / 1.01 | **0.54 / 0.37** | 0.98 / 1.07 | 0.85 / 1.01 |
+  | subset 5% 8× nb(50), dir | 0.94 / 1.16 | **0.66 / 0.45** | 0.99 / 1.28 | 0.77 / 1.21 |
+  | global 2× nb(5), aff | 0.94 / 0.93 | 0.61 / 1.00 | 0.82 / 1.18 | 0.81 / 0.94 |
+  | global 2× pois(50), aff | 0.94 / 0.92 | 0.64 / 1.82 | 0.79 / 2.03 | 0.81 / 0.91 |
+
+  **The ties question is answered: no.** With-replacement coverage is
+  0.91–1.00 everywhere; the flat runs the duplicates create do not bias the
+  intervals measurably (the jitter travels with the duplicated columns, and
+  the quartic form of `affected_fraction` suppresses the floor).
+
+  **Poisson-only resampling is anti-conservative on overdispersed counts**
+  — half-nominal coverage and bootstrap SDs at 0.3–0.5× the truth on NB
+  data — for a structural reason: redrawing counts as Poisson(count)
+  reproduces the *measurement* noise but holds the sample panel fixed, so
+  the between-sample (biological, NB overdispersion) component of the
+  estimator's sampling variance is simply absent. It is calibrated exactly
+  where its assumption is true (pure Poisson data, lfc: 0.93 / 0.99). Real
+  cohorts are the overdispersed case, so it cannot replace resampling.
+
+  **The hybrid is the interesting one**: at moderate/high counts on NB data
+  it never under-covers and fixes resample's mild SD under-dispersion on
+  `affected_fraction` (0.86 → 1.03, 0.76 → 1.23) at ~5–10% extra width —
+  the Poisson redraw de-duplicates the tied columns, which was the sound
+  half of the proposal. But it double-counts the Poisson component, and at
+  low counts (nb(5): 0.82) or pure Poisson (0.79) that extra noise floor
+  biases `affected_fraction`'s replicates and costs real coverage.
+  **Verdict: resampling with replacement stays the default; not wired as an
+  option** — a scheme that under-covers in plausible regimes invites
+  misuse, and the shipped scheme was never the miscalibrated one. m-of-n
+  under-covers broadly (0.77–0.85) for these non-linear functionals.
 - **Does the grid cap interact with the thinning?** The fold-change fit uses
   interquartile means, which are grid-free, but the bridge is not. Check the
   false-subset table of `method.md` §10.3 at a capped grid.

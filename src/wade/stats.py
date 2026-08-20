@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .quantiles import probability_grid, type7_quantiles
+from .quantiles import capped_nprobs, probability_grid, type7_quantiles
 
 __all__ = ["WadeStats", "split_groups", "wade_stats"]
 
@@ -49,7 +49,7 @@ class WadeStats:
     """The quantile grids and the per-gene quantities read off them."""
 
     q: np.ndarray            # (m,)   descending probability grid, 1 -> 0
-    nprobs: int              #        m = min(n0, n1); a property of the design
+    nprobs: int              #        m = min(n0, n1, max_probs); the realized grid
     n1: int
     n0: int
     Q1: np.ndarray           # (g, m) case quantile grid
@@ -72,6 +72,7 @@ def wade_stats(
     cond: np.ndarray,
     *,
     allow_single_sample_group: bool = False,
+    max_probs: int | None = None,
 ) -> WadeStats:
     """Quantile grids and the mean-shift statistic, from a normalized matrix.
 
@@ -81,6 +82,14 @@ def wade_stats(
     larger group's extremes. It is named plainly because that is what it is —
     the test any conventional DE method already performs. WADE's claim is to
     add sensitivity it lacks, not to improve on it.
+
+    ``max_probs`` caps the grid at large cohorts (``docs/method.md`` §1): the
+    realized grid is ``min(n0, n1, max_probs)`` and is reported as ``nprobs``.
+    On a capped grid the balanced-design identity above holds only
+    approximately, and ``mean_shift`` drifts upward for concentrated signals —
+    the quadrature change is documented there, and inference is unaffected
+    because the null uses the same grid. ``None`` (the default here; the
+    ``wade()`` entry points default to 2,000) means the design's full grid.
 
     On ``min(n0, n1) == 1`` the grid collapses to the single probability 1, so
     every statistic reduces to the difference of group maxima. Refused by
@@ -97,7 +106,7 @@ def wade_stats(
 
     i1, i0 = split_groups(cond)
     n1, n0 = int(i1.size), int(i0.size)
-    nprobs = min(n0, n1)
+    nprobs = capped_nprobs(n1, n0, max_probs)
     if nprobs == 1 and not allow_single_sample_group:
         raise ValueError(
             "min(n_case, n_ctrl) == 1: the quantile grid collapses to the single "

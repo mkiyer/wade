@@ -467,6 +467,12 @@ def manifest(res, *, alpha: float = 0.05) -> dict:
             "n_exc_min": p.get("n_exc_min"),
             "n_tail": p.get("n_tail"),
             "n_boot": p.get("n_boot"),
+            # The two opt-in fast paths change reported numbers, so a
+            # manifest without them could not reproduce the run; gene_chunk
+            # is recorded for completeness even though it is bit-identical.
+            "stage1": p.get("stage1", "grid"),
+            "fit_backend": p.get("fit_backend", "numpy"),
+            "gene_chunk": p.get("gene_chunk"),
             "pseudocount": None if res.pseudocount is None else float(np.median(res.pseudocount)),
         },
         "design": {
@@ -474,6 +480,7 @@ def manifest(res, *, alpha: float = 0.05) -> dict:
             "n_case": p.get("n1"),
             "n_ctrl": p.get("n0"),
             "nprobs": p.get("nprobs"),
+            "max_probs": p.get("max_probs"),
             "case_label": p.get("case_label"),
             "control_label": p.get("control_label"),
             "condition_column": p.get("condition_column"),

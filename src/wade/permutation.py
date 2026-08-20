@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .quantiles import probability_grid, type7_quantiles
+from .quantiles import capped_nprobs, probability_grid, type7_quantiles
 from .stats import split_groups
 
 try:                                    # pragma: no cover - build-dependent
@@ -37,7 +37,8 @@ except ImportError:                     # pragma: no cover
     _rust = None
 
 __all__ = ["draw_perms", "validate_perms", "null_statistics", "available_backends",
-           "subset_null_backend", "HAVE_RUST_KERNEL"]
+           "subset_null_backend", "mean_diff_stat", "mean_diff_null",
+           "HAVE_RUST_KERNEL"]
 
 #: Whether the compiled kernel was built and imported. The package is fully
 #: functional without it — the NumPy path is the correctness baseline and the
@@ -104,6 +105,7 @@ def null_statistics(
     perms: np.ndarray,
     *,
     backend: str = "auto",
+    max_probs: int | None = None,
 ) -> np.ndarray:
     """The mean-shift null. Returns a ``(genes, permutations)`` matrix.
 
@@ -114,6 +116,10 @@ def null_statistics(
     evaluated in the same order, so observed and null values are strictly
     commensurable — which matters because a gene whose observed value ties a
     null draw would otherwise fall on either side of the comparison.
+
+    ``max_probs`` caps the grid exactly as :func:`wade.wade_stats` does, and
+    must match what the observed statistic used — the p-value compares the
+    two, so they have to share a quadrature.
     """
     x = np.ascontiguousarray(x, dtype=np.float64)
     perms = np.asarray(perms)
@@ -121,7 +127,7 @@ def null_statistics(
     g = x.shape[0]
 
     i1_0, i0_0 = split_groups(perms[0])
-    nprobs = min(i1_0.size, i0_0.size)
+    nprobs = capped_nprobs(i1_0.size, i0_0.size, max_probs)
     q = probability_grid(nprobs)
 
     if backend not in ("auto", "numpy", "rust"):
@@ -132,13 +138,12 @@ def null_statistics(
             "`pip install -e .` (needs cargo/rustc), or use backend='numpy'"
         )
     if backend != "numpy" and _rust is not None:
-        d = _rust.null_statistics(
+        # The kernel is parallel over genes — one sort per gene, then one
+        # O(n) partition walk per permutation — and returns gene-major,
+        # which is already the (genes, permutations) contract.
+        return _rust.null_statistics(
             x, np.ascontiguousarray(perms, dtype=np.int64), q
         )
-        # Permutation-major inside the kernel keeps each permutation's writes
-        # contiguous; transposing to the (genes, permutations) contract is a
-        # view, so it copies nothing.
-        return d.T
 
     out = np.empty((g, n_perms), dtype=np.float64)
     for b in range(n_perms):
@@ -146,6 +151,55 @@ def null_statistics(
         d = type7_quantiles(x[:, i1], q) - type7_quantiles(x[:, i0], q)
         out[:, b] = d.sum(axis=1) / nprobs
     return out
+
+
+def _mean_diff_weights(labels: np.ndarray) -> np.ndarray:
+    """``+1/n1`` on cases, ``-1/n0`` on controls, so ``x @ w`` is exactly the
+    difference of the two group means."""
+    labels = np.asarray(labels)
+    i1, i0 = split_groups(labels if labels.ndim == 1 else labels[0])
+    return np.where(labels == 1, 1.0 / i1.size, -1.0 / i0.size)
+
+
+def mean_diff_stat(x: np.ndarray, cond: np.ndarray) -> np.ndarray:
+    """The difference of group means, per gene, as one matrix-vector product.
+
+    The ``stage1="gemm"`` observed statistic (``docs/scaling.md`` §3.1). On a
+    **balanced** design this is exactly what ``mean_shift`` computes through
+    the quantile grid (measured 2.1e-13 relative); it is evaluated as
+    ``x @ w`` — the same arithmetic class as :func:`mean_diff_null` — so the
+    two agree to BLAS rounding. Not bitwise: a matrix–vector product (GEMV)
+    and a matrix–matrix product (GEMM) may round the same dot product
+    differently, so a permutation that reproduces the observed labeling is
+    not guaranteed to tie it exactly. On jittered continuous data exact ties
+    have measure zero and the p-value is insensitive to 1e-15-level
+    reroundings; the grid path remains the choice where last-ulp
+    commensurability matters.
+    """
+    x = np.ascontiguousarray(x, dtype=np.float64)
+    return x @ _mean_diff_weights(np.asarray(cond))
+
+
+def mean_diff_null(x: np.ndarray, perms: np.ndarray) -> np.ndarray:
+    """The mean-difference null as one GEMM. Returns ``(genes, permutations)``.
+
+    ``docs/scaling.md`` §3.1: with ``W`` the ``(samples x B)`` signed
+    indicator matrix, the entire stage-1 null is ``x @ W`` — measured
+    139–185× faster than the permutation kernel at large ``n``. BLAS
+    reassociates the sums, so this agrees with the grid statistic on a
+    balanced design to ~1e-9 relative, **not bitwise** — which is why it is
+    an opt-in beside the parity-pinned kernel, never the default, and why a
+    chunked GEMM run agrees with an unchunked one to the same tolerance
+    rather than exactly.
+    """
+    x = np.ascontiguousarray(x, dtype=np.float64)
+    perms = np.asarray(perms)
+    if perms.ndim != 2 or perms.shape[1] != x.shape[1]:
+        raise ValueError(
+            f"perms must be (n_perms, n_samples) with {x.shape[1]} samples; got {perms.shape}"
+        )
+    split_groups(perms[0])
+    return x @ np.ascontiguousarray(_mean_diff_weights(perms).T)
 
 
 def _subset_null_numpy(xs, b_obs, perms, q, alternative):

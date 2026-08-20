@@ -32,7 +32,25 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["probability_grid", "type7_quantiles"]
+__all__ = ["probability_grid", "type7_quantiles", "capped_nprobs"]
+
+
+def capped_nprobs(n1: int, n0: int, max_probs: int | None) -> int:
+    """The realized grid size: ``min(n1, n0)``, capped at ``max_probs``.
+
+    ``max_probs`` (``docs/method.md`` §1) bounds the grid so that per-gene
+    storage stops growing with the cohort: nothing needs an affected fraction
+    resolved to 1/40,000, and every ``(genes x m)`` array scales with the
+    answer here. ``None`` means the design's full grid. The realized value is
+    recorded in the result and the manifest, never applied silently.
+    """
+    m = min(int(n1), int(n0))
+    if max_probs is None:
+        return m
+    max_probs = int(max_probs)
+    if max_probs < 2:
+        raise ValueError(f"max_probs must be at least 2, got {max_probs}")
+    return min(m, max_probs)
 
 
 def probability_grid(nprobs: int) -> np.ndarray:

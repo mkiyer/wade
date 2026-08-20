@@ -9,8 +9,11 @@ covers only what is *not* obvious from them.
 ## 1. Where things stand
 
 The statistic is finished and tested, both permutation loops have Rust
-kernels, the subset stage is count-native, and the plotting layer exists.
-**617 tests pass in about 12 seconds.**
+kernels, the subset stage is count-native, the plotting layer exists — and
+as of 2026-08-20 **the performance queue is done**: the 30,000 × 80,000
+target that needed ~163 GB and did not run completes, measured, in **29.7
+minutes at a 55.6 GB peak** (B = 2,000, all fast paths; `scaling.md` §1).
+**656 tests pass in about 12 seconds.**
 
 ```bash
 export PATH="/usr/local/bin:$PATH"          # only if you need R
@@ -20,45 +23,60 @@ pytest -q -m "not slow"                     # skip the validation simulations
 pytest -q -m "not kernel"                   # if the Rust kernel is not built
 ```
 
-Speed, measured at 20,000 genes, 100 v 100, B = 2000 on a 16-core M3 Max:
-a full `wade()` call is about **17 s** (mean-shift null 5.0 s, subset test
-2.9 s, the thinning fit ~7 s, the rest under a second); `thin=False` is 9.7 s
-and `n_boot=200` adds ~24 s. Before the subset kernel the subset test alone
-was about 300 s.
+Speed, measured on the 16-core M3 Max: a full `wade()` at 1,000 genes,
+6,000 v 6,000, B = 200 went **19.8 s → 2.27 s** over the day (grid cap +
+new mean-shift kernel + affine fit + opt-in `stage1="gemm"` and
+`fit_backend="rust"`); 5,000 genes with `gene_chunk=1000` went 104 → 11.7 s
+at 3.7 GB peak instead of 7.2. `n_boot=200` at 20,000 × (100 v 100) went
+19.7 → 4.0 s (threaded, bit-identical). Every measurement is in
+`docs/scaling.md` beside the hypothesis it tested; `tools/bench_scaling.py`
+reproduces them.
+
+The new `wade()` surface, all documented in the docstring: `max_probs`
+(grid cap, default 2,000 — **the one deliberate answer change**, stated in
+`method.md` §1, realized `m` in the result and manifest), `gene_chunk`
+(bounded-memory driver, **bit-identical** to one-pass), `stage1="gemm"`
+(balanced designs, the exact mean difference as one matrix product, opt-in),
+`fit_backend="rust"` (the fold-change fit's bisection in the kernel, opt-in
+because it is *not* bitwise against NumPy — see §3 below).
 
 The package is `src/wade/`. Twelve modules, all small:
 
 | module | what it owns |
 |---|---|
-| `quantiles.py` | the probability grid and type-7 quantiles |
+| `quantiles.py` | the probability grid, type-7 quantiles, `capped_nprobs` |
 | `stats.py` | `wade_stats()` — the grids, `mean_shift`, `w1`, `fc` |
-| `subset.py` | the bridge, the subset test, `affected_fraction`, `direction`, the bootstrap |
-| `thinning.py` | the count-native shift correction: `fit_fold_change`, `thin_counts`, `one_count` (§10.3–10.4) |
-| `permutation.py` | the nulls; dispatches to the Rust kernel |
+| `subset.py` | the bridge, the subset test, `affected_fraction`, `direction`, the bootstrap (threaded, chunkable) |
+| `thinning.py` | the count-native shift correction: `fit_fold_change` (normalize path + affine `alpha=` path + kernel backend), `thin_counts`, `one_count`, `gene_chunks` (§10.3–10.4) |
+| `permutation.py` | the nulls; dispatches to the Rust kernel; `mean_diff_stat` / `mean_diff_null` (the GEMM stage 1) |
 | `pvalues.py` | empirical p, GPD refinement, BH, `alternative` |
 | `normalize.py` | `tpm_like` (ported), `cpm`, `rle` (new) |
 | `diagnostics.py` | `wade_gene()` — the per-gene curves for plotting |
 | `api.py` | `wade()`, `wade_from_matrix()`, `wade_contrast()`; `WadeResult` now carries `cond` and has `gene_index()` / `gene_detail()` |
 | `io.py` | the data boundary: `as_counts` (arrays, frames, sparse), `condition`, `to_frame`, `write_results` + manifest. **No file readers, by decision** |
 | `plotting.py` | `plot_gene()`, `plot_volcano()`, `plot_stages()`; a pure-NumPy data layer (`gene_panels`, `volcano_data`, `stages_data`) and two thin renderers, plotly and matplotlib, imported inside the functions |
-| `rust/src/lib.rs` | both permutation kernels: `null_statistics` (mean shift) and `subset_null` (the subset test) |
+| `rust/src/lib.rs` | three kernels: `null_statistics` (mean shift, gene-major since 2026-08-20), `subset_null` (the subset test), `fit_bisect` (the fold-change fit, **opt-in and not bitwise** — see §3) |
 
 ## 2. What is NOT built, in priority order
 
-See [`../ROADMAP.md`](../ROADMAP.md) for the queue and
-[`scaling.md`](scaling.md) for the reasoning behind item 1.
+See [`../ROADMAP.md`](../ROADMAP.md) for the queue.
 
-1. **Performance and memory — this is the next session's work.** The user has a
-   real dataset at **~30,000 genes x ~80,000 samples**. WADE cannot run it:
-   measured, it needs **~3.7 hours and ~163 GB** against 128 GB of RAM. The
-   wall is not speed — `m = min(n_case, n_ctrl)` becomes 40,000, so every
-   `(genes x m)` array is the size of the data matrix. ROADMAP §2 has the
-   six-item queue; `scaling.md` has every measurement, hypothesis and risk.
+1. **The real dataset.** Everything above is against NB simulations of the
+   30,000 × 80,000 target's shape; the user has the real matrix and **offered
+   to point at it — ask.** Expect three things the simulations cannot show:
+   its sparsity (feeds `scaling.md` §5.1's O(nnz) path), the fit's behaviour
+   on its actual count distribution, and the p-value pile-up `scaling.md` §4
+   predicts at 30,000 genes (the empirical/GPD floor is ~today's BH
+   threshold, so ranking, not testing, becomes the problem).
 2. **Demo notebook** — nothing exists. `tools/make_readme_figures.py` already
-   builds the dataset and the three figures it should open with. Deferred
-   deliberately: the user wants the large dataset unblocked first, so the
-   notebook can be a real analysis rather than a synthetic one.
-3. **Format helpers** (featureCounts, MatrixMarket) and **pandas coverage** —
+   builds the dataset and the three figures it should open with. Deferred so
+   it could be a real analysis; with the target unblocked, it can be.
+3. **The resident-matrix question** (ROADMAP §2.2): the chunked driver's peak
+   is now the four full `genes × samples` residents `WadeResult` carries
+   (counts, jitter, tpm, pseudocount) — the jitter is a seeded stream and the
+   pseudocount a rank-1 product, so neither *has* to be materialized. A
+   contract question, not a kernel one.
+4. **Format helpers** (featureCounts, MatrixMarket) and **pandas coverage** —
    ROADMAP §4, both small.
 
 Four standing decisions from the user, recorded in `ROADMAP.md`'s preamble,
@@ -71,11 +89,13 @@ Four standing decisions from the user, recorded in `ROADMAP.md`'s preamble,
 * **WADE is for discrete count data.** Continuous input is not a target and is
   neither tested nor tuned for; `wade_from_matrix` and `thin=False` run on it
   and carry caveats. Do not add features for it.
-* **Behaviour before performance** — and as of 2026-08-19 behaviour *is*
-  settled, so performance is now the priority and the large dataset is the
-  substrate for it.
+* **Behaviour before performance** — behaviour settled 2026-08-19, the
+  performance queue landed 2026-08-20. The rule that governed that work
+  stands for any future performance change:
 * **Nothing in the performance work may change an answer**, with one stated
-  exception (the grid cap). `pytest -q` is the check.
+  exception (the grid cap, `method.md` §1). `pytest -q` is the check. The
+  two opt-in fast paths (`stage1="gemm"`, `fit_backend="rust"`) change
+  numbers only when explicitly chosen, and say what they change.
 
 ### Where WADE is going, so today's choices are not local
 
@@ -156,6 +176,44 @@ contract that `import wade` imports neither library.
 
 Each of these cost real time to discover. They are not in the code comments
 because they are about *reasoning*, not implementation.
+
+### NumPy reductions are layout-stable only conditionally
+
+The chunking contract (`gene_chunk` bit-identical to one-pass) survives on
+three measured facts, and breaking any of them breaks it silently:
+
+- **Column fancy-indexing returns F-ordered arrays.** `xs[:, lo_i]` in
+  `type7_quantiles` makes `Q1`, `Q0` and `D` F-ordered, and a row reduction
+  over an F-ordered array chooses its strategy by the row count: a `(1, m)`
+  array sums differently (last-ulp) than the same row inside a bigger
+  matrix. Measured on `D.sum(axis=1)` at m = 40. Hence **no chunk is ever a
+  single row** — `gene_chunks` refuses `gene_chunk=1` and folds a one-row
+  remainder into the previous chunk. Fresh **C-contiguous** reductions are
+  row-count-independent (verified k = 1..24, two shapes, pinned by
+  `tests/test_chunking.py`), which is why `_middle_mean` forces contiguity.
+- **Sequential chunked `Generator` calls reproduce a full-matrix call's
+  stream exactly** (uniform and binomial both) — that is what makes the
+  chunked jitter, fit and thinning bitwise. But the *layout* of consumption
+  is part of the answer: the fit re-seeds two streams per bisection step
+  (case and control), and `thin_counts` draws all case blocks then all
+  control blocks, so their chunked versions must consume in exactly that order
+  (iteration-outer/chunk-inner; two phases). Reordering either changes every
+  fitted fold change.
+- **A column sum's association depends on blocking**, so library sizes are
+  always one full-matrix pass, never chunked.
+
+### The fit kernel is deliberately not bitwise
+
+`fit_bisect` (opt-in `fit_backend="rust"`) cannot reproduce NumPy's binomial
+draws — no two samplers consume randomness alike — so for a given seed the
+two backends' `f̂` differ by up to a bisection cell (measured max |log ratio|
+0.035). That is why it is **never auto-dispatched**: `backend="auto"` must
+never let the machine pick the answer. Its guarantees are different ones:
+deterministic given the seed, chunk- and thread-invariant (each gene's
+stream is a function of `(seed, global gene index)` alone), and statistically
+held to the NumPy path. The same logic gives `stage1="gemm"` its caveat: BLAS
+blocking depends on matrix shape, so gemm mode is allclose (1e-12) rather
+than bitwise between chunked and unchunked.
 
 ### Composition couples every gene
 
@@ -316,6 +374,11 @@ Reasoning is in `method.md`; this is the index.
 | Labels optional (positional fallback), orientation explicit (`genes="rows"`), normalizer may name a column of the counts frame | `ROADMAP.md` §1.1–1.2 |
 | Condition comes from sample metadata via `wade.condition()`; alignment is strict and names the offenders; no reloadable bundle | `ROADMAP.md` §1.3–1.4 |
 | Stage 1 on the linear scale, stage 2 on the log scale; no transform knob | `method.md` §10.1–10.2 |
+| The quantile grid is capped: `m = min(n1, n0, max_probs)`, default 2,000; realized `m` recorded, rule `m ≳ 2.5/π_min` | `method.md` §1, `scaling.md` §2.1 |
+| Chunking is a memory layout, never a numerical choice: `gene_chunk` is bit-identical, asserted with `assert_array_equal` | `scaling.md` §2.2, `tests/test_chunking.py` |
+| Fast paths that change numbers are opt-in and named: `stage1="gemm"`, `fit_backend="rust"`; `backend="auto"` never changes an answer | `scaling.md` §3.1/§3.3 |
+| The fit bracket was rejected: a missed bracket is anti-conservative | `scaling.md` §3.3 |
+| Bootstrap CIs stay within-group resampling with replacement; Poisson and hybrid schemes measured miscalibrated, m-of-n under-covers | `scaling.md` §6 |
 | Stage 2's shift correction is binomial thinning of raw counts (observed and null), `f̂` by middle-half matching after thinning | `method.md` §10.3 |
 | The `R` curve carries a one-count pseudocount — `log(x+1)`, the user's choice over a half-count floor, measured equal-or-better | `method.md` §10.4 |
 | `wade_from_matrix` keeps the division and says so; `thin=False` exists for continuous data | `method.md` §10.3 |
@@ -326,34 +389,22 @@ choice ever needs re-litigating with the original evidence.
 
 ## 5. Suggested first move
 
-**Performance and memory, against the real dataset.** Read
-[`scaling.md`](scaling.md) end to end first — it is the research agenda, and
-every number in it was measured on 2026-08-19 — then work ROADMAP §2 in order:
-the grid cap and gene chunking unblock the dataset at all; the GEMM path and
-the one-sort-per-gene kernel make it fast; the fold-change fit is the largest
-single remaining term.
+**The real dataset.** The performance queue landed and a synthetic run at the
+target's exact shape (30,000 × 80,000, B = 2,000, `gene_chunk=2000`,
+`stage1="gemm"`, `fit_backend="rust"`) measured **29.7 min, 55.6 GB peak** on
+the 128 GB laptop (`scaling.md` §1). The user has the real matrix and
+**offered to point at it; ask.** Then the demo notebook (ROADMAP §1), which
+can now open with a real analysis.
 
-Two rules for that work, both from the user:
+The rules that governed the performance work stay in force for whatever
+touches it next: measure before and after with `tools/bench_scaling.py` and
+put the numbers in `scaling.md`, not a commit message; and nothing changes an
+answer — `pytest -q` (656 tests) is the check.
 
-* **Measure before and after, on the real dataset.** Every number in
-  `scaling.md` came from a script; add yours the same way, and put the
-  measurement in the doc rather than in a commit message.
-* **Nothing there may change an answer** — except the grid cap, which changes
-  `affected_fraction`'s resolution and the `mean_shift` quadrature. That one
-  needs its own entry in `method.md` §1 and the realized `m` recorded in the
-  result and the manifest.
-
-To watch the wall before touching anything:
+To see the current state in one command:
 
 ```bash
 conda activate wade
-python - <<'PY'
-import numpy as np, time, wade
-rng = np.random.default_rng(0)
-G, n, B = 1000, 6000, 200          # 20 s, 1 GB — then scale n and watch it break
-cond = np.r_[np.ones(n, int), np.zeros(n, int)]
-counts = rng.poisson(rng.gamma(10, 5, (G, 1)), size=(G, 2 * n)).astype(float)
-t = time.perf_counter(); res = wade.wade(counts, np.ones(G), cond, nperms=B)
-print(f"{time.perf_counter() - t:.1f}s, m = {res.nprobs}")
-PY
+python tools/bench_scaling.py --genes 1000 --n 6000 --nperms 200 --full \
+    --stage1 gemm --fit-backend rust     # ~2.3 s; drop the flags for ~9 s
 ```

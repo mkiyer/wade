@@ -22,9 +22,18 @@ boundary — `as_counts`, `condition`, name-aware `wade_contrast`, `to_frame`,
 that is a decision, not a gap); the plotting layer
 (`plot_gene`, `plot_volcano`, `plot_stages`, two backends on one data layer —
 see the README); the Rust kernel for the subset test (bitwise against the
-NumPy path, about 80× faster; `docs/implementation-notes.md` §4); and the
+NumPy path, about 80× faster; `docs/implementation-notes.md` §4); the
 count-native subset stage — binomial thinning, the one-count pseudocount and
-bootstrap intervals (`docs/method.md` §10, `wade.thinning`).
+bootstrap intervals (`docs/method.md` §10, `wade.thinning`); and **the
+80,000-sample performance queue** (2026-08-20, all measurements in
+`docs/scaling.md`): the quantile-grid cap (`max_probs`, `method.md` §1), gene
+chunking (`gene_chunk`, bit-identical), the balanced-design GEMM stage 1
+(`stage1="gemm"`, opt-in), the one-sort-per-gene mean-shift kernel (bitwise,
+6–7.5×), the fold-change fit 34× (affine path + opt-in `fit_backend="rust"`),
+and the threaded bootstrap. A full `wade()` at (1,000 genes, 6,000 v 6,000,
+B = 200) went 19.8 → 2.27 s; the 30,000 × 80,000 target went from
+does-not-run (~3.7 h projected, ~163 GB needed) to **measured 29.7 minutes
+and 55.6 GB** at B = 2,000 with every fast path on.
 
 ---
 
@@ -52,36 +61,33 @@ integration test for both.
   5% at 8×) already shows the same-fold-change/different-shape pair and the
   5% subsets sitting at the floor.
 
-## 2. Performance and memory — the 80,000-sample target
+## 2. Performance and memory — what remains after the 2026-08-20 queue
 
-**The next session's work.** Measurements, hypotheses, risks and the reasoning
-behind every item here are in [`docs/scaling.md`](docs/scaling.md); this is
-only the queue. The target is a real dataset: **~30,000 genes x ~80,000
-samples**, which today needs **~3.7 hours and ~163 GB** and therefore does not
-run at all.
+The six-item queue landed (see the preamble and `docs/scaling.md` §§2–3 for
+every measurement). What remains, in order:
 
-The wall is not speed. `m = min(n_case, n_ctrl)` becomes 40,000, so every
-`(genes x m)` array is the size of the data matrix.
+1. **Run the real 30,000 × 80,000 dataset.** Everything so far is against
+   NB simulations of the target's shape; the user has the real matrix and
+   offered it. The interesting unknowns are its sparsity (which §5's O(nnz)
+   path would feed on), its count distribution's effect on the fit, and the
+   p-value pile-up §4 predicts at 30,000 genes.
+2. **The resident-matrix question** (`docs/scaling.md` §2.3, sharpened): the
+   chunked driver's peak is now four full `genes x samples` float64
+   residents — counts, jitter, `tpm` and the pseudocount, all carried by
+   `WadeResult` — plus the int32 thinned counts. The jitter is a seeded
+   stream and the pseudocount a rank-1 outer product; neither has to be
+   materialized. Whether to make them lazy (or float32) is a contract
+   question about what a result object carries, not a kernel question.
+3. **The subset kernel is now the wall-clock wall** at the target: B × O(n)
+   per gene is intrinsic for dense data (~40 min of a ~50-min total at
+   B = 2,000). The real answer is §5.1's sparse zero-run walk, which is the
+   single-cell path anyway; a dense shortcut worth trying first is lowering
+   stage-2's `B` independently of stage 1's (stage 1 needs the resolution;
+   stage 2's findings are rarer).
 
-1. **Cap the quantile grid** (`max_probs`, default 2,000). Divides every
-   `(genes x m)` array by 40x. Measured cost: faithful to a 0.1% subset at
-   m = 1,000; the rule is `m ~ 2.5 / smallest fraction of interest`. Changes a
-   documented property of the design — `method.md` §1 — so it must be stated
-   there and the realized `m` recorded in the result and the manifest.
-2. **Chunk over genes.** Peak memory must not depend on G. No numerical
-   consequence; the jitter must be indexed per chunk, never redrawn.
-3. **Stage 1 as one GEMM on balanced designs.** `mean_shift` is *exactly* the
-   difference of group means when balanced (2.1e-13), so the whole null is
-   `X @ W`: measured **139–185x**, ~40 s at the target. Agrees to 1e-9, not
-   bitwise, so it is opt-in beside the parity-pinned kernel.
-4. **One sort per gene in the mean-shift kernel** — the subset kernel's trick,
-   ~10x, and it covers the unbalanced designs the GEMM path does not.
-5. **The fold-change fit**, which is the largest single term (15.6 s of 20.3 s
-   at n = 6,000): bracket from the interquartile-mean ratio, fit in count
-   space, or move it into the kernel. Must stay unbiased.
-6. **Parallelize `n_boot`**, and consider float32 *storage*.
-
-Target after all of it: **single-digit minutes**.
+Not taken, deliberately: the fit bracket (a missed bracket is
+anti-conservative, `docs/scaling.md` §3.3) and a Poisson or hybrid bootstrap
+scheme (measured miscalibrated in plausible regimes, §6).
 
 ## 3. Inference refinements
 

@@ -244,9 +244,14 @@ choice is explicit and swappable.
 Both are arithmetic on your **design**, not properties of the software, and
 neither is fixable with more data or more permutations.
 
-**Resolution.** The grid has `min(n_case, n_ctrl)` points, so nothing finer than
-`1/m` is estimable. `affected_fraction` is quantitative above roughly 100 per
-group and only qualitative below about 50.
+**Resolution.** The grid has `min(n_case, n_ctrl, max_probs)` points, so
+nothing finer than `1/m` is estimable. `affected_fraction` is quantitative
+above roughly 100 per group and only qualitative below about 50. At the other
+end, `max_probs` (default 2,000) caps the grid on very large cohorts so that
+per-gene memory stops growing with the design; keep it at or above
+`2.5 / (smallest fraction of interest)` — the default resolves a 0.1% subset
+— and the realized `m` is `result.nprobs` and in the manifest
+([`docs/method.md`](docs/method.md) §1).
 
 **The combinatorial floor.** If `k` samples carry a signal, shuffling puts all
 of them in one group with probability `C(n1,k)/C(n1+n0,k)` — and **no
@@ -279,12 +284,21 @@ Implemented and tested: the statistic, both stages, the characterization, the
 normalizers, permutation inference with GPD refinement and BH, Rust kernels
 for both permutation loops, the count-native subset stage (binomial thinning,
 the one-count pseudocount, bootstrap intervals), the plotting layer, and the
-data-in/results-out boundary. **617 tests, about 12 s.**
+data-in/results-out boundary. **656 tests, about 12 s.**
 
 At 20,000 genes, 100 v 100 and 2,000 permutations a full run takes about 17 s
 on a 16-core laptop (9.7 s with `thin=False`); the permutation loops, which
 were 98% of the runtime on NumPy — about 5 minutes — now take 8 s and are held
 bitwise to the NumPy path.
+
+Large cohorts are first-class (`docs/scaling.md`): the quantile grid is
+capped (`max_probs`), genes can be processed in blocks whose results are
+bit-identical to the one-pass run (`gene_chunk`), and two opt-in fast paths —
+`stage1="gemm"` on balanced designs and `fit_backend="rust"` for the
+fold-change fit — bring a 1,000-gene, 6,000 v 6,000, 200-permutation run from
+20 s to 2.3 s. A 30,000-gene × 80,000-sample cohort, which previously needed
+~163 GB and did not run, completes in **30 minutes at a 56 GB peak** with
+2,000 permutations (measured; `docs/scaling.md` §1).
 
 Ported from an R implementation that remains in `reference/` as the oracle the
 golden fixtures were generated from. Worst-case relative deviation across 325
