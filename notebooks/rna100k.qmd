@@ -63,7 +63,12 @@ unique key; `gene_name` is for reading.
 genes = pl.read_excel(GENES_XLSX)
 NORMALIZER = genes["gene_num_introns"].to_numpy().astype(np.float64)
 assert NORMALIZER.min() >= 1, "a zero-intron gene would break the normalizer"
-GENE_IDS = genes["gene_id"].to_numpy()
+# Gene symbols are unique in this table (checked — zero duplicates), so they
+# are the labels WADE carries: every result table and plot then reads as
+# biology (KRAS, ALB, ...) rather than as Ensembl accessions. The Ensembl id
+# stays in `genes` and is joined back into anything written to disk.
+GENE_NAMES = genes["gene_name"].to_numpy()
+assert genes["gene_name"].n_unique() == genes.height, "symbols must be unique to be labels"
 print(f"{genes.height:,} genes; normalizer = gene_num_introns "
       f"(min {int(NORMALIZER.min())}, median {int(np.median(NORMALIZER))})")
 ```
@@ -143,7 +148,7 @@ cond = wade.condition(plasma, key="library", column="is_malignant",
 t0 = time.perf_counter()
 res = wade.wade(
     counts, NORMALIZER, cond,
-    gene_names=GENE_IDS, sample_names=libs,
+    gene_names=GENE_NAMES, sample_names=libs,
     nperms=2000, seed=1,
     gene_chunk=4000,           # bounded memory, bit-identical (scaling.md §2.2)
     fit_backend="rust",        # opt-in fit kernel (scaling.md §3.3)
@@ -160,14 +165,47 @@ identity only holds for equal groups — the default grid path covers it.)
 ```{python}
 #| label: toptable
 frame = (res.to_frame()
-         .join(genes.select("gene_id", "gene_name", "gene_type"),
-               left_on="gene", right_on="gene_id")
-         .sort("padj_subset"))
+         .join(genes.select("gene_id", "gene_name", "gene_type", "chrom"),
+               left_on="gene", right_on="gene_name")
+         .rename({"gene": "gene_name"}))
 sig_mean = int((res.padj_mean_shift <= 0.05).sum())
 sig_subset = int((res.padj_subset <= 0.05).sum())
 print(f"BH 0.05: {sig_mean:,} mean-shift genes, {sig_subset:,} subset genes")
-frame.select("gene_name", "gene_type", "log2_fc", "padj_mean_shift",
-             "padj_subset", "affected_fraction", "direction").head(15)
+
+SHOW = ["gene_name", "gene_type", "log2_fc", "padj_mean_shift", "padj_subset",
+        "affected_fraction", "direction"]
+pl.Config.set_tbl_rows(40)
+```
+
+The two rankings, forty genes each — the subset stage's (sorted by the
+subset statistic itself, since the p-values saturate at this cohort size,
+then by the p-value) and the ordinary mean-shift ranking:
+
+```{python}
+#| label: top-subset
+frame.sort(["padj_subset", "subset_stat"],
+           descending=[False, True]).select(SHOW).head(40)
+```
+
+```{python}
+#| label: top-mean
+frame.sort(["padj_mean_shift", "neglog10_p_mean_shift"],
+           descending=[False, True]).select(SHOW).head(40)
+```
+
+The **full annotated table** — every gene, symbols first, Ensembl ids and
+coordinates joined back in — goes beside the data for browsing in anything:
+
+```{python}
+#| label: annotated
+RESULTS.mkdir(exist_ok=True)
+annotated = frame.select(["gene_name", "gene_id", "gene_type", "chrom",
+                          *[c for c in frame.columns
+                            if c not in ("gene_name", "gene_id", "gene_type", "chrom")]])
+annotated.write_csv(RESULTS / "plasma_malignant_vs_nonmalignant_annotated.tsv",
+                    separator="\t")
+print(f"wrote {annotated.height:,} genes x {annotated.width} columns to "
+      f"plasma_malignant_vs_nonmalignant_annotated.tsv")
 ```
 
 ```{python}
@@ -185,8 +223,9 @@ wade.plot_stages(res)
 ```{python}
 #| label: fig-gene
 #| fig-cap: "The most subset-like significant gene, in full: quantile pair, difference, log-ratio curve."
-top = frame.filter(pl.col("padj_subset") <= 0.05).head(1)
-wade.plot_gene(res, gene=top["gene"].to_list() if top.height else [0])
+top = (frame.filter(pl.col("padj_subset") <= 0.05)
+       .sort("subset_stat", descending=True).head(1))
+wade.plot_gene(res, gene=top["gene_name"].to_list() if top.height else [0])
 ```
 
 Two honesty checks worth keeping in view on a cohort this size:
@@ -208,6 +247,21 @@ print(f"median depth  malignant {np.median(depth[case]) / 1e6:.1f}M   "
       f"non-malignant {np.median(depth[~case]) / 1e6:.1f}M")
 ```
 
+On what WADE does and does not do about depth, precisely. Library-size
+normalization removes depth's **first moment** — a 10M-count library and a
+1M-count library land on the same scale. Binomial thinning **did** run in
+the calls above (`res.subset.correction == "thinning"`), but it is stage 2's
+per-gene *fold-change* correction: it makes the two groups exchangeable
+under the fitted global shift so the subset null is honest; it does not
+equalize depth. What no per-gene correction touches is depth's **second
+moment**: after normalization, a shallow library's values are noisier than a
+deep one's, so **group-associated** depth is a genuine distributional
+difference between the groups — technical, but real — and a distributional
+test will see it. That is the case for a depth-equalizing preprocessing step
+(thin every library to a common depth before testing — exact for counts, at
+the price of discarded reads), which is queued as a measured experiment in
+`ROADMAP.md` §2 rather than assumed to help.
+
 Results and the manifest go **beside the data**, never into the repository:
 
 ```{python}
@@ -215,6 +269,60 @@ Results and the manifest go **beside the data**, never into the repository:
 RESULTS.mkdir(exist_ok=True)
 out = wade.write_results(res, RESULTS / "plasma_malignant_vs_nonmalignant.tsv")
 print("wrote", out.name, "and", out.with_suffix("").with_suffix(".manifest.json").name)
+```
+
+## Before interpreting: two falsification checks
+
+A result where most of the transcriptome is "subset-significant" demands a
+bug check before any story about technical variability. Two controls, both
+on the same data:
+
+**Permuted labels.** Shuffle malignant/non-malignant across the same 3,005
+plasma libraries and rerun. Everything about the data — depth spread,
+study mixture, sparsity — is unchanged; only the association between label
+and everything else is broken. A machinery bug that manufactures subset
+significance would fire here too; a calibrated test must return to its
+nominal level.
+
+```{python}
+#| label: perm-null
+rng = np.random.default_rng(99)
+cond_perm = rng.permutation(np.asarray(res.cond))
+res_null = wade.wade(counts, NORMALIZER, cond_perm,
+                     gene_names=GENE_NAMES, sample_names=libs,
+                     nperms=2000, seed=1, gene_chunk=4000, fit_backend="rust")
+print(f"permuted labels — BH 0.05: "
+      f"{int((res_null.padj_mean_shift <= 0.05).sum()):,} mean-shift, "
+      f"{int((res_null.padj_subset <= 0.05).sum()):,} subset; "
+      f"raw p_subset < 0.05 for {float((res_null.p_subset < 0.05).mean()):.1%} of genes")
+```
+
+**One study only.** `pw_pdac_bloodev` has both classes inside a single
+study (283 pancreatic-cancer v 117 non-malignant plasma), so the study and
+protocol axes are held fixed. If the pan-plasma saturation were mostly
+cross-study structure, this contrast should come back far sparser — and
+whatever survives is the more believable ranking.
+
+```{python}
+#| label: within-study
+pdac = plasma.filter(pl.col("study") == "pw_pdac_bloodev")
+libs_p = pdac["library"].to_list()
+counts_p = load_counts(libs_p)
+cond_p = wade.condition(pdac, key="library", column="is_malignant",
+                        case=True, control=False)
+res_p = wade.wade(counts_p, NORMALIZER, cond_p,
+                  gene_names=GENE_NAMES, sample_names=libs_p,
+                  nperms=2000, seed=1, gene_chunk=4000, fit_backend="rust")
+depth_p = counts_p.sum(axis=0)
+case_p = np.asarray(res_p.cond) == 1
+print(f"pw_pdac_bloodev ({int(case_p.sum())} v {int((~case_p).sum())}) — BH 0.05: "
+      f"{int((res_p.padj_mean_shift <= 0.05).sum()):,} mean-shift, "
+      f"{int((res_p.padj_subset <= 0.05).sum()):,} subset")
+print(f"median depth  case {np.median(depth_p[case_p]) / 1e6:.1f}M   "
+      f"control {np.median(depth_p[~case_p]) / 1e6:.1f}M")
+(res_p.to_frame().sort(["padj_subset", "subset_stat"], descending=[False, True])
+ .select("gene", "log2_fc", "padj_mean_shift", "padj_subset",
+         "affected_fraction", "direction").head(25))
 ```
 
 ## The full cohort, when you mean it
@@ -237,7 +345,7 @@ if FULL_RUN:
     cond_full = wade.condition(chosen, key="library", column="sample_class",
                                case="tumor", control="normal_adjacent")
     res_full = wade.wade(counts_full, NORMALIZER, cond_full,
-                         gene_names=GENE_IDS, sample_names=libs_full,
+                         gene_names=GENE_NAMES, sample_names=libs_full,
                          nperms=2000, seed=1, gene_chunk=2000,
                          fit_backend="rust")
     wade.write_results(res_full, RESULTS / "tissue_tumor_vs_normal_adjacent.tsv")
@@ -247,30 +355,46 @@ else:
 
 ## Reading the smoke run honestly
 
-The first render of this notebook (2026-08-20) found **most of the
+The first renders of this notebook (2026-08-20) found **most of the
 transcriptome "subset-significant"** on the plasma contrast, with **18.8% of
 genes at the mean-shift p-value floor** and a **1.7× group-associated depth
 difference** (malignant median 8.1M vs non-malignant 4.8M splice-junction
-counts). Read together, that is not a discovery — it is the caveat at the
-top of the contrast section made quantitative. At n ≈ 3,000 the test can
-resolve tiny distributional differences, and this contrast bundles study,
-protocol and sequencing depth with disease; the subset stage is faithfully
-reporting that a single global shift does not explain group differences that
-are substantially technical. The three follow-ups this motivates, in order:
+counts). The falsification section above says what that is and is not:
 
-* **Depth as a confound, measured** — group-associated depth is exactly the
-  batch structure `docs/limits.md` warns permutation cannot absolve. The
-  planned experiment (planted depth imbalance between groups; false-positive
-  rates for both stages; candidate guards including depth-equalizing
-  binomial thinning) belongs in `docs/scaling.md` beside the other measured
-  questions.
-* **Within-study contrasts** — the defensible analyses here hold study (and
-  ideally protocol) fixed: single-study case/control designs, or restricted
-  permutation within study, which the machinery does not yet offer.
+* **It is not a bug.** On permuted labels — same matrix, same depth spread,
+  same study mixture — significance collapsed to nominal (0 mean-shift and
+  53 subset genes at BH 0.05; raw `p_subset < 0.05` for 3.9% of genes,
+  against a nominal 5%). The saturation tracks the actual labels.
+* **It is not only cross-study structure.** The single-study contrast
+  (`pw_pdac_bloodev`, 283 v 117) still called ~70% of genes at BH 0.05 —
+  with its own, *reversed* 1.3× depth imbalance. Holding study fixed does
+  not deflate it.
+* **What it is:** at n in the hundreds-to-thousands, the subset stage's
+  null — *one* global fold change explains the whole distribution — is a
+  point null, and every real deviation from it, however small, biological
+  or technical, becomes significant. Significance has saturated as an
+  instrument here. **The operative outputs are the rankings and the
+  descriptors** (`subset_stat`, `affected_fraction`, `direction`,
+  `log2_fc`), which is exactly the user's stated priority: are the
+  top-ranked genes the true ones?
+
+The follow-ups this motivates, in order:
+
+* **A rank-recovery benchmark on real background** — plant known subset and
+  global signals into real non-malignant plasma libraries (semi-synthetic:
+  the background keeps every technical wart) and measure whether the
+  subset ranking puts the planted genes on top, and how far down the
+  technical tail begins. This is the direct test of "the best genes are
+  the best genes", and it is the priority.
+* **Depth as a confound, measured** — group-associated depth appears in
+  both contrasts above (1.7× one way, 1.3× the other). The planned
+  experiment: planted depth imbalance between otherwise-identical groups,
+  false-positive rates for both stages, and candidate guards — led by
+  depth-equalizing binomial thinning, the count-exact version of adding
+  Poisson noise.
 * **P-value resolution** (`scaling.md` §4) — 18.8% of genes at the floor is
-  the pile-up that section predicts; ranking has degraded and the
-  saddlepoint / multilevel work now has an observed motivation, not a
-  hypothetical one.
+  the predicted pile-up, observed; the saddlepoint route matters most
+  because it would also sharpen the *ranking* the first bullet cares about.
 
 And two facts for the performance roadmap: **47% zeros** (real sparsity,
 but not single cell's >90% — the §5.1 zero-run walk would roughly halve the

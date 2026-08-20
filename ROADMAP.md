@@ -69,18 +69,38 @@ every measurement). What remains, in order:
 1. **The real dataset — first contact made 2026-08-20**
    (`notebooks/rna100k.qmd`: 30,976 genes × 83,047 libraries of
    splice-junction counts, intron-count normalizer, harmonized metadata
-   joined by `library`). A real plasma contrast (1,343 malignant v 1,662
-   non-malignant) runs end to end in 126 s. Three measured facts now drive
-   the queue: **group-associated depth** (1.7× median difference in that
-   contrast — the batch structure permutation cannot absolve, motivating a
-   planted depth-imbalance experiment and possibly a depth-equalizing
-   thinning guard); **18.8% of genes at the mean-shift p-value floor** (the
-   §4 pile-up, observed — the resolution work has a real motivation now);
-   and **47% zeros** (the §5.1 sparse walk buys ~2×, not 10×). Also wanted:
-   **restricted permutation within study**, which the defensible contrasts
-   on this cohort need and the machinery does not yet offer. The full-cohort
-   run stays gated in the notebook (~60 GB); 228 cohort libraries (all
-   CPTAC_MEL) are missing from the harmonized metadata.
+   joined by `library`; 228 cohort libraries, all CPTAC_MEL, not yet
+   harmonized; the full-cohort run stays gated at ~60 GB). The plasma
+   contrast (1,343 malignant v 1,662 non-malignant, 126 s) saturated —
+   most of the transcriptome subset-significant — and the notebook's
+   falsification section pinned down what that is: **not a bug** (permuted
+   labels on the same matrix: 0 mean-shift / 53 subset BH hits, raw
+   p_subset < 0.05 at 3.9% — nominal), and **not only cross-study
+   structure** (a single-study 283 v 117 contrast still calls ~70% of
+   genes). At these n's the stage-2 point null rejects on every real
+   deviation, so **significance saturates and the rankings/descriptors are
+   the operative outputs**. What that ordering demands, measured facts
+   attached:
+
+   1. **A rank-recovery benchmark on real background** — plant known subset
+      and global signals into real non-malignant plasma libraries and
+      measure whether the subset ranking recovers them. The direct test of
+      the user's stated priority ("the best genes are the best genes").
+   2. **The depth experiment** — group-associated depth appeared in both
+      contrasts (1.7× one way, 1.3× the other; cohort spans 0.8M–89M).
+      Planted depth imbalance, false-positive rates per stage, guards led
+      by depth-equalizing binomial thinning (the count-exact form of the
+      user's Poisson-noise instinct).
+   3. **P-value resolution** (§3 below and `docs/scaling.md` §4) — 18.8% of
+      genes at the mean-shift floor, observed. The saddlepoint route also
+      sharpens the ranking item 1 cares about; `stage1="gemm"` already makes
+      the statistic exactly linear, which is what the saddlepoint needs.
+   4. **Restricted (within-group) permutation** — permute labels within
+      study/stratum. The defensible contrasts on this cohort need it, and it
+      is the same machinery single cell's donor permutation needs
+      (`docs/scaling.md` §5.3).
+   5. **47% zeros**: the §5.1 sparse walk buys ~2× here, not 10× — worth
+      having, not urgent.
 2. **The resident-matrix question** (`docs/scaling.md` §2.3, sharpened): the
    chunked driver's peak is now four full `genes x samples` float64
    residents — counts, jitter, `tpm` and the pseudocount, all carried by
