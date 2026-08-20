@@ -226,3 +226,9 @@ Cargo.lock.orig
 
 # Built extension module (rebuilt by `pip install -e .`)
 src/wade/*.so
+
+# rendered notebooks carry data-derived values; the .qmd source is the artifact
+notebooks/*.html
+notebooks/*_files/
+notebooks/.quarto/
+.quarto/

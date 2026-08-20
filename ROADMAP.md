@@ -66,11 +66,21 @@ integration test for both.
 The six-item queue landed (see the preamble and `docs/scaling.md` §§2–3 for
 every measurement). What remains, in order:
 
-1. **Run the real 30,000 × 80,000 dataset.** Everything so far is against
-   NB simulations of the target's shape; the user has the real matrix and
-   offered it. The interesting unknowns are its sparsity (which §5's O(nnz)
-   path would feed on), its count distribution's effect on the fit, and the
-   p-value pile-up §4 predicts at 30,000 genes.
+1. **The real dataset — first contact made 2026-08-20**
+   (`notebooks/rna100k.qmd`: 30,976 genes × 83,047 libraries of
+   splice-junction counts, intron-count normalizer, harmonized metadata
+   joined by `library`). A real plasma contrast (1,343 malignant v 1,662
+   non-malignant) runs end to end in 126 s. Three measured facts now drive
+   the queue: **group-associated depth** (1.7× median difference in that
+   contrast — the batch structure permutation cannot absolve, motivating a
+   planted depth-imbalance experiment and possibly a depth-equalizing
+   thinning guard); **18.8% of genes at the mean-shift p-value floor** (the
+   §4 pile-up, observed — the resolution work has a real motivation now);
+   and **47% zeros** (the §5.1 sparse walk buys ~2×, not 10×). Also wanted:
+   **restricted permutation within study**, which the defensible contrasts
+   on this cohort need and the machinery does not yet offer. The full-cohort
+   run stays gated in the notebook (~60 GB); 228 cohort libraries (all
+   CPTAC_MEL) are missing from the harmonized metadata.
 2. **The resident-matrix question** (`docs/scaling.md` §2.3, sharpened): the
    chunked driver's peak is now four full `genes x samples` float64
    residents — counts, jitter, `tpm` and the pseudocount, all carried by

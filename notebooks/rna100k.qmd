@@ -1,0 +1,278 @@
+---
+title: "WADE on the rna100k cohort"
+format:
+  html:
+    toc: true
+    embed-resources: true
+jupyter: python3
+execute:
+  warning: false
+---
+
+The real-dataset workbench: ~31,000 genes × ~83,000 libraries of splice-junction
+counts, the dataset the performance queue (`docs/scaling.md`) was built for.
+This notebook is the test bed for developing WADE against it and the showcase
+of the result boundary — **the data live in Dropbox and stay there**; nothing
+patient-derived is written into the repository, and results land next to the
+data.
+
+Two rules it inherits:
+
+* **Memory is budgeted, not discovered.** A full-cohort run at this shape was
+  measured at **55.6 GB peak** on the synthetic twin (`docs/scaling.md` §1),
+  on top of nothing — the loaders below never materialize more than they say,
+  and the full-matrix path is behind an explicit gate.
+* **The default render is small.** It runs one real contrast on a
+  column-selected slice (~0.8 GB) end to end — load, align, test, read,
+  write — in a few minutes.
+
+## The data
+
+```{python}
+#| label: paths
+from pathlib import Path
+
+import numpy as np
+import polars as pl
+
+import wade
+
+DATA = Path("/Users/mkiyer/University of Michigan Dropbox/MED-mctp-iyerlab"
+            "/projects/cfrna/rna100k_rnaseq_data")
+META = Path("/Users/mkiyer/University of Michigan Dropbox/MED-mctp-iyerlab"
+            "/projects/rna100k/metadata_harmonization/cache")
+
+COUNTS_FEATHER = DATA / "cohort_sj_counts.feather"     # splice-junction counts
+GENES_XLSX = DATA / "cohort_genes.xlsx"                # row annotation, incl. the normalizer
+SAMPLES_PARQUET = META / "harmonized_samples.parquet"  # curated library metadata
+
+RESULTS = DATA / "wade_results"                        # results live beside the data
+
+#: Run the full 31k x 83k cohort. Needs ~60 GB free (measured 55.6 GB peak at
+#: this shape plus the load); leave False unless you have it.
+FULL_RUN = False
+```
+
+Splice-junction counts over the gene's **intron count** is the sjTPM
+normalization (`wade.tpm_like`'s docstring names exactly this pair), so the
+gene table supplies both the row labels and the normalizer. `gene_id` is the
+unique key; `gene_name` is for reading.
+
+```{python}
+#| label: genes
+genes = pl.read_excel(GENES_XLSX)
+NORMALIZER = genes["gene_num_introns"].to_numpy().astype(np.float64)
+assert NORMALIZER.min() >= 1, "a zero-intron gene would break the normalizer"
+GENE_IDS = genes["gene_id"].to_numpy()
+print(f"{genes.height:,} genes; normalizer = gene_num_introns "
+      f"(min {int(NORMALIZER.min())}, median {int(np.median(NORMALIZER))})")
+```
+
+The harmonized metadata covers the whole rna100k effort; the cohort matrix's
+columns are the `library` keys. A handful of cohort libraries have no
+harmonized row yet — surfaced here rather than silently dropped, because a
+contrast can only use libraries the curation covers.
+
+```{python}
+#| label: samples
+cohort_libs = pl.scan_ipc(COUNTS_FEATHER).collect_schema().names()
+samples = (pl.scan_parquet(SAMPLES_PARQUET)
+             .filter(pl.col("library").is_in(cohort_libs))
+             .collect())
+unmatched = len(cohort_libs) - samples.height
+print(f"cohort libraries: {len(cohort_libs):,}; harmonized: {samples.height:,}; "
+      f"not yet harmonized: {unmatched}")
+print(samples["specimen_type"].value_counts().sort("count", descending=True).head(6))
+```
+
+## Loading counts, by the column
+
+The matrix is Int32 on disk. `load_counts` reads **only the named libraries**,
+in blocks, into a preallocated float64 array — so a 3,000-sample contrast
+costs ~0.8 GB and never touches the other 80,000 columns, and the full-cohort
+load peaks at the array itself (20.6 GB) plus one block.
+
+```{python}
+#| label: loader
+def load_counts(libraries: list[str], block: int = 4096) -> np.ndarray:
+    """(genes x libraries) float64 counts for the named libraries."""
+    out = np.empty((genes.height, len(libraries)), dtype=np.float64)
+    scan = pl.scan_ipc(COUNTS_FEATHER)
+    for s in range(0, len(libraries), block):
+        cols = libraries[s:s + block]
+        out[:, s:s + len(cols)] = scan.select(cols).collect().to_numpy()
+    return out
+```
+
+## A first contrast: malignant vs non-malignant plasma
+
+Plasma cfRNA is the lab's home question, and the cohort has 1,343 malignant
+vs 1,662 non-malignant plasma libraries (pancreas-heavy on the malignant
+side). **This is a plumbing-and-showcase contrast, not a discovery claim**:
+the plasma libraries span several studies, so study and disease are partly
+confounded and label exchangeability across studies is exactly the kind of
+assumption `docs/limits.md` warns about. A defensible analysis would permute
+within study; this notebook's job is to exercise the machinery on real data.
+
+```{python}
+#| label: contrast
+plasma = samples.filter(
+    (pl.col("specimen_type") == "plasma") & pl.col("is_malignant").is_not_null()
+)
+print(plasma["is_malignant"].value_counts(), "\n")
+print(plasma.filter(pl.col("is_malignant"))["oncotree_lineage"]
+      .value_counts().sort("count", descending=True).head(5))
+
+libs = plasma["library"].to_list()
+counts = load_counts(libs)
+print(f"\ncounts: {counts.shape}, {counts.nbytes / 2**30:.2f} GB; "
+      f"zero fraction {float((counts == 0).mean()):.2f}")
+```
+
+The condition comes from the metadata **by name** — `wade.condition` aligns
+the assignment to the matrix's columns strictly and raises on any mismatch.
+
+```{python}
+#| label: run
+#| warning: false
+import time
+
+cond = wade.condition(plasma, key="library", column="is_malignant",
+                      case=True, control=False)
+
+t0 = time.perf_counter()
+res = wade.wade(
+    counts, NORMALIZER, cond,
+    gene_names=GENE_IDS, sample_names=libs,
+    nperms=2000, seed=1,
+    gene_chunk=4000,           # bounded memory, bit-identical (scaling.md §2.2)
+    fit_backend="rust",        # opt-in fit kernel (scaling.md §3.3)
+)
+print(f"wade() on {counts.shape[0]:,} genes x {len(libs):,} plasma libraries: "
+      f"{time.perf_counter() - t0:.0f} s   (m = {res.nprobs})")
+```
+
+(`stage1="gemm"` is not used: 1,343 v 1,662 is unbalanced, and the GEMM
+identity only holds for equal groups — the default grid path covers it.)
+
+## Reading the result
+
+```{python}
+#| label: toptable
+frame = (res.to_frame()
+         .join(genes.select("gene_id", "gene_name", "gene_type"),
+               left_on="gene", right_on="gene_id")
+         .sort("padj_subset"))
+sig_mean = int((res.padj_mean_shift <= 0.05).sum())
+sig_subset = int((res.padj_subset <= 0.05).sum())
+print(f"BH 0.05: {sig_mean:,} mean-shift genes, {sig_subset:,} subset genes")
+frame.select("gene_name", "gene_type", "log2_fc", "padj_mean_shift",
+             "padj_subset", "affected_fraction", "direction").head(15)
+```
+
+```{python}
+#| label: fig-volcano
+#| fig-cap: "Both stages. Left: the ordinary test. Right: 'a global shift does not explain this'."
+wade.plot_volcano(res, stage="both", label=6)
+```
+
+```{python}
+#| label: fig-stages
+#| fig-cap: "What kind of difference: the two stages against each other, coloured by affected_fraction."
+wade.plot_stages(res)
+```
+
+```{python}
+#| label: fig-gene
+#| fig-cap: "The most subset-like significant gene, in full: quantile pair, difference, log-ratio curve."
+top = frame.filter(pl.col("padj_subset") <= 0.05).head(1)
+wade.plot_gene(res, gene=top["gene"].to_list() if top.height else [0])
+```
+
+Two honesty checks worth keeping in view on a cohort this size:
+
+```{python}
+#| label: diagnostics
+# 1. The p-value floor (scaling.md §4): at ~31k genes, BH needs resolution
+#    near the empirical/GPD floor, and genes piling up there stop ranking.
+floor = 1.0 / (2000 * 250)
+at_floor = int((res.p_mean_shift <= floor * 1.001).sum())
+print(f"mean-shift p-values at the resolution floor: {at_floor:,} "
+      f"({at_floor / len(res.gene):.1%} of genes)")
+
+# 2. Depth by group: library sizes span ~0.8M-90M in this cohort. Depth that
+#    is group-associated is a batch confound no normalization removes.
+depth = counts.sum(axis=0)
+case = np.asarray(res.cond) == 1
+print(f"median depth  malignant {np.median(depth[case]) / 1e6:.1f}M   "
+      f"non-malignant {np.median(depth[~case]) / 1e6:.1f}M")
+```
+
+Results and the manifest go **beside the data**, never into the repository:
+
+```{python}
+#| label: write
+RESULTS.mkdir(exist_ok=True)
+out = wade.write_results(res, RESULTS / "plasma_malignant_vs_nonmalignant.tsv")
+print("wrote", out.name, "and", out.with_suffix("").with_suffix(".manifest.json").name)
+```
+
+## The full cohort, when you mean it
+
+The gate, not a default: ~20.6 GB for the matrix plus WADE's residents —
+**measured 55.6 GB peak at this exact shape** on the synthetic twin
+(`docs/scaling.md` §1, ~30 min at B = 2,000 with `fit_backend="rust"` and,
+on a balanced design, `stage1="gemm"`). Edit the contrast; the template runs
+whatever the metadata can define.
+
+```{python}
+#| label: full
+if FULL_RUN:
+    chosen = samples.filter(
+        (pl.col("specimen_type") == "tissue")
+        & pl.col("sample_class").is_in(["tumor", "normal_adjacent"])
+    )
+    libs_full = chosen["library"].to_list()
+    counts_full = load_counts(libs_full)
+    cond_full = wade.condition(chosen, key="library", column="sample_class",
+                               case="tumor", control="normal_adjacent")
+    res_full = wade.wade(counts_full, NORMALIZER, cond_full,
+                         gene_names=GENE_IDS, sample_names=libs_full,
+                         nperms=2000, seed=1, gene_chunk=2000,
+                         fit_backend="rust")
+    wade.write_results(res_full, RESULTS / "tissue_tumor_vs_normal_adjacent.tsv")
+else:
+    print("FULL_RUN = False — flip it with ~60 GB free.")
+```
+
+## Reading the smoke run honestly
+
+The first render of this notebook (2026-08-20) found **most of the
+transcriptome "subset-significant"** on the plasma contrast, with **18.8% of
+genes at the mean-shift p-value floor** and a **1.7× group-associated depth
+difference** (malignant median 8.1M vs non-malignant 4.8M splice-junction
+counts). Read together, that is not a discovery — it is the caveat at the
+top of the contrast section made quantitative. At n ≈ 3,000 the test can
+resolve tiny distributional differences, and this contrast bundles study,
+protocol and sequencing depth with disease; the subset stage is faithfully
+reporting that a single global shift does not explain group differences that
+are substantially technical. The three follow-ups this motivates, in order:
+
+* **Depth as a confound, measured** — group-associated depth is exactly the
+  batch structure `docs/limits.md` warns permutation cannot absolve. The
+  planned experiment (planted depth imbalance between groups; false-positive
+  rates for both stages; candidate guards including depth-equalizing
+  binomial thinning) belongs in `docs/scaling.md` beside the other measured
+  questions.
+* **Within-study contrasts** — the defensible analyses here hold study (and
+  ideally protocol) fixed: single-study case/control designs, or restricted
+  permutation within study, which the machinery does not yet offer.
+* **P-value resolution** (`scaling.md` §4) — 18.8% of genes at the floor is
+  the pile-up that section predicts; ranking has degraded and the
+  saddlepoint / multilevel work now has an observed motivation, not a
+  hypothetical one.
+
+And two facts for the performance roadmap: **47% zeros** (real sparsity,
+but not single cell's >90% — the §5.1 zero-run walk would roughly halve the
+subset stage, not decimate it), and **depth spanning 0.8M–89M** across the
+cohort, 17× between the 5th and 95th percentiles.

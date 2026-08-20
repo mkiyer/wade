@@ -61,13 +61,18 @@ The package is `src/wade/`. Twelve modules, all small:
 
 See [`../ROADMAP.md`](../ROADMAP.md) for the queue.
 
-1. **The real dataset.** Everything above is against NB simulations of the
-   30,000 × 80,000 target's shape; the user has the real matrix and **offered
-   to point at it — ask.** Expect three things the simulations cannot show:
-   its sparsity (feeds `scaling.md` §5.1's O(nnz) path), the fit's behaviour
-   on its actual count distribution, and the p-value pile-up `scaling.md` §4
-   predicts at 30,000 genes (the empirical/GPD floor is ~today's BH
-   threshold, so ranking, not testing, becomes the problem).
+1. **The real dataset — first contact made** (`notebooks/rna100k.qmd`,
+   2026-08-20; renders end to end with quarto, needs `fastexcel`/`pyyaml`/
+   `ipykernel` which are now in the env). 30,976 × 83,047 splice-junction
+   counts, `gene_num_introns` as the normalizer, harmonized metadata joined
+   by `library` (228 CPTAC_MEL libraries not yet harmonized). The smoke
+   contrast (plasma malignant v non-malignant, 126 s) surfaced the next
+   agenda, written into ROADMAP §2: group-associated depth (1.7× — the
+   depth-imbalance experiment), the §4 p-value pile-up observed at 18.8% of
+   genes, restricted (within-study) permutation as a missing feature, and
+   47% sparsity. The full-cohort run is gated in the notebook (~60 GB).
+   Rendered HTML is gitignored: the `.qmd` is the artifact, nothing
+   patient-derived enters the repo.
 2. **Demo notebook** — nothing exists. `tools/make_readme_figures.py` already
    builds the dataset and the three figures it should open with. Deferred so
    it could be a real analysis; with the target unblocked, it can be.
