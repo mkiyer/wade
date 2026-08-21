@@ -693,6 +693,36 @@ def test_both_backends_draw_the_intervals_and_omit_them_at_n_boot_zero(res, res_
 
 
 @pytest.mark.parametrize("backend", P.available_backends())
+def test_an_interval_that_misses_its_own_estimate_still_draws(res_boot, backend):
+    """A percentile bootstrap interval need not bracket its point estimate.
+
+    ``affected_fraction`` is a participation ratio, and its bootstrap
+    distribution can sit entirely to one side of the observed value — measured,
+    8 genes in 200 at ``n_boot=100``. Both backends refuse a negative error-bar
+    arm outright, so this used to raise ``ValueError: 'yerr' must not contain
+    negative values`` for any figure putting that column on an axis.
+    """
+    v = np.asarray(res_boot.affected_fraction, dtype=np.float64)
+    lo, hi = res_boot.ci_affected_fraction
+    assert ((v < lo) | (v > hi)).any(), "fixture no longer exercises the case"
+
+    # It draws, and the bar covers the point: clamped, so never narrower than
+    # the interval and never claiming more precision than was measured.
+    fig = wade.plot_volcano(res_boot, "subset", x="subset_log2_fc",
+                            y="affected_fraction", label=8, backend=backend)
+    assert fig is not None
+    from wade.plotting.data import _interval_arms
+
+    d = P.volcano_data(res_boot, "subset", x="subset_log2_fc",
+                       y="affected_fraction", label=8)
+    idx = np.flatnonzero(d.labelled)
+    minus, plus = _interval_arms(d.y, d.y_ci, idx)
+    assert (minus >= 0).all() and (plus >= 0).all()
+    assert (d.y[idx] - minus <= np.minimum(lo[idx], d.y[idx]) + 1e-12).all()
+    assert (d.y[idx] + plus >= np.maximum(hi[idx], d.y[idx]) - 1e-12).all()
+
+
+@pytest.mark.parametrize("backend", P.available_backends())
 def test_a_drawn_error_bar_spans_exactly_the_reported_interval(res_boot, backend):
     """The endpoints, not merely the presence. A doubled arm or a swapped
     lo/hi renders perfectly plausibly and says the wrong thing."""

@@ -15,13 +15,20 @@ and did not run completes, measured, in **29.7 minutes at a 55.6 GB peak**
 (B = 2,000, all fast paths; `scaling.md` §1). Since then the package has been
 audited, corrected and **cut down**: ~1,300 lines deleted, five redundant
 paths collapsed to one, and the documents rewritten to match the code.
-**694 tests pass in about 10 seconds**, parity at **9.155e-15** over 436
-comparisons.
 
-**The immediate work is [`plan.md`](plan.md)** — Phases A and D are done,
-**Phase B (plotting becomes a subpackage) is next**, then Phase C (the
-visualization work), then three notebooks. That document is the recipe; this
-one is the context it assumes.
+As of 2026-08-21 the **implementation queue is empty**: the last six core items
+landed, `plotting.py` became the `wade/plotting/` subpackage, and the whole
+visualization queue is built — themes, drawn bootstrap intervals, a driver
+figure, per-gene metadata in figures, linked views, a stage-1 row, and label
+de-collision. **738 tests pass in about 12 seconds**, parity unchanged at
+**9.155e-15** over 436 comparisons.
+
+**The immediate work is the three notebooks** — `ROADMAP.md` §1 and §3. Each is
+a separate deliverable: the `demo` first (the showcase, the README in executable
+form), then `benchmark` (which the real cohort's rank-recovery work is waiting
+on), then `rna100k` relabelled as manuscript material. `plan.md` was the recipe
+for phases B and C and was deleted when C landed, as it said to; its outcome is
+in `ROADMAP.md`, `docs/plotting.md` and the code.
 
 ```bash
 export PATH="/usr/local/bin:$PATH"          # only if you need R
@@ -48,7 +55,8 @@ The new `wade()` surface, all documented in the docstring: `max_probs`
 `fit_backend="rust"` (the fold-change fit's bisection in the kernel, opt-in
 because it is *not* bitwise against NumPy — see §3 below).
 
-The package is `src/wade/`. Eleven modules plus the kernel:
+The package is `src/wade/`. Ten modules, the `plotting/` subpackage, and the
+kernel:
 
 | module | what it owns |
 |---|---|
@@ -62,40 +70,31 @@ The package is `src/wade/`. Eleven modules plus the kernel:
 | `diagnostics.py` | `wade_gene()` — the per-gene curves; `library_qc()` — per-library depth/complexity/concentration; `subset_drivers()` — which samples drive a gene's subset |
 | `api.py` | `wade()` and `wade_contrast()` — **one driver**; `WadeResult` now carries `cond` and has `gene_index()` / `gene_detail()` |
 | `io.py` | the data boundary: `as_counts` (arrays, frames, sparse), `condition`, `to_frame`, `write_results` + manifest. **No file readers, by decision.** Per-gene columns are carried in `Counts.meta` for display and read by no statistic |
-| `plotting.py` | **an extension, not the core** (`plotting.md`): `plot_gene()`, `plot_volcano()`, `plot_stages()`; a pure-NumPy data layer (`gene_panels`, `volcano_data`, `stages_data`, each with `.table()`) and two thin renderers imported inside the functions. 1,124 lines and the largest module — **Phase B splits it** |
+| `plotting/` | **an extension, not the core** (`plotting.md`): five figures — `plot_gene()`, `plot_volcano()`, `plot_stages()`, `plot_drivers()`, `plot_linked()` — over a pure-NumPy data layer (`gene_panels`, `volcano_data`, `stages_data`, `driver_panel`, each with `.table()`). `theme.py` holds every colour and label and imports nothing; `data.py` imports no backend; `_plotly.py` / `_matplotlib.py` import their library **inside** their functions; `__init__.py` resolves the backend and the theme. Was one 1,124-line module until 2026-08-21 |
 | `rust/src/lib.rs` | three kernels: `null_statistics` (mean shift, gene-major since 2026-08-20), `subset_null` (the subset test), `fit_bisect` (the fold-change fit, **opt-in and not bitwise** — see §3) |
 
 ## 2. What is NOT built, in order
 
-The queue is [`../ROADMAP.md`](../ROADMAP.md); the recipe for the next two
-phases is [`plan.md`](plan.md). In short:
+The queue is [`../ROADMAP.md`](../ROADMAP.md). In short:
 
-1. **Phase B — plotting becomes a subpackage.** `plotting.py` is 1,124 lines,
-   the largest module, and it is an *extension* rather than the method. Split
-   along its own section banners into `theme.py` / `data.py` / `_plotly.py` /
-   `_matplotlib.py` / `__init__.py`. Pure relocation: no public name changes,
-   no behaviour changes, `import wade` stays NumPy-only. `plan.md` has the
-   table of what goes where and the verification commands.
-2. **Phase C — the visualization work.** Theme and palette tokens first
-   (everything else renders through them), then drawn bootstrap intervals, a
-   driver figure, optional gene metadata in figures, linked plotly views, a
-   stage-1 figure, label de-collision. Sized and specified in `plan.md`.
-3. **Three notebooks, after C**: a small-synthetic `demo` (the showcase), a
-   `benchmark` head-to-head against COPA / OS / ORT / MOST / LSOSS, t-test,
-   Wilcoxon and waddR on simulated *and* literature data, and `rna100k`
-   relabelled as manuscript material rather than a demo.
-4. **The real dataset's own agenda** — `scaling.md` §7, which is where
+1. **Three notebooks**, and this is the current work: a small-synthetic `demo`
+   (the showcase), a `benchmark` head-to-head against COPA / OS / ORT / MOST /
+   LSOSS, t-test, Wilcoxon and waddR on simulated *and* literature data, and
+   `rna100k` relabelled as manuscript material rather than a demo.
+2. **The real dataset's own agenda** — `scaling.md` §7, which is where
    everything `notebooks/rna100k.qmd` measured now lives: the saturation of
    significance and the two controls that explain it, the artefact libraries
    and the diagnostic that was measured and *refuted*, group-associated depth,
    the observed p-value pile-up, 47% sparsity. The rank-recovery benchmark on
    real background is the priority there, and it wants the `benchmark`
    notebook first.
-5. **The resident-matrix question** — `scaling.md` §2.3. The one driver's peak
-   is four full `genes × samples` residents `WadeResult` carries (counts,
-   jitter, tpm, pseudocount); the jitter is a seeded stream and the pseudocount
-   a rank-1 product, so neither *has* to be materialized. A contract question
-   about what a result carries, not a kernel question.
+3. **The resident-matrix question** — `scaling.md` §2.3. The driver's peak is
+   four full `genes × samples` matrices: the caller's `counts` plus the three a
+   `WadeResult` carries (`tpm`, `jitter`, `pseudocount`). The jitter is a seeded
+   stream and the pseudocount a rank-1 product, so neither *has* to be
+   materialized. A contract question about what a result carries, not a kernel
+   question — and note the answer interacts with `plot_drivers`, which needs the
+   raw counts precisely **because** the result does not carry them.
 
 Four standing decisions from the user, recorded in `ROADMAP.md`'s preamble,
 `method.md`'s scope note and `wade/io.py`'s module docstring:
@@ -161,10 +160,11 @@ altair 6.2, bokeh 3.9, plotnine 0.15 on conda-forge as of August 2026) and
 two were kept:
 
 - **plotly** is the default when installed: hover carries the gene name and
-  every statistic, `Scattergl` is used past 2,000 points, `FigureWidget` makes
-  linked views possible later. Static export needs `python-kaleido` *and* a
-  Chrome/Chromium on the machine — it works on this laptop, it is friction on
-  a headless box.
+  every statistic, `Scattergl` is used past 2,000 points, and `FigureWidget`
+  is what `plot_linked` is built on — which needs **`anywidget`** (installed
+  here, `pip install 'wade[linked]'` elsewhere) and a live kernel. Static
+  export needs `python-kaleido` *and* a Chrome/Chromium on the machine — it
+  works on this laptop, it is friction on a headless box.
 - **matplotlib** is the static/publication backend: PDF/SVG with nothing but
   the library. `tools/make_readme_figures.py` uses it so the committed PNGs
   are reproducible.
@@ -175,14 +175,19 @@ two were kept:
   makes adding one a ~100-line renderer.
 
 Both renderers read the same dataclasses, so a figure says the same thing in
-either. `VolcanoData` and `StagesData` each have a `table()` — the arrays, for
-any other tool, and the table-view twin of the chart; **`GenePanel` does not
-yet**, which is Phase B2. `tests/test_plotting.py` pins the contract that
-`import wade` imports neither library.
+either — and since 2026-08-21 that includes **where the labels go**, which is
+computed once in the data layer in normalized axis units precisely so the two
+backends cannot drift. All four dataclasses now have a `table()`: the arrays,
+for any other tool, and the table-view twin of the chart.
+`tests/test_plotting.py` pins the contract that `import wade` imports neither
+library, and a second test greps the whole package for a hex or `rgb()` string
+outside `theme.py`.
 
-The stance, and why the split matters, is now [`plotting.md`](plotting.md):
-this layer is an extension, the results table is the interface, and exporting
-to ggplot is a first-class path rather than a fallback.
+The stance is [`plotting.md`](plotting.md): this layer is an extension, the
+results table is the interface, and exporting to ggplot is a first-class path
+rather than a fallback. It also carries the two limits worth knowing before
+promising anything — a linked view does not survive export to HTML, and a dozen
+labels on near-coincident points is past what any placement rule can fix.
 
 ### The documentation map
 
@@ -290,6 +295,11 @@ Three that cost time this session; none raise.
   clipping curves. Leave `p` to autorange; it already spans `[0, 1]`.
 - **`shared_yaxes="rows"` in `make_subplots` shares every row.** For "share
   the top row only", use `fig.update_yaxes(matches="y", row=1, col=j)`.
+- **`make_subplots` silently drops an empty `subplot_titles` entry**, so the
+  annotation indices are not the subplot indices and there is no spare slot to
+  write into later. `plot_linked` wanted a title *and* a subtitle for its panel
+  and got one annotation for both — put the two lines in one string, as
+  `_gene_plotly` does.
 
 And one for matplotlib: a colour bar is an `Axes`, so `len(fig.axes)` is one
 more than the number of panels.
@@ -421,17 +431,18 @@ cites them.
 
 ## 5. Suggested first move
 
-**Phase B, from [`plan.md`](plan.md).** Split `src/wade/plotting.py` into a
-subpackage along the section banners already in the file. It is the cleanest
-possible first task: pure relocation, no public names change, and the
-verification is that the existing suite passes untouched. Doing it before
-Phase C means the theme work has one obvious home instead of a 1,124-line
-module to grep.
+**The `demo` notebook**, `ROADMAP.md` §3. It is the cleanest of the three: small
+synthetic data with planted ground truth, every claim checkable in the output,
+and nothing left to build first — the figures it needs all exist, including the
+two that did not a day ago (`plot_drivers` for "should I believe this?" and
+`plot_gene(cumulative_area=True)` for stage 1). `tools/make_readme_figures.py`
+is most of the dataset already, and its printed numbers are what the README
+quotes.
 
 ```bash
 conda activate wade
-pytest -q                                   # 694 passing, ~10 s — the baseline
-sed -n '/^# ---/,+2p' src/wade/plotting.py  # the seams to split along
+pytest -q                                   # 738 passing, ~12 s — the baseline
+python tools/make_readme_figures.py         # the demo's dataset, and its numbers
 ```
 
 Three rules govern everything here, and they have earned their place:

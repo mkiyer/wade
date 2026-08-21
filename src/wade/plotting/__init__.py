@@ -78,6 +78,7 @@ __all__ = [
     "VolcanoData",
     "StagesData",
     "DriverPanel",
+    "QUADRANTS",
     "available_backends",
     "gene_panels",
     "volcano_data",

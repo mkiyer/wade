@@ -19,8 +19,7 @@ import numpy as np
 
 from . import normalize as _normalize
 from .io import Condition, as_counts, result_columns
-from .permutation import (draw_perms, mean_diff_null, mean_diff_stat,
-                          null_statistics, validate_perms)
+from .permutation import draw_perms, null_statistics, validate_perms
 from .pvalues import ALTERNATIVES, DEFAULT_N_EXC_MIN, DEFAULT_N_TAIL, bh_adjust, perm_pvalues
 from .stats import WadeStats, split_groups, wade_stats
 from .subset import SubsetResult, characterization_ci, subset_test

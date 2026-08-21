@@ -310,8 +310,9 @@ interval, which is wide exactly where the estimate is soft.
 Implemented and tested: the statistic, both stages, the characterization, the
 normalizers, permutation inference with GPD refinement and BH, Rust kernels
 for both permutation loops, the count-native subset stage (binomial thinning,
-the one-count pseudocount, bootstrap intervals), the plotting layer, and the
-data-in/results-out boundary. **694 tests, about 10 s.**
+the one-count pseudocount, bootstrap intervals), the plotting extension (four
+figures over one data layer, three themes, and a linked view), and the
+data-in/results-out boundary. **738 tests, about 12 s.**
 
 At 20,000 genes, 100 v 100 and 2,000 permutations a full run takes about 17 s
 on a 16-core laptop (9.7 s with `thin=False`); the permutation loops, which

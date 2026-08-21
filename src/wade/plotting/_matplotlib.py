@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .data import DRIVER_PANELS, _label_positions
+from .data import DRIVER_PANELS, _interval_arms, _label_positions
 from .theme import QUADRANTS, _STAGE_LABELS
 
 
@@ -124,7 +124,8 @@ def _intervals_mpl(ax, data, theme):
         return
 
     def arms(ci, v):
-        return None if ci is None else np.vstack([v[idx] - ci[0][idx], ci[1][idx] - v[idx]])
+        pair = _interval_arms(v, ci, idx)
+        return None if pair is None else np.vstack(pair)
 
     ax.errorbar(data.x[idx], data.y[idx], xerr=arms(data.x_ci, data.x),
                 yerr=arms(data.y_ci, data.y), fmt="none", ecolor=theme.muted,

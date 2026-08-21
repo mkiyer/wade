@@ -42,47 +42,38 @@ release blockers and ten doc/code mismatches. And a simplification pass:
 **~1,300 lines deleted**, five redundant paths collapsed to one,
 `wade_from_matrix` removed.
 
+Then the last six core items, and **the whole visualization queue below it**:
+`plotting.py` became the `wade/plotting/` subpackage (a verified relocation —
+all 54 definitions byte-identical in their new homes), and every bullet that
+stood under "Visualization" is now built. `import wade` is still NumPy-only,
+and the parity ledger never moved off **9.155e-15** over 436 comparisons.
+
+| item | what landed |
+|---|---|
+| theme and palette tokens | one frozen `Theme`; `"light"` / `"dark"` / `"high-contrast"`; `theme=` everywhere; **no colour literal outside `theme.py`**, pinned by a test |
+| bootstrap intervals drawn | error bars on any axis holding a descriptor with an interval, on the labelled points; a band in `plot_gene` for the affected region's edge; nothing at `n_boot=0` |
+| a driver figure | `plot_drivers` — four columns per driver, each against the cohort's median and IQR |
+| per-gene metadata | `meta=` names points by symbol and joins the hover and every `table()`; still read by no statistic |
+| linked views | `plot_linked`, a plotly `FigureWidget`; needs `anywidget` and a live kernel |
+| a stage-1 figure | `plot_gene(cumulative_area=True)` — stage 1's statistic accumulating, beside stage 2's curve |
+| label de-collision | a greedy slot assignment; overlapping pairs 24 → 1, 28 → 0, 24 → 0 (`plotting.md`) |
+| `GenePanel.table()` | the third dataclass finally has the twin the other two had |
+
+`docs/plotting.md` owns all of it — the stance, the module map, the measured
+numbers, and the two limits worth knowing (a linked view does not survive
+export; twelve labels on near-coincident points is past what placement can fix).
+
 ---
 
 ## 1. Now
 
-1. **The remaining core items** — six small ones, specified in
-   [`docs/plan.md`](docs/plan.md) §5. Led by the three that are pure plumbing:
-   stage 2 computes its exceedance count and refinement flag and then throws
-   them away, which is why `limits.md` §5's "is this gene *at* the floor?"
-   reading rule can only be applied to stage 1.
-2. **Plotting becomes an extension** — a `wade/plotting/` subpackage and
-   [`docs/plotting.md`](docs/plotting.md). Reorganization only: no public name
-   changes, no statistic touched.
+**The three notebooks** (§3 below). The implementation queue above them is
+finished, and each notebook is a separate deliverable rather than a phase of
+one: the `demo` first, because it is the showcase and the README in executable
+form; then `benchmark`, which is what the real cohort's rank-recovery work is
+waiting on; then `rna100k` relabelled as manuscript material.
 
 ## 2. Soon
-
-### Visualization — an extension, not the core
-
-Stance and detail in [`docs/plotting.md`](docs/plotting.md). Most DE tools
-provide little of this: the results table is the interface, and exporting it to
-ggplot is a first-class path rather than a fallback. These are conveniences,
-sequenced after the core is finished.
-
-- **Theme and palette tokens** — one token set, light/dark/high-contrast built
-  in, `theme=` on every plot function. Dark mode is then a palette, not a
-  feature.
-- **Draw the bootstrap intervals.** All five descriptors carry one; the figures
-  show none, so a subset resting on four affected samples looks exactly as firm
-  as one resting on four hundred.
-- **A driver figure** — the figure form of `subset_drivers` + `library_qc`:
-  which samples are in the affected region, with their complexity and depth
-  beside them. This is the check that reversed a tempting reading of the real
-  data (`notebooks/rna100k.qmd`); it should not be text-only.
-- **Linked views (plotly)** — click a volcano point, see that gene's panel.
-  Needs a live kernel, so it does not survive into exported HTML.
-- **A stage-1 figure.** `GeneDetail.cumulative_area` is stage 1's statistic and
-  is drawn nowhere.
-- **Optional per-gene metadata in figures and tables** — gene symbol above all.
-  The core needs one gene id and nothing more; anything else the user supplies
-  is carried and *optionally displayed*, never read by a statistic.
-- **Label de-collision**, worth doing only after the above: the smear is worst
-  exactly where p-values tie, which is where real cohorts sit.
 
 ### Inference
 
@@ -109,7 +100,8 @@ sequenced after the core is finished.
 that demands is in `scaling.md` §7: group-associated depth, the saturation of
 significance, the artefact libraries, 47% sparsity. The **rank-recovery
 benchmark on real background** is the priority there, and it wants the
-benchmark notebook below.
+benchmark notebook below. §7.2's artefact check is no longer text-only —
+`plot_drivers` is the figure for it.
 
 ### Release
 
@@ -120,7 +112,8 @@ as tests, as documentation, or both.
 
 ## 3. Notebooks
 
-Three deliverables, sequenced after the implementation above.
+Three deliverables, and **the current work** (§1). Separate deliverables, in
+this order, not three phases of one.
 
 1. **`demo`** — small synthetic data with planted ground truth. The showcase
    and gallery: a README in executable form, every claim checkable.
@@ -145,8 +138,9 @@ Recorded so they stop resurfacing.
   shape is known, not before. The default answer to "can WADE read X?" stays
   "polars can, and then WADE accepts it".
 - **Gene metadata in the statistics.** Carried and displayed, never read.
-- **`adjustText` as a dependency** — only if label de-collision's own approach
-  fails.
+- **`adjustText` as a dependency** — settled: the in-house slot assignment did
+  the job (`plotting.md`), and it would not have fixed the one case that still
+  overlaps either.
 - **Publication typesetting and arbitrary figure layouts** — export the table.
 
 ## 5. Open questions

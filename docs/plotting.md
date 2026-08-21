@@ -187,6 +187,14 @@ did not measure.
   none. Bars go on the **labelled** points only — a transcriptome of error bars
   is mush, `label=` is already the caller saying which genes matter, and every
   gene's interval is in `res.columns()` and therefore in the hover.
+  One measured caveat: **a percentile bootstrap interval need not bracket its
+  own point estimate.** Over 200 genes at `n_boot=100`, only
+  `affected_fraction` does it — 8 of them, by at most 0.029 against intervals
+  up to 0.73 wide — because it is a participation ratio and its bootstrap
+  distribution can sit to one side of the observed value. Both backends refuse
+  a negative error-bar arm, so the arms are clamped and the bar is drawn over
+  `[min(lo, v), max(hi, v)]`: never narrower than the interval, so it can only
+  understate precision, never overstate it.
 * **On `plot_gene`**, a band marking where the **edge of the affected region**
   lies. `affected_fraction` is a participation ratio — for a subset of size
   `pi` it reads `pi` — so it is an extent along the quantile axis: the top `pi`

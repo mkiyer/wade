@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .data import DRIVER_PANELS, _label_positions
+from .data import DRIVER_PANELS, _interval_arms, _label_positions
 from .theme import QUADRANTS, _STAGE_LABELS
 
 
@@ -209,11 +209,12 @@ def _intervals_plotly(data, go, fig, theme, row=None, col=None):
         return
 
     def arms(ci, v):
-        if ci is None:
+        pair = _interval_arms(v, ci, idx)
+        if pair is None:
             return None
-        return dict(type="data", symmetric=False, array=ci[1][idx] - v[idx],
-                    arrayminus=v[idx] - ci[0][idx], color=theme.muted,
-                    thickness=1, width=3)
+        minus, plus = pair
+        return dict(type="data", symmetric=False, array=plus, arrayminus=minus,
+                    color=theme.muted, thickness=1, width=3)
 
     fig.add_trace(go.Scatter(
         x=data.x[idx], y=data.y[idx], mode="markers",

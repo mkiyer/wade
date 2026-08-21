@@ -454,6 +454,27 @@ def _column_ci(res: WadeResult, name: str | None) -> np.ndarray | None:
     return None if ci is None else np.asarray(ci, dtype=np.float64)
 
 
+def _interval_arms(v: np.ndarray, ci, idx: np.ndarray):
+    """One axis's error-bar arms for the labelled points, as ``(minus, plus)``
+    non-negative distances — or ``None`` when there is no interval.
+
+    Clamped at zero, because **a percentile bootstrap interval need not bracket
+    its own point estimate**: a nonlinear statistic's bootstrap distribution can
+    sit to one side of it, and both backends refuse a negative arm outright.
+    Measured over 200 genes at ``n_boot=100``, only ``affected_fraction`` does
+    it — 8 of them, by at most 0.029 against intervals up to 0.73 wide. The bar
+    is then drawn over ``[min(lo, v), max(hi, v)]``: never narrower than the
+    interval, so it can only ever understate precision, never overstate it.
+
+    Computed here rather than in each renderer so the two cannot disagree about
+    what a bar spans.
+    """
+    if ci is None:
+        return None
+    return (np.maximum(v[idx] - ci[0][idx], 0.0),
+            np.maximum(ci[1][idx] - v[idx], 0.0))
+
+
 def _meta_columns(res: WadeResult, meta) -> dict[str, np.ndarray]:
     """The per-gene metadata columns a figure was asked to show.
 
