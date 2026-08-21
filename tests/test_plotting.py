@@ -794,6 +794,54 @@ def test_both_backends_label_by_the_metadata_column(res_meta, backend):
 
 
 # ---------------------------------------------------------------------------
+# Stage 1's statistic, drawn
+
+
+def test_the_cumulative_area_row_is_stage_1s_statistic_accumulating(res):
+    """Its last point *is* ``mean_shift``, and where it gets there from is the
+    reading: a global gene accumulates evenly, a subset gene almost entirely in
+    its last few percent. That is the two stages agreeing on one gene."""
+    glob = res.gene_detail(res.gene_index("g0"))          # planted global up
+    sub = res.gene_detail(res.gene_index("g6"))           # planted 10% subset up
+    for name, d in (("g0", glob), ("g6", sub)):
+        i = res.gene_index(name)
+        # The endpoint identity is a tolerance assertion, not an exact one: the
+        # statistic sums D forwards and this accumulates it backwards
+        # (wade.wade_gene's docstring).
+        assert d.cumulative_area[-1] == pytest.approx(res.mean_shift[i], rel=1e-10)
+    half = len(glob.p) // 2
+    assert glob.cumulative_area[half] / glob.cumulative_area[-1] > 0.3   # evenly
+    assert sub.cumulative_area[half] / sub.cumulative_area[-1] < 0.15    # at the end
+    # It is already in the panel's table, from B2 — nothing new was carried.
+    [panel] = P.gene_panels(res, gene="g6")
+    np.testing.assert_array_equal(panel.table()["cumulative_area"], sub.cumulative_area)
+
+
+@pytest.mark.parametrize("backend", P.available_backends())
+def test_the_cumulative_area_row_is_off_by_default_and_adds_one_row(res, backend):
+    genes = ["g0", "g6"]
+    plain = wade.plot_gene(res, gene=genes, backend=backend)
+    with_area = wade.plot_gene(res, gene=genes, backend=backend, cumulative_area=True)
+    k = len(genes)
+    assert _n_axes(plain, backend) == 2 * k
+    assert _n_axes(with_area, backend) == 3 * k
+    if backend == "matplotlib":
+        # The middle row holds it, and the quantile functions stay last.
+        assert with_area.axes[k].get_ylabel() == "cumulative area"
+        assert with_area.axes[2 * k].get_ylabel() == "expression"
+        np.testing.assert_array_equal(with_area.axes[k].lines[-1].get_ydata(),
+                                      res.gene_detail(res.gene_index("g0")).cumulative_area)
+        # One curve in the row, so no legend entry: the y axis names it.
+        assert "cumulative area" not in [t.get_text() for t in with_area.legends[0].get_texts()]
+    else:
+        area = [t for t in with_area.data if t.name == "cumulative area"]
+        assert len(area) == k and not any(t.showlegend for t in area)
+        np.testing.assert_array_equal(area[0].y,
+                                      res.gene_detail(res.gene_index("g0")).cumulative_area)
+        assert not [t for t in plain.data if t.name == "cumulative area"]
+
+
+# ---------------------------------------------------------------------------
 # Linked views (plotly only, live kernel only)
 
 

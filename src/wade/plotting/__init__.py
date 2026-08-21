@@ -164,6 +164,7 @@ def _resolve_theme(theme) -> Theme:
 
 def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
               meta=None, backend: str | None = None, theme=None, share_y: bool = True,
+              cumulative_area: bool = False,
               title: str | None = None,
               width: float | None = None, height: float | None = None):
     """The single-gene panel: ``R(p)`` over quantile, quantile functions beneath.
@@ -192,6 +193,16 @@ def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
     share_y
         Put every gene's log-ratio panel on the same y axis, so magnitudes are
         comparable across columns. Quantile panels are always per-gene.
+    cumulative_area
+        Add a middle row with :attr:`~wade.GeneDetail.cumulative_area` —
+        **stage 1's statistic, accumulating**. It starts at zero and its last
+        point *is* ``mean_shift``, so the curve says where along the
+        distribution the mean difference came from: a straight ramp is a global
+        shift contributed evenly, and a flat line that turns up only near
+        ``p = 1`` is a mean shift produced entirely by a few samples. That is
+        the two stages agreeing on the same gene, seen at once. Off by default
+        — the log-ratio curve is what makes the method legible, and a third row
+        is a diagnostic rather than the headline.
     width, height
         Figure size in **pixels** for plotly and in **inches** for
         matplotlib — each library's native unit. Defaults scale with the
@@ -223,9 +234,11 @@ def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
     th = _resolve_theme(theme)
     if be == "plotly":
         from ._plotly import _gene_plotly
-        return _gene_plotly(panels, th, share_y=share_y, title=title, width=width, height=height)
+        return _gene_plotly(panels, th, share_y=share_y, cumulative_area=cumulative_area,
+                            title=title, width=width, height=height)
     from ._matplotlib import _gene_mpl
-    return _gene_mpl(panels, th, share_y=share_y, title=title, width=width, height=height)
+    return _gene_mpl(panels, th, share_y=share_y, cumulative_area=cumulative_area,
+                     title=title, width=width, height=height)
 
 
 def plot_volcano(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0.05,

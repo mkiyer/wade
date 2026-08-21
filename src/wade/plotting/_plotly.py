@@ -54,7 +54,7 @@ def _gene_traces(panel, theme, go, *, showlegend):
     )
 
 
-def _gene_plotly(panels, theme, *, share_y, title, width, height):
+def _gene_plotly(panels, theme, *, share_y, cumulative_area, title, width, height):
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -63,9 +63,16 @@ def _gene_plotly(panels, theme, *, share_y, title, width, height):
     for p in panels:
         sub = "<br>".join(p.subtitle_lines)
         titles.append(f"<b>{p.name}</b><br><span style='font-size:10px;color:{theme.muted}'>{sub}</span>")
-    fig = make_subplots(rows=2, cols=k, shared_xaxes=True, shared_yaxes=False,
-                        subplot_titles=titles, row_heights=[0.55, 0.45],
-                        vertical_spacing=0.12, horizontal_spacing=0.06 if k > 1 else 0.05)
+    # Stage 1's statistic slots between stage 2's curve and the raw evidence, so
+    # the two statistics sit together and the quantile functions stay last.
+    area_row = 2 if cumulative_area else None
+    q_row = 3 if cumulative_area else 2
+    rows = q_row
+    heights = [0.42, 0.29, 0.29] if cumulative_area else [0.55, 0.45]
+    fig = make_subplots(rows=rows, cols=k, shared_xaxes=True, shared_yaxes=False,
+                        subplot_titles=titles, row_heights=heights,
+                        vertical_spacing=0.09 if cumulative_area else 0.12,
+                        horizontal_spacing=0.06 if k > 1 else 0.05)
     if share_y:
         # Only the log-ratio row shares a scale: magnitudes of R are comparable
         # across genes, raw expression levels are not.
@@ -83,12 +90,24 @@ def _gene_plotly(panels, theme, *, share_y, title, width, height):
         if span is not None:
             fig.add_vrect(x0=span[0], x1=span[1], fillcolor=theme.case, opacity=0.16,
                           line_width=0, layer="below", row=1, col=j)
-        fig.add_trace(case, row=2, col=j)
-        fig.add_trace(ctrl, row=2, col=j)
-        fig.update_yaxes(type="log", dtick=1, minor=dict(showgrid=False), row=2, col=j)
+        if area_row is not None:
+            fig.add_trace(go.Scatter(
+                x=d.p, y=d.cumulative_area, mode="lines",
+                # Ink, like the log-ratio curve: both rows draw a statistic, and
+                # the y axis names which. No legend entry — one curve in the row.
+                line=dict(color=theme.ink, width=1.8), name="cumulative area",
+                showlegend=False,
+                hovertemplate=("p = %{x:.3f}<br>cumulative area = %{y:.4g}"
+                               "<extra></extra>"),
+            ), row=area_row, col=j)
+            fig.add_hline(y=0.0, line=dict(color=theme.axis, width=1),
+                          row=area_row, col=j)
+        fig.add_trace(case, row=q_row, col=j)
+        fig.add_trace(ctrl, row=q_row, col=j)
+        fig.update_yaxes(type="log", dtick=1, minor=dict(showgrid=False), row=q_row, col=j)
         # No explicit x range: p already spans [0, 1], and a fixed range here
         # breaks plotly.js's autorange on the matched y axes above.
-        fig.update_xaxes(title_text="quantile p", row=2, col=j)
+        fig.update_xaxes(title_text="quantile p", row=q_row, col=j)
     # The dashed reference is a legend entry drawn with an empty trace, so the
     # figure explains itself without a caption.
     label = ("fitted global shift" if any(p.log2_fitted_shift is not None for p in panels)
@@ -102,12 +121,14 @@ def _gene_plotly(panels, theme, *, share_y, title, width, height):
                                              opacity=0.16),
                                  name="affected fraction, 95% CI"), row=1, col=1)
     fig.update_yaxes(title_text="log₂(Q<sub>case</sub> / Q<sub>ctrl</sub>)", row=1, col=1)
-    fig.update_yaxes(title_text="expression", row=2, col=1)
+    if area_row is not None:
+        fig.update_yaxes(title_text="cumulative area", row=area_row, col=1)
+    fig.update_yaxes(title_text="expression", row=q_row, col=1)
     for ann in fig.layout.annotations:
         ann.font.size = 13
         ann.yshift = 8
     _plotly_layout(fig, theme, title=title, width=width or (min(1700, 200 + 330 * k)),
-                   height=height or 600, legend_below=True)
+                   height=height or (800 if cumulative_area else 600), legend_below=True)
     fig.update_layout(margin=dict(t=110 if title else 90))
     fig.update_layout(hovermode="x unified")
     return fig

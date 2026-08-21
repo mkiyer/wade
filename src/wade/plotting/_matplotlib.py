@@ -26,13 +26,18 @@ def _mpl_style(ax, theme):
     ax.yaxis.label.set_color(theme.ink)
 
 
-def _gene_mpl(panels, theme, *, share_y, title, width, height):
+def _gene_mpl(panels, theme, *, share_y, cumulative_area, title, width, height):
     import matplotlib.pyplot as plt
 
     k = len(panels)
-    fig, axes = plt.subplots(2, k, figsize=(width or min(18, 1.2 + 3.2 * k), height or 6.4),
+    # Stage 1's statistic slots between stage 2's curve and the raw evidence, so
+    # the two statistics sit together and the quantile functions stay last.
+    heights = [0.42, 0.29, 0.29] if cumulative_area else [0.55, 0.45]
+    fig, axes = plt.subplots(len(heights), k,
+                             figsize=(width or min(18, 1.2 + 3.2 * k),
+                                      height or (8.6 if cumulative_area else 6.4)),
                              sharex=True, sharey=False, squeeze=False, constrained_layout=True,
-                             gridspec_kw=dict(height_ratios=[0.55, 0.45]))
+                             gridspec_kw=dict(height_ratios=heights))
     fig.patch.set_facecolor(theme.surface)
     if share_y:
         # Only the log-ratio row shares a scale: magnitudes of R are comparable
@@ -41,7 +46,8 @@ def _gene_mpl(panels, theme, *, share_y, title, width, height):
             axes[0, j].sharey(axes[0, 0])
     for j, p in enumerate(panels):
         d = p.detail
-        top, bot = axes[0, j], axes[1, j]
+        top, bot = axes[0, j], axes[-1, j]
+        area = axes[1, j] if cumulative_area else None
         top.axhline(0.0, color=theme.axis, lw=1)
         top.axhline(p.reference, color=theme.muted, lw=1, ls="--",
                     label=("fitted global shift" if p.log2_fitted_shift is not None
@@ -55,6 +61,12 @@ def _gene_mpl(panels, theme, *, share_y, title, width, height):
         top.set_title(p.name, fontsize=11.5, color=theme.ink, pad=30)
         top.text(0.5, 1.015, "\n".join(p.subtitle_lines), transform=top.transAxes,
                  ha="center", va="bottom", fontsize=8, color=theme.muted, linespacing=1.35)
+        if area is not None:
+            area.axhline(0.0, color=theme.axis, lw=1)
+            # Ink, like the log-ratio curve: both rows draw a statistic, and
+            # the y axis names which. No legend entry — one curve in the row.
+            area.plot(d.p, d.cumulative_area, color=theme.ink, lw=1.6)
+            _mpl_style(area, theme)
         bot.plot(d.p, d.y1, color=theme.case, lw=1.6, label="case" if j == 0 else None)
         bot.plot(d.p, d.y0, color=theme.ctrl, lw=1.6, label="control" if j == 0 else None)
         bot.set_yscale("log")
@@ -63,9 +75,11 @@ def _gene_mpl(panels, theme, *, share_y, title, width, height):
         _mpl_style(top, theme)
         _mpl_style(bot, theme)
     axes[0, 0].set_ylabel("log$_2$(Q$_{case}$ / Q$_{ctrl}$)")
-    axes[1, 0].set_ylabel("expression")
+    axes[-1, 0].set_ylabel("expression")
+    if cumulative_area:
+        axes[1, 0].set_ylabel("cumulative area")
     handles, labels = [], []
-    for ax in (axes[0, 0], axes[1, 0]):
+    for ax in axes[:, 0]:
         h, l = ax.get_legend_handles_labels()
         handles += h
         labels += l

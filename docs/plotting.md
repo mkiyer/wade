@@ -153,6 +153,25 @@ p-value axis the BH cutoff line is suppressed, because it means nothing there.
 `label=n` names the top *n* by y, **broken by |x|**, so ties at the floor
 select the largest effects rather than an arbitrary handful.
 
+### Stage 1's statistic, accumulating
+
+`plot_gene(..., cumulative_area=True)` adds a middle row holding
+`GeneDetail.cumulative_area`, which starts at zero and whose **last point is
+`mean_shift`**. Where it gets there from is the reading:
+
+* a straight ramp is a global shift, contributed evenly across the
+  distribution;
+* a flat line that turns up only near `p = 1` is a mean shift produced almost
+  entirely by a few samples — and it turns up exactly where the log-ratio curve
+  above it leaves the dashed reference.
+
+That is the two stages agreeing on one gene, in one figure. Measured on the
+README's dataset: at the halfway quantile the global 2× gene has accumulated
+39% of its mean shift, and the 15% and 5% subset genes 3.0% and 4.0%.
+
+It is off by default. The log-ratio curve is what makes the method legible and
+a third row is a diagnostic, not the headline.
+
 ### Bootstrap intervals are drawn, not just carried
 
 All five descriptors carry a 95% interval at `n_boot > 0`, and until now no
