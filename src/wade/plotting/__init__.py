@@ -87,6 +87,7 @@ __all__ = [
     "plot_volcano",
     "plot_stages",
     "plot_drivers",
+    "plot_linked",
 ]
 
 BACKENDS = ("plotly", "matplotlib")
@@ -364,3 +365,41 @@ def plot_drivers(res: WadeResult, gene, counts, *, k=None, top_n: int = 10,
         return _drivers_plotly(panel, th, title=title, width=width, height=height)
     from ._matplotlib import _drivers_mpl
     return _drivers_mpl(panel, th, title=title, width=width, height=height)
+
+
+def plot_linked(res: WadeResult, stage: str = "subset", *, alpha: float = 0.05,
+                color="affected_fraction", label=None,
+                x: str = "log2_fc", y: str | None = None, meta=None,
+                theme=None, title: str | None = None,
+                width: float | None = None, height: float | None = None):
+    """A volcano wired to a gene panel: **click a point, see that gene**.
+
+    The two views of a result that answer each other — *which genes?* and *what
+    does this one look like?* — in one figure, so following a point to its curve
+    is a click instead of a round trip through the gene's name. Parameters are
+    :func:`plot_volcano`'s, except that ``stage`` defaults to ``"subset"``,
+    where a curve's shape is the thing in question.
+
+    **The limitation is real and is not a bug.** This returns a
+    ``plotly.graph_objects.FigureWidget``, and a widget is a live object: the
+    click handler runs in **your Python kernel**. So
+
+    * it works in Jupyter, JupyterLab, VS Code and Colab, wherever the kernel
+      that made it is still running;
+    * it **does not survive export**. Saved to HTML, or reopened from a
+      notebook whose kernel has stopped, it is a static picture of whichever
+      gene was last drawn. Nothing is lost — but nothing is linked either.
+    * it is plotly-only, and needs ``anywidget``: ``conda install anywidget``,
+      or ``pip install 'wade[linked]'``. Every static figure works without it.
+
+    For a figure that must travel, use :func:`plot_volcano` and
+    :func:`plot_gene` separately; they draw the same arrays from the same data
+    layer.
+    """
+    data = volcano_data(res, stage, alpha=alpha, color=color, label=label,
+                        x=x, y=y, meta=meta)
+    from ._plotly import _linked_plotly
+
+    return _linked_plotly(
+        data, lambda i: gene_panels(res, gene=int(i), meta=meta)[0],
+        _resolve_theme(theme), title=title, width=width, height=height)

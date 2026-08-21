@@ -86,6 +86,10 @@ d.xlabel, d.ylabel # what the axes mean
 | `plot_stages` | *What kind of difference?* |
 | `plot_drivers` | *Should I believe this one?* |
 
+`plot_linked` is a fifth function rather than a fifth question: it is the
+volcano and the gene panel in one live widget, and it has its own section
+below.
+
 **`plot_gene`** is the figure that makes the method legible: the log-ratio
 curve `R(p)` above, the two quantile functions it is the ratio of below. A
 **flat** curve is a global fold change; a curve that sits at zero and then
@@ -242,6 +246,27 @@ Two rules keep this honest, and both are pinned by tests:
   theme says what sequential and diverging look like. So the meaning of a
   colour is fixed across themes — dark at 0 (a subset), light at 1
   (everything); blue down, red up — while its palette is not.
+
+## Linked views: click a point, see the gene
+
+`plot_linked` puts the two views that answer each other in one figure — the
+volcano and, beside it, whichever gene you last clicked:
+
+```python
+plot_linked(res, "subset", label=8)     # then click
+```
+
+**Its limitation is real and is not a bug.** It returns a plotly
+`FigureWidget`, and a widget is a live object: the click handler runs in *your
+Python kernel*. So it works in Jupyter, JupyterLab, VS Code and Colab for as
+long as that kernel is alive — and it **does not survive export**. Saved to
+HTML, or reopened from a notebook whose kernel has stopped, it is a static
+picture of whichever gene was last drawn. Nothing is lost, but nothing is
+linked either. For a figure that must travel, use `plot_volcano` and
+`plot_gene` separately; they draw the same arrays from the same data layer.
+
+It is plotly-only and needs `anywidget` (`conda install anywidget`, or
+`pip install 'wade[linked]'`). Every static figure works without it.
 
 ## Backends
 

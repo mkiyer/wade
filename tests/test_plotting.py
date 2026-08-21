@@ -794,6 +794,79 @@ def test_both_backends_label_by_the_metadata_column(res_meta, backend):
 
 
 # ---------------------------------------------------------------------------
+# Linked views (plotly only, live kernel only)
+
+
+@pytest.fixture
+def linked(res):
+    pytest.importorskip("plotly")
+    pytest.importorskip("anywidget", reason="plot_linked needs plotly's FigureWidget")
+    return wade.plot_linked(res, label=3)
+
+
+def _click(widget, i):
+    """Dispatch a click without a browser — which is also the only way to test
+    a live-kernel callback."""
+    from plotly.callbacks import InputDeviceState, Points
+
+    widget.data[0]._dispatch_on_click(Points(point_inds=[] if i is None else [i]),
+                                      InputDeviceState())
+
+
+def test_clicking_a_volcano_point_redraws_that_genes_panel(res, linked):
+    import plotly.graph_objects as go
+
+    assert isinstance(linked, go.FigureWidget)
+    assert linked.layout.annotations[1].text == "click a point"
+
+    i = res.gene_index("g6")
+    _click(linked, i)
+    ratio, reference, case, ctrl = linked.data[-4:]
+    d = res.gene_detail(i)
+    # The panel is the result's own curve, not an approximation of it.
+    np.testing.assert_array_equal(ratio.y, d.r)
+    np.testing.assert_array_equal(case.y, d.y1)
+    np.testing.assert_array_equal(ctrl.y, d.y0)
+    np.testing.assert_array_equal(ratio.customdata, np.c_[d.y1, d.y0])
+    # The dashed reference is the fitted global shift, as in plot_gene.
+    assert reference.y == pytest.approx((np.log2(res.fitted_fold_change[i]),) * 2)
+    assert "<b>g6</b>" in linked.layout.annotations[1].text
+
+    # A second click replaces rather than accumulates: a redraw, not a rebuild.
+    n_traces = len(linked.data)
+    _click(linked, res.gene_index("g0"))
+    assert len(linked.data) == n_traces
+    np.testing.assert_array_equal(linked.data[-4].y, res.gene_detail(res.gene_index("g0")).r)
+
+    # Clicking empty space is a no-op, not a traceback.
+    _click(linked, None)
+    np.testing.assert_array_equal(linked.data[-4].y, res.gene_detail(res.gene_index("g0")).r)
+
+
+def test_a_linked_view_carries_the_metadata_and_the_theme(res_meta):
+    pytest.importorskip("anywidget", reason="plot_linked needs plotly's FigureWidget")
+    w = wade.plot_linked(res_meta, meta="gene_name", theme="dark", label=2)
+    assert w.layout.paper_bgcolor == P.THEMES["dark"].surface
+    assert w.layout.template.layout.paper_bgcolor is not None      # plotly_dark
+    _click(w, res_meta.gene_index("ENSG00006"))
+    assert "<b>SYM6</b>" in w.layout.annotations[1].text     # named as displayed
+
+
+def test_a_linked_view_says_what_it_needs_when_the_widget_will_not_build(res, monkeypatch):
+    """anywidget is a fourth optional dependency and the message has to name it;
+    every static figure works without it."""
+    pytest.importorskip("plotly")
+    import plotly.graph_objects as go
+
+    def refuse(*a, **k):
+        raise ImportError("Please install anywidget to use the FigureWidget class")
+
+    monkeypatch.setattr(go, "FigureWidget", refuse)
+    with pytest.raises(ImportError, match="needs anywidget"):
+        wade.plot_linked(res)
+
+
+# ---------------------------------------------------------------------------
 # The driver figure
 
 

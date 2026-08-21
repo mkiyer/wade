@@ -204,10 +204,15 @@ plot_volcano(res, stage="subset", x="subset_log2_fc", y="z_subset", label=8)
 ```
 
 Every figure takes `theme=` — `"light"` (default), `"dark"` or
-`"high-contrast"` — or a palette of your own:
+`"high-contrast"` — and `meta=` to name points by a symbol rather than an
+accession:
 
 ```python
 plot_stages(res, theme="dark")
+plot_volcano(res, label=8, meta="gene_name")
+
+# and in a live notebook, the two views wired together: click a point.
+wade.plot_linked(res, "subset", label=8)
 ```
 
 **`plot_gene`** is the figure that makes the method legible. The top row is the

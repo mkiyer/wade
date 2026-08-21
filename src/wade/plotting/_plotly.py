@@ -33,6 +33,27 @@ def _plotly_layout(fig, theme, *, title, width, height, legend_below=False):
     return fig
 
 
+def _gene_traces(panel, theme, go, *, showlegend):
+    """The three lines a gene panel is: the log-ratio curve, and the two
+    quantile functions. Extracted because the linked view rewrites exactly
+    these in place, and the two figures must draw the same thing."""
+    d = panel.detail
+    return (
+        go.Scatter(x=d.p, y=d.r, mode="lines", line=dict(color=theme.ink, width=1.8),
+                   name="log₂ ratio", legendgroup="r", showlegend=showlegend,
+                   customdata=np.c_[d.y1, d.y0],
+                   hovertemplate=("p = %{x:.3f}<br>log₂ ratio = %{y:.2f}<br>"
+                                  "Q<sub>case</sub> = %{customdata[0]:.3g}<br>"
+                                  "Q<sub>ctrl</sub> = %{customdata[1]:.3g}<extra></extra>")),
+        go.Scatter(x=d.p, y=d.y1, mode="lines", line=dict(color=theme.case, width=1.8),
+                   name="case", legendgroup="case", showlegend=showlegend,
+                   hovertemplate="p = %{x:.3f}<br>case Q = %{y:.3g}<extra></extra>"),
+        go.Scatter(x=d.p, y=d.y0, mode="lines", line=dict(color=theme.ctrl, width=1.8),
+                   name="control", legendgroup="ctrl", showlegend=showlegend,
+                   hovertemplate="p = %{x:.3f}<br>control Q = %{y:.3g}<extra></extra>"),
+    )
+
+
 def _gene_plotly(panels, theme, *, share_y, title, width, height):
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -52,14 +73,8 @@ def _gene_plotly(panels, theme, *, share_y, title, width, height):
             fig.update_yaxes(matches="y", row=1, col=j)
     for j, p in enumerate(panels, start=1):
         d = p.detail
-        fig.add_trace(go.Scatter(
-            x=d.p, y=d.r, mode="lines", line=dict(color=theme.ink, width=1.8),
-            name="log₂ ratio", legendgroup="r", showlegend=(j == 1),
-            customdata=np.c_[d.y1, d.y0],
-            hovertemplate=("p = %{x:.3f}<br>log₂ ratio = %{y:.2f}<br>"
-                           "Q<sub>case</sub> = %{customdata[0]:.3g}<br>Q<sub>ctrl</sub> = %{customdata[1]:.3g}"
-                           "<extra></extra>"),
-        ), row=1, col=j)
+        ratio, case, ctrl = _gene_traces(p, theme, go, showlegend=(j == 1))
+        fig.add_trace(ratio, row=1, col=j)
         fig.add_hline(y=0.0, line=dict(color=theme.axis, width=1), row=1, col=j)
         fig.add_hline(y=p.reference, line=dict(color=theme.muted, width=1, dash="dash"), row=1, col=j)
         # How firm the extent of the affected region is. Added after the trace:
@@ -68,16 +83,8 @@ def _gene_plotly(panels, theme, *, share_y, title, width, height):
         if span is not None:
             fig.add_vrect(x0=span[0], x1=span[1], fillcolor=theme.case, opacity=0.16,
                           line_width=0, layer="below", row=1, col=j)
-        fig.add_trace(go.Scatter(
-            x=d.p, y=d.y1, mode="lines", line=dict(color=theme.case, width=1.8),
-            name="case", legendgroup="case", showlegend=(j == 1),
-            hovertemplate="p = %{x:.3f}<br>case Q = %{y:.3g}<extra></extra>",
-        ), row=2, col=j)
-        fig.add_trace(go.Scatter(
-            x=d.p, y=d.y0, mode="lines", line=dict(color=theme.ctrl, width=1.8),
-            name="control", legendgroup="ctrl", showlegend=(j == 1),
-            hovertemplate="p = %{x:.3f}<br>control Q = %{y:.3g}<extra></extra>",
-        ), row=2, col=j)
+        fig.add_trace(case, row=2, col=j)
+        fig.add_trace(ctrl, row=2, col=j)
         fig.update_yaxes(type="log", dtick=1, minor=dict(showgrid=False), row=2, col=j)
         # No explicit x range: p already spans [0, 1], and a fixed range here
         # breaks plotly.js's autorange on the matched y axes above.
@@ -320,3 +327,82 @@ def _drivers_plotly(panel, theme, *, title, width, height):
                    legend_below=True)
     fig.update_layout(margin=dict(l=140, r=30, t=90, b=70))
     return fig
+
+
+def _linked_plotly(data, panel_of, theme, *, title, width, height):
+    """A volcano wired to a gene panel: click a point, the panel redraws.
+
+    ``panel_of(i)`` builds the :class:`~wade.plotting.GenePanel` for gene index
+    ``i``; the click handler closes over it rather than over a result, which
+    keeps this module ignorant of the core. The panel's traces are rewritten in
+    place inside one ``batch_update`` — a redraw, not a rebuild — so the
+    volcano's zoom and the reader's place are not lost on every click.
+    """
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    try:
+        widget = go.FigureWidget(make_subplots(
+            rows=2, cols=2, specs=[[{"rowspan": 2}, {}], [None, {}]],
+            column_widths=[0.56, 0.44], row_heights=[0.55, 0.45],
+            subplot_titles=[f"{_STAGE_LABELS[data.stage]} stage", "click a point", ""],
+            horizontal_spacing=0.11, vertical_spacing=0.12))
+    except ImportError as e:
+        raise ImportError(
+            f"a linked view needs plotly's FigureWidget, which needs anywidget: {e}. "
+            f"Install it with `conda install anywidget` or `pip install "
+            f"'wade[linked]'`. Every static figure works without it."
+        ) from e
+
+    widget.add_trace(_cloud_trace(data, go, theme), row=1, col=1)
+    if np.isfinite(data.cutoff_y):
+        widget.add_hline(y=data.cutoff_y, line=dict(color=theme.muted, width=1, dash="dash"),
+                         row=1, col=1)
+    widget.add_vline(x=0.0, line=dict(color=theme.axis, width=1), row=1, col=1)
+    _labels_plotly(data, go, widget, theme, row=1, col=1)
+    widget.update_xaxes(title_text=data.xlabel, row=1, col=1)
+    widget.update_yaxes(title_text=data.ylabel, row=1, col=1)
+
+    # The panel side, seeded on the first gene so the traces exist to update.
+    # The fitted-shift reference is a trace, not a shape: it moves per gene, and
+    # a trace is what batch_update can rewrite.
+    ratio, case, ctrl = _gene_traces(panel_of(0), theme, go, showlegend=False)
+    widget.add_trace(ratio, row=1, col=2)
+    widget.add_trace(go.Scatter(x=[0.0, 1.0], y=[0.0, 0.0], mode="lines",
+                                line=dict(color=theme.muted, width=1, dash="dash"),
+                                hoverinfo="skip", showlegend=False), row=1, col=2)
+    widget.add_hline(y=0.0, line=dict(color=theme.axis, width=1), row=1, col=2)
+    widget.add_trace(case, row=2, col=2)
+    widget.add_trace(ctrl, row=2, col=2)
+    widget.update_yaxes(title_text="log₂(Q<sub>case</sub> / Q<sub>ctrl</sub>)", row=1, col=2)
+    widget.update_yaxes(type="log", dtick=1, minor=dict(showgrid=False),
+                        title_text="expression", row=2, col=2)
+    widget.update_xaxes(title_text="quantile p", row=2, col=2)
+    curve, reference, case_t, ctrl_t = widget.data[-4:]
+
+    def redraw(_trace, points, _state):
+        if not points.point_inds:
+            return
+        p = panel_of(int(points.point_inds[0]))
+        d = p.detail
+        with widget.batch_update():
+            curve.x, curve.y = d.p, d.r
+            curve.customdata = np.c_[d.y1, d.y0]
+            reference.y = (p.reference, p.reference)
+            case_t.x, case_t.y = d.p, d.y1
+            ctrl_t.x, ctrl_t.y = d.p, d.y0
+            # One annotation, two lines, exactly as _gene_plotly titles a panel.
+            # An empty subplot title is dropped by make_subplots, so there is no
+            # second slot to put the subtitle in.
+            widget.layout.annotations[1].text = (
+                f"<b>{p.name}</b><br><span style='font-size:10px;"
+                f"color:{theme.muted}'>{p.subtitle}</span>")
+
+    widget.data[0].on_click(redraw)
+    for ann in widget.layout.annotations:
+        ann.font.size = 12
+        ann.yshift = 8
+    _plotly_layout(widget, theme, title=title or "click a gene to see its panel",
+                   width=width or 1180, height=height or 620)
+    widget.update_layout(margin=dict(t=100))
+    return widget

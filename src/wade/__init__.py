@@ -55,7 +55,7 @@ from .normalize import draw_jitter, library_sizes, tpm_like
 from .permutation import (detectability_floor, draw_perms, mean_diff_null,
                           mean_diff_stat, null_statistics, permutation_space,
                           strata_indices)
-from .plotting import plot_drivers, plot_gene, plot_stages, plot_volcano
+from .plotting import plot_drivers, plot_gene, plot_linked, plot_stages, plot_volcano
 from .pvalues import ALTERNATIVES, GPDFit, bh_adjust, gpd_tail_p, perm_pvalues
 from .quantiles import probability_grid, type7_quantiles
 from .stats import WadeStats, wade_stats
@@ -108,6 +108,7 @@ __all__ = [
     "perm_pvalues",
     "plot_drivers",
     "plot_gene",
+    "plot_linked",
     "plot_stages",
     "plot_volcano",
     "probability_grid",
