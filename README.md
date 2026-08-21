@@ -31,7 +31,8 @@ which has a meaning for continuous measurements. `wade_from_matrix` and
 mamba env create -f mamba_env.yaml
 conda activate wade
 pip install -e . --no-build-isolation
-pytest                       # ~6 s
+pytest                       # ~12 s
+pytest -m "not kernel"       # if you built without the Rust toolchain
 ```
 
 **Building from source needs a Rust toolchain** (`conda install rust`, or
@@ -203,7 +204,8 @@ first subset gene of the worked example.)
 the log-ratio curve `R(p) = log2 Q_case(p) − log2 Q_ctrl(p)` against quantile;
 the bottom row is the two quantile functions it is the ratio of. A **flat**
 curve is a global fold change; a curve that sits at zero and then **climbs**
-is a subset. The dashed line is the median of `R` — the global shift the
+is a subset. The dashed line is `log2` of the **fitted** global fold change —
+the shift the
 subset test takes as its null — so the curve's departure from it is exactly
 what `p_subset` prices.
 

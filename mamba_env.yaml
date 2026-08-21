@@ -38,7 +38,18 @@ dependencies:
   - plotly>=6
   - matplotlib-base>=3.8
   - python-kaleido>=1.0
-  # Test-only. scipy is used by ONE thing: the Kolmogorov-Smirnov test in
+  # Notebook rendering (notebooks/*.qmd). Quarto shells out to a Jupyter
+  # kernel, so the kernel machinery has to be in this environment; polars
+  # reads .xlsx through fastexcel. Quarto ITSELF is not a conda package here
+  # — install it separately (https://quarto.org) — and nothing in the package
+  # needs any of this, only the notebooks do.
+  - fastexcel
+  - ipykernel
+  - pyyaml
+  # Test-only. pandas is here because the frame path is duck-typed and must be
+  # exercised against both frame libraries, not just whichever is installed.
+  - pandas>=2.0
+  # scipy is used by ONE thing: the Kolmogorov-Smirnov test in
   # the ported null-calibration simulation (tests/test_layer9_validation.py).
   # It is not a runtime dependency of the package and the statistic does
   # not need it.

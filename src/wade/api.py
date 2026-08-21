@@ -248,6 +248,19 @@ class WadeResult:
         return result_columns(self)
 
 
+def _describe_normalizer(normalizer) -> str:
+    """A one-line description for the manifest. The normalizer decides every
+    value the test sees, so provenance without it cannot reproduce a run."""
+    a = np.asarray(normalizer, dtype=np.float64)
+    if a.ndim == 2:
+        return f"matrix {a.shape}"
+    if a.size == 0:
+        return "empty"
+    if np.all(a == a.flat[0]):
+        return f"scalar {float(a.flat[0]):g}"
+    return f"per-gene vector (n={a.size}, median {float(np.median(a)):g})"
+
+
 def _fit_alpha(normalizer, lib, norm_factor, n_samples):
     """The fold-change fit's per-cell scale: jitter-free ``tpm_like`` is
     exactly ``counts * alpha`` with ``alpha = norm_factor / (normalizer * lib)``,
@@ -467,7 +480,9 @@ def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
                           max_probs=max_probs)
 
     ci = {}
-    if n_boot > 0 and obs.nprobs >= 2:
+    # Gated on the subset stage, not merely on n_boot: an interval for a
+    # statistic the same table does not contain reads as a corrupt table.
+    if n_boot > 0 and sub is not None:
         ci = characterization_ci(x, cond, pseudocount=pseudocount, n_boot=n_boot,
                                  rng=boot_rng, max_probs=max_probs)
 
@@ -619,7 +634,9 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
     sub = _concat_subsets(sub_parts) if do_subset else None
 
     ci = {}
-    if n_boot > 0 and obs.nprobs >= 2:
+    # Gated on the subset stage, not merely on n_boot: an interval for a
+    # statistic the same table does not contain reads as a corrupt table.
+    if n_boot > 0 and sub is not None:
         ci = characterization_ci(tpm, cond, pseudocount=pc_full, n_boot=n_boot,
                                  rng=boot_rng, max_probs=max_probs,
                                  gene_chunk=gene_chunk)
@@ -772,6 +789,11 @@ def wade(
     """
     data, normalizer, cond, cond_meta = _resolve_input(
         counts, normalizer, cond, gene_names, sample_names)
+    cond_meta.update(entry_point="wade", noise=noise, norm_factor=norm_factor,
+                     thin=thin, subset=subset,
+                     normalizer=_describe_normalizer(normalizer),
+                     lib_sizes_supplied=lib_sizes is not None,
+                     perms_supplied=perms is not None)
     counts = data.values
     gene_names, sample_names = data.gene_names, data.sample_names
     if cond.shape[0] != counts.shape[1]:
@@ -909,6 +931,9 @@ def wade_from_matrix(
     (there is no "one count" to convert) and defaults to none.
     """
     data, _, cond, cond_meta = _resolve_input(x, 1.0, cond, gene_names, sample_names)
+    cond_meta.update(entry_point="wade_from_matrix", subset=subset,
+                     pseudocount_units="the matrix's own",
+                     perms_supplied=perms is not None)
     x = data.values
     gene_names, sample_names = data.gene_names, data.sample_names
     if cond.shape[0] != x.shape[1]:
@@ -926,6 +951,17 @@ def wade_from_matrix(
     else:
         children = np.random.SeedSequence(seed).spawn(4)
         perm_rng, boot_rng = np.random.default_rng(children[1]), np.random.default_rng(children[3])
+    if pseudocount == 0 and subset and nperms > 0 and np.any(x <= 0):
+        smallest = float(x[x > 0].min()) if np.any(x > 0) else 1.0
+        raise ValueError(
+            f"the subset stage's log-ratio curve needs strictly positive values and "
+            f"this matrix has {int(np.sum(x <= 0))} that are not. WADE cannot pick a "
+            f"pseudocount for you — the matrix is on a scale only you know — so pass "
+            f"one in its own units (half the smallest positive value, "
+            f"{0.5 * smallest:.4g}, is a reasonable choice), or subset=False to run "
+            f"stage 1 alone. wade() on raw counts needs none of this: it derives the "
+            f"pseudocount from one count in each sample's units."
+        )
     pc = np.full(x.shape, float(pseudocount)) if pseudocount > 0 else None
     return _run(
         x, cond, nperms=nperms, perms=perms, seed=seed, perm_rng=perm_rng,

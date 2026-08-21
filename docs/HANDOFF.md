@@ -19,7 +19,7 @@ minutes at a 55.6 GB peak** (B = 2,000, all fast paths; `scaling.md` §1).
 export PATH="/usr/local/bin:$PATH"          # only if you need R
 conda activate wade
 pytest -q                                   # everything
-pytest -q -m "not slow"                     # skip the validation simulations
+pytest -q -m "not validation"               # skip the simulations (8 s vs 12 s)
 pytest -q -m "not kernel"                   # if the Rust kernel is not built
 ```
 

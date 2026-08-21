@@ -60,7 +60,6 @@ features = ["pyo3/extension-module"]
 testpaths = ["tests"]
 markers = [
     "parity: asserts agreement with the R reference on golden fixtures",
-    "slow: takes more than a few seconds",
     "validation: method-validation simulations, not parity",
     "kernel: requires the compiled Rust kernel",
 ]

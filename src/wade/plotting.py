@@ -895,7 +895,9 @@ def _volcano_plotly(data, *, title, width, height):
     from plotly.subplots import make_subplots
 
     k = len(data)
-    fig = make_subplots(rows=1, cols=k, shared_xaxes=True, shared_yaxes=False,
+    # rows=1: plotly's shared_xaxes links axes down COLUMNS, so it does nothing
+    # here — the panels are linked explicitly with matches= below.
+    fig = make_subplots(rows=1, cols=k, shared_yaxes=False,
                         subplot_titles=[f"{_STAGE_LABELS[d.stage]} stage" for d in data] if k > 1 else None,
                         horizontal_spacing=0.08)
     cloud_idx = []
@@ -922,6 +924,10 @@ def _volcano_plotly(data, *, title, width, height):
                           annotation_font=dict(size=10, color=_MUTED))
         _labels_plotly(d, go, fig, row=1, col=j)
         fig.update_xaxes(title_text=d.xlabel, row=1, col=j)
+        # The promised shared x: pan/zoom one panel and the other follows, so a
+        # gene's position is comparable across the two stages by eye.
+        if j > 1:
+            fig.update_xaxes(matches="x", row=1, col=j)
         fig.update_yaxes(title_text=d.ylabel, row=1, col=j)
     if k > 1 and data[0].color is not None:
         # One colour bar for both panels: the same column, the same scale.

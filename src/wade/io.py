@@ -307,7 +307,9 @@ class Condition:
                 f"{len(extra)} sample(s) in the sample metadata are not columns of the "
                 f"count matrix: {extra[:8]}"
                 + (f" and {len(extra) - 8} more. " if len(extra) > 8 else ". ")
-                + "Pass allow_extra=True if the sheet legitimately covers other runs."
+                + "If the sheet legitimately covers other runs, resolve it yourself "
+                  "and pass the vector: cond.vector(counts.sample_names, "
+                  "allow_extra=True)."
             )
         return np.array([self.labels[s] for s in names.tolist()], dtype=int)
 
@@ -493,6 +495,14 @@ def manifest(res, *, alpha: float = 0.05) -> dict:
             "n_exc_min": p.get("n_exc_min"),
             "n_tail": p.get("n_tail"),
             "n_boot": p.get("n_boot"),
+            "entry_point": p.get("entry_point"),
+            "normalizer": p.get("normalizer"),
+            "noise": p.get("noise"),
+            "norm_factor": p.get("norm_factor"),
+            "thin": p.get("thin"),
+            "subset": p.get("subset"),
+            "lib_sizes_supplied": p.get("lib_sizes_supplied"),
+            "perms_supplied": p.get("perms_supplied"),
             # The two opt-in fast paths change reported numbers, so a
             # manifest without them could not reproduce the run; gene_chunk
             # is recorded for completeness even though it is bit-identical.

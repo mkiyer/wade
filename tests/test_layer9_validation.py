@@ -24,7 +24,7 @@ import pytest
 
 import wade
 
-pytestmark = [pytest.mark.validation, pytest.mark.slow]
+pytestmark = pytest.mark.validation
 
 NPERMS = 300
 
