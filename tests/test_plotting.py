@@ -83,6 +83,22 @@ ARTEFACT, GENUINE = 3, 200
 
 
 @pytest.fixture(scope="module")
+def res_meta():
+    """A result carrying gene symbols and biotypes, as an input frame would."""
+    pl = pytest.importorskip("polars")
+    counts = _counts()
+    samples = [f"S{j}" for j in range(N1 + N0)]
+    frame = pl.DataFrame({
+        "gene_id": [f"ENSG{i:05d}" for i in range(G)],
+        "gene_name": [f"SYM{i}" for i in range(G)],
+        "gene_type": ["protein_coding" if i % 3 else "lncRNA" for i in range(G)],
+        **{s: counts[:, j] for j, s in enumerate(samples)},
+    })
+    return wade.wade(wade.as_counts(frame, sample_columns=samples), 1.0, COND,
+                     nperms=B, seed=3)
+
+
+@pytest.fixture(scope="module")
 def res_drivers():
     """``docs/scaling.md`` §7.2 in miniature, and the two genes are built to be
     the two real cases rather than merely different.
@@ -691,6 +707,90 @@ def test_a_drawn_error_bar_spans_exactly_the_reported_interval(res_boot, backend
         t = next(t for t in fig.data if t.error_x is not None and t.error_x.array is not None)
         assert t.x[0] - t.error_x.arrayminus[0] == pytest.approx(lo)
         assert t.x[0] + t.error_x.array[0] == pytest.approx(hi)
+
+
+# ---------------------------------------------------------------------------
+# Per-gene metadata: displayed, never read
+
+
+def test_metadata_names_the_points_and_joins_the_hover_and_the_table(res_meta):
+    plain = P.volcano_data(res_meta, label=3)
+    shown = P.volcano_data(res_meta, label=3, meta=["gene_name", "gene_type"])
+
+    # Without meta= nothing changes: the id is still what a point is called.
+    assert plain.meta == {}
+    np.testing.assert_array_equal(plain.display, res_meta.gene)
+    assert str(plain.display[0]).startswith("ENSG")
+
+    # With it, the first column names the points and both join hover and table.
+    np.testing.assert_array_equal(shown.display, res_meta.gene_meta["gene_name"])
+    assert str(shown.display[0]) == "SYM0"
+    np.testing.assert_array_equal(shown.gene, res_meta.gene)     # the id is kept
+    assert set(shown.table()) >= {"gene", "gene_name", "gene_type"}
+    np.testing.assert_array_equal(shown.table()["gene_type"], res_meta.gene_meta["gene_type"])
+    # ... and every number is untouched.
+    for name in ("x", "y", "p", "padj"):
+        np.testing.assert_array_equal(getattr(shown, name), getattr(plain, name))
+
+    # stages_data too, and plot_gene's panel titles.
+    st = P.stages_data(res_meta, meta="gene_name")
+    np.testing.assert_array_equal(st.display, res_meta.gene_meta["gene_name"])
+    assert "gene_name" in st.table()
+    [panel] = P.gene_panels(res_meta, gene="ENSG00006", meta="gene_name")
+    assert panel.name == "SYM6"
+    assert P.gene_panels(res_meta, gene="ENSG00006")[0].name == "ENSG00006"
+
+
+def test_labels_match_what_the_points_are_called(res_meta):
+    """Name what you see: with ``meta=`` the label list is symbols, not ids."""
+    v = P.volcano_data(res_meta, label=["SYM0", "SYM6"], meta="gene_name")
+    assert set(v.display[v.labelled]) == {"SYM0", "SYM6"}
+    np.testing.assert_array_equal(v.gene[v.labelled],
+                                  np.array(["ENSG00000", "ENSG00006"], dtype=object))
+    # Without meta= the same list matches nothing, because that is not the name.
+    assert P.volcano_data(res_meta, label=["SYM0"]).labelled.sum() == 0
+
+
+def test_asking_for_metadata_a_result_does_not_carry_says_what_it_has(res, res_meta):
+    with pytest.raises(ValueError, match="not in this result's gene metadata"):
+        P.volcano_data(res_meta, meta="gene_symbol")
+    # A result built from arrays carries none at all, and says so.
+    with pytest.raises(ValueError, match="available: none"):
+        P.volcano_data(res, meta="gene_name")
+
+
+def test_metadata_is_display_only_and_moves_no_number(res_meta):
+    """The Phase D invariant, restated at the display layer: metadata reaches
+    the figures and reaches no statistic. ``tests/test_core_completion.py``
+    pins the same thing on the way in."""
+    bare = wade.wade(_counts(), np.ones(G), COND, nperms=B, seed=3,
+                     gene_names=[f"ENSG{i:05d}" for i in range(G)])
+    assert res_meta.gene_meta and not bare.gene_meta
+    for name in ("mean_shift", "log2_fc", "p_mean_shift", "p_subset",
+                 "affected_fraction", "direction", "subset_log2_fc"):
+        np.testing.assert_array_equal(getattr(res_meta, name), getattr(bare, name),
+                                      err_msg=f"metadata moved {name}")
+
+
+@pytest.mark.parametrize("backend", P.available_backends())
+def test_both_backends_label_by_the_metadata_column(res_meta, backend):
+    fig = wade.plot_volcano(res_meta, label=2, meta=["gene_name", "gene_type"],
+                            backend=backend)
+    if backend == "matplotlib":
+        texts = [a.get_text() for a in fig.axes[0].texts]
+        assert any(t.startswith("SYM") for t in texts)
+        assert not any(t.startswith("ENSG") for t in texts)
+    else:
+        labels = [t for tr in fig.data if tr.mode == "text" for t in (tr.text or [])]
+        assert labels and all(str(t).startswith("SYM") for t in labels)
+        # The hover carries the requested columns as text, ahead of the numbers.
+        cloud = fig.data[0]
+        assert "gene_name = %{customdata[0]}" in cloud.hovertemplate
+        assert "gene_type = %{customdata[1]}" in cloud.hovertemplate
+        assert str(cloud.text[0]) == "SYM0"
+    assert wade.plot_gene(res_meta, gene=["ENSG00006"], meta="gene_name",
+                          backend=backend) is not None
+    assert wade.plot_stages(res_meta, label=2, meta="gene_name", backend=backend) is not None
 
 
 # ---------------------------------------------------------------------------

@@ -121,12 +121,23 @@ def _marker_plotly(data, go, theme):
 
 
 def _hover_plotly(data):
-    """A customdata block and a template listing every statistic WADE reports."""
+    """A customdata block and a template listing every statistic WADE reports.
+
+    Requested per-gene metadata leads, formatted as text rather than as a
+    number — a symbol and a biotype are strings, so they cannot share the
+    float64 block the statistics use.
+    """
+    meta = list(data.meta.items())
     cols = data.hover
     names = [k for k in cols if k != "gene"]
-    cd = np.column_stack([np.asarray(cols[k], dtype=np.float64) for k in names]) if names else None
+    blocks = [np.asarray(v, dtype=object).reshape(-1, 1) for _, v in meta]
+    if names:
+        blocks.append(np.column_stack([np.asarray(cols[k], dtype=np.float64) for k in names]))
+    cd = np.hstack(blocks) if blocks else None
     lines = ["<b>%{text}</b>"]
-    for i, k in enumerate(names):
+    for i, (k, _) in enumerate(meta):
+        lines.append(f"{k} = %{{customdata[{i}]}}")
+    for i, k in enumerate(names, start=len(meta)):
         fmt = ".3g" if k.startswith("p") else ".3f"
         lines.append(f"{k} = %{{customdata[{i}]:{fmt}}}")
     return cd, "<br>".join(lines) + "<extra></extra>"
@@ -138,7 +149,7 @@ def _cloud_trace(data, go, theme, *, name="genes"):
     n = data.gene.shape[0]
     cls = go.Scattergl if n > 2000 else go.Scatter
     cd, template = _hover_plotly(data)
-    return cls(x=data.x, y=data.y, mode="markers", text=data.gene, customdata=cd,
+    return cls(x=data.x, y=data.y, mode="markers", text=data.display, customdata=cd,
                hovertemplate=template, marker=_marker_plotly(data, go, theme), name=name,
                showlegend=False)
 
@@ -151,7 +162,7 @@ def _labels_plotly(data, go, fig, theme, row=None, col=None):
         if not sel.any():
             continue
         fig.add_trace(go.Scatter(
-            x=data.x[idx[sel]], y=data.y[idx[sel]], mode="text", text=data.gene[idx[sel]],
+            x=data.x[idx[sel]], y=data.y[idx[sel]], mode="text", text=data.display[idx[sel]],
             textposition=pos, textfont=dict(size=11, color=theme.ink),
             hoverinfo="skip", showlegend=False,
         ), row=row, col=col)

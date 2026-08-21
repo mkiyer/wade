@@ -93,7 +93,7 @@ def _scatter_mpl(ax, data, theme, *, colorbar_ax=None, fig=None):
             cb.ax.tick_params(colors=theme.muted, labelcolor=theme.muted)
     idx, above = _label_positions(data)
     for i, up in zip(idx, above):
-        ax.annotate(str(data.gene[i]), (data.x[i], data.y[i]), xytext=(0, 4 if up else -4),
+        ax.annotate(str(data.display[i]), (data.x[i], data.y[i]), xytext=(0, 4 if up else -4),
                     textcoords="offset points", ha="center", va="bottom" if up else "top",
                     fontsize=8, color=theme.ink)
     return sc

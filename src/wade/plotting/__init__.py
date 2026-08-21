@@ -162,7 +162,7 @@ def _resolve_theme(theme) -> Theme:
 
 
 def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
-              backend: str | None = None, theme=None, share_y: bool = True,
+              meta=None, backend: str | None = None, theme=None, share_y: bool = True,
               title: str | None = None,
               width: float | None = None, height: float | None = None):
     """The single-gene panel: ``R(p)`` over quantile, quantile functions beneath.
@@ -180,6 +180,14 @@ def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
         A key of :data:`THEMES` — ``"light"``, ``"dark"``,
         ``"high-contrast"`` — or a :class:`~wade.plotting.theme.Theme`, or
         ``None`` for :data:`DEFAULT_THEME`. Every figure takes it.
+    meta
+        Per-gene columns of :attr:`WadeResult.gene_meta` to show — one name or
+        several. The **first names the points**, in the panel titles here and
+        as the point label and hover title on the clouds, because a ranked list
+        of ``ENSG…`` accessions is unreadable and one of symbols is biology;
+        every named column joins plotly's hover and every ``table()``. On a
+        cloud, ``label=`` then matches these names too: you name what you see.
+        **No statistic reads any of it** — dropping it changes no number.
     share_y
         Put every gene's log-ratio panel on the same y axis, so magnitudes are
         comparable across columns. Quantile panels are always per-gene.
@@ -208,7 +216,8 @@ def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
     a well-determined extent; a wide one is a subset resting on a handful of
     samples, which the point estimate alone does not distinguish.
     """
-    panels = gene_panels(source, cond, gene=gene, names=names, pseudocount=pseudocount)
+    panels = gene_panels(source, cond, gene=gene, names=names, pseudocount=pseudocount,
+                         meta=meta)
     be = _resolve_backend(backend)
     th = _resolve_theme(theme)
     if be == "plotly":
@@ -220,7 +229,7 @@ def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
 
 def plot_volcano(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0.05,
                  color="affected_fraction", label=None,
-                 x: str = "log2_fc", y: str | None = None,
+                 x: str = "log2_fc", y: str | None = None, meta=None,
                  backend: str | None = None, theme=None, title: str | None = None,
                  width: float | None = None, height: float | None = None):
     """Effect size against significance, coloured by the shape of the difference.
@@ -260,7 +269,7 @@ def plot_volcano(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
     fold-change axis is shaded.
     """
     stages = ("mean_shift", "subset") if stage == "both" else (stage,)
-    data = [volcano_data(res, s, alpha=alpha, color=color, label=label, x=x, y=y)
+    data = [volcano_data(res, s, alpha=alpha, color=color, label=label, x=x, y=y, meta=meta)
             for s in stages]
     be = _resolve_backend(backend)
     th = _resolve_theme(theme)
@@ -272,7 +281,7 @@ def plot_volcano(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
 
 
 def plot_stages(res: WadeResult, *, alpha: float = 0.05,
-                color="affected_fraction", label=None,
+                color="affected_fraction", label=None, meta=None,
                 backend: str | None = None, theme=None, title: str | None = None,
                 width: float | None = None, height: float | None = None):
     """``p_mean_shift`` against ``p_subset``: the README's four quadrants, drawn.
@@ -288,7 +297,7 @@ def plot_stages(res: WadeResult, *, alpha: float = 0.05,
     Parameters are as for :func:`plot_volcano`; ``label=n`` names the ``n``
     genes with the largest joint ``-log10 p``.
     """
-    data = stages_data(res, alpha=alpha, color=color, label=label)
+    data = stages_data(res, alpha=alpha, color=color, label=label, meta=meta)
     be = _resolve_backend(backend)
     th = _resolve_theme(theme)
     if be == "plotly":

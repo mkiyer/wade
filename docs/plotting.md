@@ -176,10 +176,23 @@ did not measure.
 
 WADE's core needs **one gene id column and nothing more**. If your input frame
 carries other per-gene columns — a symbol, a biotype, a chromosome — they are
-carried alongside and available to figures and tables for convenience. No
-statistic reads them, and dropping them changes no number. Gene symbols are
-the case that matters most: a ranked table of `ENSG…` accessions is unreadable,
-and one of symbols is biology.
+carried on `res.gene_meta` and shown on request. No statistic reads them, and
+dropping them changes no number; a test asserts exactly that, on the way in and
+again at this layer.
+
+```python
+plot_volcano(res, label=8, meta="gene_name")              # symbols, not ENSG…
+plot_volcano(res, label=8, meta=["gene_name", "gene_type"])
+```
+
+`meta=` names one column or several. **The first names the points** — the panel
+titles in `plot_gene`, the point label and hover title on a cloud — because a
+ranked cloud of `ENSG…` accessions is unreadable and one of symbols is biology.
+Every named column joins plotly's hover and every `.table()`. The gene id stays
+on the dataclass as `gene`, so the table remains keyed by the id the core used.
+
+One consequence worth knowing: with `meta=` set, `label=` matches these names
+too, so `label=["MYC"]` finds MYC. You name what you see.
 
 ## What this layer is not for
 

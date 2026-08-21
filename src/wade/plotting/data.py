@@ -167,7 +167,8 @@ def _stats_for(res: WadeResult, i: int) -> dict:
     return out
 
 
-def gene_panels(source, cond=None, *, gene=None, names=None, pseudocount=None) -> list[GenePanel]:
+def gene_panels(source, cond=None, *, gene=None, names=None, pseudocount=None,
+                meta=None) -> list[GenePanel]:
     """Normalize every accepted input of :func:`plot_gene` to a list of panels.
 
     ``source`` may be
@@ -192,10 +193,11 @@ def gene_panels(source, cond=None, *, gene=None, names=None, pseudocount=None) -
         genes = list(gene) if isinstance(gene, (list, tuple, np.ndarray)) else [gene]
         out = []
         fitted = source.fitted_fold_change
+        shown = _display_names(source.gene, _meta_columns(source, meta))
         for gsel in genes:
             i = source.gene_index(gsel)
             shift = None if fitted is None else float(np.log2(fitted[i]))
-            out.append(_panel_from_detail(source.gene_detail(i), str(source.gene[i]),
+            out.append(_panel_from_detail(source.gene_detail(i), str(shown[i]),
                                           _stats_for(source, i), shift))
         return out
 
@@ -452,6 +454,35 @@ def _column_ci(res: WadeResult, name: str | None) -> np.ndarray | None:
     return None if ci is None else np.asarray(ci, dtype=np.float64)
 
 
+def _meta_columns(res: WadeResult, meta) -> dict[str, np.ndarray]:
+    """The per-gene metadata columns a figure was asked to show.
+
+    ``meta`` names columns of :attr:`WadeResult.gene_meta` — one name or
+    several. The **first** names the points, because a ranked cloud of
+    ``ENSG…`` accessions is unreadable and one of symbols is biology; every
+    named column joins the hover and the table. WADE's core needs one gene id
+    and nothing more, so **no statistic reads any of this** and a test asserts
+    that adding metadata moves no number (``tests/test_core_completion.py``).
+    """
+    if meta is None:
+        return {}
+    names = [meta] if isinstance(meta, str) else list(meta)
+    missing = [n for n in names if n not in res.gene_meta]
+    if missing:
+        raise ValueError(
+            f"{missing} not in this result's gene metadata; available: "
+            f"{sorted(res.gene_meta) or 'none'}. Per-gene columns are carried "
+            f"from the input frame and read by no statistic — see "
+            f"docs/plotting.md.")
+    return {n: np.asarray(res.gene_meta[n], dtype=object) for n in names}
+
+
+def _display_names(gene: np.ndarray, meta: dict) -> np.ndarray:
+    """What the points are called: the first metadata column when one was asked
+    for, the gene id otherwise."""
+    return gene if not meta else next(iter(meta.values()))
+
+
 def _result_columns(res: WadeResult) -> dict[str, np.ndarray]:
     """Every column the result carries, for the hover. ``res.columns()`` is the
     single namespace for the axes, the colour and the hover, which is what
@@ -527,6 +558,14 @@ class VolcanoData:
     #: and permutation-z axes, which have no interval.
     x_ci: np.ndarray | None = None
     y_ci: np.ndarray | None = None
+    #: Per-gene metadata to show, in the order asked for (:func:`_meta_columns`).
+    #: Empty unless ``meta=`` was passed. Read by no statistic.
+    meta: dict = field(default_factory=dict)
+
+    @property
+    def display(self) -> np.ndarray:
+        """What the points are called — the first ``meta`` column, or the id."""
+        return _display_names(self.gene, self.meta)
 
     @property
     def xlabel(self) -> str:
@@ -561,12 +600,13 @@ class VolcanoData:
         for name, ci in ((self.x_name, self.x_ci), (self.y_name, self.y_ci)):
             if ci is not None:
                 cols[f"{name}_lo"], cols[f"{name}_hi"] = ci[0], ci[1]
+        cols.update(self.meta)
         return cols
 
 
 def volcano_data(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0.05,
                  color="affected_fraction", label=None,
-                 x: str = "log2_fc", y: str | None = None) -> VolcanoData:
+                 x: str = "log2_fc", y: str | None = None, meta=None) -> VolcanoData:
     """The arrays behind one volcano panel.
 
     ``x`` and ``y`` name any columns of :meth:`WadeResult.columns`. The
@@ -607,14 +647,16 @@ def volcano_data(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
     xv = _column_array(res, x)
     yv = _neglog10(p) if y is None else _column_array(res, y)
     colors, spec = _color_arrays(res, color)
+    meta_cols = _meta_columns(res, meta)
     return VolcanoData(
         stage=stage, gene=res.gene, x=xv, y=yv, p=p, padj=padj,
         significant=np.nan_to_num(padj, nan=np.inf) <= alpha, alpha=alpha,
         cutoff=_bh_cutoff(p, padj, alpha), color=colors, color_spec=spec,
-        labelled=_label_mask(yv, res.gene, label, tiebreak=xv),
+        # Matched against what the points are *called*: name what you see.
+        labelled=_label_mask(yv, _display_names(res.gene, meta_cols), label, tiebreak=xv),
         alternative=str(res.params.get("alternative", "two-sided")),
         hover=_result_columns(res), x_name=x, y_name=y,
-        x_ci=_column_ci(res, x), y_ci=_column_ci(res, y),
+        x_ci=_column_ci(res, x), y_ci=_column_ci(res, y), meta=meta_cols,
     )
 
 
@@ -634,9 +676,16 @@ class StagesData:
     color_spec: dict | None
     labelled: np.ndarray
     hover: dict = field(default_factory=dict)
+    #: Per-gene metadata to show, as on :class:`VolcanoData`.
+    meta: dict = field(default_factory=dict)
 
     xlabel: str = "−log₁₀ p (mean shift)"
     ylabel: str = "−log₁₀ p (subset)"
+
+    @property
+    def display(self) -> np.ndarray:
+        """What the points are called — the first ``meta`` column, or the id."""
+        return _display_names(self.gene, self.meta)
 
     @property
     def cutoff_x(self) -> float:
@@ -661,11 +710,12 @@ class StagesData:
                 "quadrant": self.quadrant()}
         if self.color is not None:
             cols[self.color_spec["key"]] = self.color
+        cols.update(self.meta)
         return cols
 
 
 def stages_data(res: WadeResult, *, alpha: float = 0.05,
-                color="affected_fraction", label=None) -> StagesData:
+                color="affected_fraction", label=None, meta=None) -> StagesData:
     """The arrays behind :func:`plot_stages`.
 
     Both axes are ``-log10`` of the *raw* p-value and the quadrant lines sit at
@@ -678,15 +728,17 @@ def stages_data(res: WadeResult, *, alpha: float = 0.05,
     x = _neglog10(p_m)
     y = _neglog10(p_s)
     colors, spec = _color_arrays(res, color)
+    meta_cols = _meta_columns(res, meta)
     # Label by the joint surprise, so the corner genes are the ones named.
     score = np.nan_to_num(x, nan=0.0) + np.nan_to_num(y, nan=0.0)
     return StagesData(
-        gene=res.gene, x=x, y=y,
+        gene=res.gene, x=x, y=y, meta=meta_cols,
         sig_mean=np.nan_to_num(padj_m, nan=np.inf) <= alpha,
         sig_subset=np.nan_to_num(padj_s, nan=np.inf) <= alpha,
         alpha=alpha,
         cutoff_mean=_bh_cutoff(np.asarray(p_m, float), np.asarray(padj_m, float), alpha),
         cutoff_subset=_bh_cutoff(np.asarray(p_s, float), np.asarray(padj_s, float), alpha),
-        color=colors, color_spec=spec, labelled=_label_mask(score, res.gene, label),
+        color=colors, color_spec=spec,
+        labelled=_label_mask(score, _display_names(res.gene, meta_cols), label),
         hover=_result_columns(res),
     )
