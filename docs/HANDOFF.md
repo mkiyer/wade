@@ -166,7 +166,7 @@ two were kept:
   export needs `python-kaleido` *and* a Chrome/Chromium on the machine — it
   works on this laptop, it is friction on a headless box.
 - **matplotlib** is the static/publication backend: PDF/SVG with nothing but
-  the library. `tools/make_readme_figures.py` uses it so the committed PNGs
+  the library. `notebooks/demo.qmd` renders the committed PNGs with it, so they
   are reproducible.
 - **altair** was the other serious candidate (declarative, `vl-convert`
   exports without a browser) and lost on the 5,000-row default cap and
@@ -363,7 +363,7 @@ All measured, all cost time:
 The rule from earlier sessions was "keep the signal fraction under ~10% of
 **genes**". The load-bearing quantity is actually the fraction of the **library
 mass**, and in a small matrix those differ. The first NB version of
-`tools/make_readme_figures.py` had 45 signal genes among 600 nulls: 7% of
+the README's figure dataset had 45 signal genes among 600 nulls: 7% of
 genes, 6.6% of mass, every null gene acquired a −0.09 log2 fold change and
 **186 of 600 nulls cleared BH** on the mean-shift stage at 300 v 300. Raising
 the null count to 3,000 put the signal at 1.5% of mass, the null median fold
@@ -435,14 +435,15 @@ cites them.
 synthetic data with planted ground truth, every claim checkable in the output,
 and nothing left to build first — the figures it needs all exist, including the
 two that did not a day ago (`plot_drivers` for "should I believe this?" and
-`plot_gene(cumulative_area=True)` for stage 1). `tools/make_readme_figures.py`
-is most of the dataset already, and its printed numbers are what the README
-quotes.
+`plot_gene(cumulative_area=True)` for stage 1). It is **written**: `demo.qmd`
+generates the dataset, runs it, and writes `docs/figures/*.png` — it is the
+master source for the README's figures and numbers, which is why
+`tools/make_readme_figures.py` was deleted. `benchmark` is the next one.
 
 ```bash
 conda activate wade
 pytest -q                                   # 738 passing, ~12 s — the baseline
-python tools/make_readme_figures.py         # the demo's dataset, and its numbers
+quarto render notebooks/demo.qmd            # the demo, and the README's figures
 ```
 
 Three rules govern everything here, and they have earned their place:
