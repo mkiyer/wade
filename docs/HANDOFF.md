@@ -46,13 +46,12 @@ The package is `src/wade/`. Twelve modules, all small:
 |---|---|
 | `quantiles.py` | the probability grid, type-7 quantiles, `capped_nprobs` |
 | `stats.py` | `wade_stats()` — the grids, `mean_shift`, `w1`, `fc` |
-| `diagnostics.py` (also) | `library_qc()` — per-library depth/complexity/concentration; `subset_drivers()` — which samples drive a gene's subset |
 | `subset.py` | the bridge, the subset test, `affected_fraction`, `direction`, `subset_log2_fc` (the subset's magnitude), the bootstrap (threaded, chunkable) |
 | `thinning.py` | the count-native shift correction: `fit_fold_change` (normalize path + affine `alpha=` path + kernel backend), `thin_counts`, `one_count`, `gene_chunks` (§10.3–10.4) |
-| `permutation.py` | the nulls; dispatches to the Rust kernel; `mean_diff_stat` / `mean_diff_null` (the GEMM stage 1) |
+| `permutation.py` | the nulls; dispatches to the Rust kernel; `mean_diff_stat` / `mean_diff_null` (the GEMM stage 1); `draw_perms(strata=)` and `permutation_space()` (restricted permutation) |
 | `pvalues.py` | empirical p, GPD refinement, BH, `alternative` |
 | `normalize.py` | `tpm_like` (ported), `cpm`, `rle` (new) |
-| `diagnostics.py` | `wade_gene()` — the per-gene curves for plotting |
+| `diagnostics.py` | `wade_gene()` — the per-gene curves; `library_qc()` — per-library depth/complexity/concentration; `subset_drivers()` — which samples drive a gene's subset |
 | `api.py` | `wade()`, `wade_from_matrix()`, `wade_contrast()`; `WadeResult` now carries `cond` and has `gene_index()` / `gene_detail()` |
 | `io.py` | the data boundary: `as_counts` (arrays, frames, sparse), `condition`, `to_frame`, `write_results` + manifest. **No file readers, by decision** |
 | `plotting.py` | `plot_gene()`, `plot_volcano()`, `plot_stages()`; a pure-NumPy data layer (`gene_panels`, `volcano_data`, `stages_data`) and two thin renderers, plotly and matplotlib, imported inside the functions |
@@ -82,8 +81,14 @@ See [`../ROADMAP.md`](../ROADMAP.md) for the queue.
    (counts, jitter, tpm, pseudocount) — the jitter is a seeded stream and the
    pseudocount a rank-1 product, so neither *has* to be materialized. A
    contract question, not a kernel one.
-4. **Format helpers** (featureCounts, MatrixMarket) and **pandas coverage** —
-   ROADMAP §4, both small.
+4. **The audited package queue — ROADMAP §3.** A five-dimension audit
+   (2026-08-20) found 40 verified gaps; the nine release blockers are fixed
+   (see the git log), and the remaining 31 are grouped and sized there. The
+   largest clusters are the plotting layer (bootstrap intervals computed but
+   never drawn, no driver figure, no linked views, no dark theme) and the
+   data boundary (per-gene annotation cannot reach the written results, the
+   featureCounts/MatrixMarket helpers, GPD-refinement flags unexported).
+5. **Format helpers** (featureCounts, MatrixMarket) — ROADMAP §5, small.
 
 Four standing decisions from the user, recorded in `ROADMAP.md`'s preamble,
 `method.md`'s scope note and `wade/io.py`'s module docstring:
