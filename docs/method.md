@@ -339,6 +339,16 @@ removed. The table is how to read them, not a function the package provides.
   inference is *conditional* on one realised noise draw. That is what makes a
   seed reproduce a result exactly. It must never be re-drawn inside the loop.
 
+**Restricted permutation** (`strata=`) narrows the exchange to within strata,
+which is the right null when the cohort is assembled from studies, batches or
+protocols: shuffling labels across them tests exchangeability the design does
+not have. The cost is arithmetic and must be looked at, not assumed away —
+unrestricted, the space is $\binom{n}{n_1}$; restricted, it is
+$\prod_s \binom{n_s}{k_s}$, and any stratum holding a single class
+contributes a factor of one. `wade.permutation_space()` returns the realized
+space and the p-value floor it implies, and the manifest records both
+(`docs/limits.md` §2.1).
+
 **The empirical p-value** is $(1 + \#\{t^{(b)} \ge t\})/(B+1)$ — the add-one
 form, which counts the observed labelling among the exchangeable outcomes,
 cannot be zero, and is bounded below by $1/(B+1)$.

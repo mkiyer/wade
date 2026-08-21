@@ -340,7 +340,7 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
             alternative, keep_null, gene_names, tpm, jitter, pseudocount,
             n_boot, sample_names, condition_meta, max_probs,
             gene_chunk=None, stage1_stat=None, stage1="grid",
-            fit_backend="numpy") -> WadeResult:
+            fit_backend="numpy", strata=None) -> WadeResult:
     """P-values, BH and the result object, from assembled per-gene arrays.
 
     Shared by the one-pass path (:func:`_run`) and the gene-chunked driver
@@ -400,6 +400,7 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
                     nprobs=obs.nprobs, max_probs=max_probs, n1=obs.n1, n0=obs.n0,
                     n_boot=n_boot, gene_chunk=gene_chunk, stage1=stage1,
                     fit_backend=fit_backend,
+                    strata=None if strata is None else np.asarray(strata),
                     correction=None if sub is None else sub.correction,
                     **(condition_meta or {})),
     )
@@ -410,7 +411,7 @@ def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
          backend, subset, jitter, tpm, pseudocount=None, corrected=None,
          shift=None, n_boot=0, boot_rng=None, sample_names=None,
          condition_meta=None, max_probs=None, stage1="grid",
-         fit_backend="numpy") -> WadeResult:
+         fit_backend="numpy", strata=None) -> WadeResult:
     cond = np.asarray(cond)
     obs = wade_stats(x, cond, allow_single_sample_group=allow_single_sample_group,
                      max_probs=max_probs)
@@ -418,8 +419,8 @@ def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
 
     if nperms > 0:
         if perms is None:
-            perms = draw_perms(cond, nperms, seed=seed, rng=perm_rng)
-        perms = validate_perms(perms, cond, nperms)
+            perms = draw_perms(cond, nperms, seed=seed, rng=perm_rng, strata=strata)
+        perms = validate_perms(perms, cond, nperms, strata=strata)
         null = (mean_diff_null(x, perms) if stage1 == "gemm"
                 else null_statistics(x, perms, backend=backend, max_probs=max_probs))
     else:
@@ -444,7 +445,7 @@ def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
         tpm=tpm, jitter=jitter, pseudocount=pseudocount, n_boot=n_boot,
         sample_names=sample_names, condition_meta=condition_meta,
         max_probs=max_probs, stage1_stat=stage1_stat, stage1=stage1,
-        fit_backend=fit_backend,
+        fit_backend=fit_backend, strata=strata,
     )
 
 
@@ -479,7 +480,8 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
                   n_exc_min, n_tail, alternative, allow_single_sample_group,
                   keep_null, gene_names, backend, subset, thin, pseudocount,
                   n_boot, sample_names, condition_meta, max_probs,
-                  gene_chunk, stage1="grid", fit_backend="numpy") -> WadeResult:
+                  gene_chunk, stage1="grid", fit_backend="numpy",
+                  strata=None) -> WadeResult:
     """The gene-chunked driver — ``docs/scaling.md`` §2.2.
 
     **Bit-identical to the unchunked path**, by construction rather than by
@@ -537,8 +539,8 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
 
     if nperms > 0:
         if perms is None:
-            perms = draw_perms(cond, nperms, seed=seed, rng=perm_rng)
-        perms = validate_perms(perms, cond, nperms)
+            perms = draw_perms(cond, nperms, seed=seed, rng=perm_rng, strata=strata)
+        perms = validate_perms(perms, cond, nperms, strata=strata)
     else:
         perms = None
     do_subset = nperms > 0 and subset and m_real >= 3
@@ -597,6 +599,7 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
         sample_names=sample_names, condition_meta=condition_meta,
         max_probs=max_probs, gene_chunk=gene_chunk,
         stage1_stat=stage1_stat, stage1=stage1, fit_backend=fit_backend,
+        strata=strata,
     )
 
 
@@ -628,6 +631,7 @@ def wade(
     gene_chunk: int | None = None,
     stage1: str = "grid",
     fit_backend: str = "numpy",
+    strata=None,
 ) -> WadeResult:
     """Run WADE on a raw count matrix. The primary entry point.
 
@@ -715,6 +719,17 @@ def wade(
         why the kernel is never dispatched automatically. Both are
         deterministic given the seed and chunk-invariant; the kernel is
         parallel over genes and several times faster.
+    strata
+        Per-sample stratum labels (study, batch, protocol, donor). When
+        given, the permutation null is **restricted**: labels are shuffled
+        only *within* each stratum, so batch structure is held fixed instead
+        of being tested as if it were biology (``docs/limits.md`` §2.2). The
+        price is permutation space — a stratum with only one class present
+        contributes no freedom at all — so the realized space and its
+        implied p-value floor are computed and recorded
+        (:func:`wade.permutation_space`, and the manifest's
+        ``design.permutation_space``). Supplying your own ``perms`` alongside
+        ``strata`` validates them against the stratum counts.
     """
     data, normalizer, cond, cond_meta = _resolve_input(
         counts, normalizer, cond, gene_names, sample_names)
@@ -730,6 +745,9 @@ def wade(
         raise ValueError(f"pseudocount must be non-negative, got {pseudocount}")
     split_groups(cond)
     _validate_stage1(stage1, cond, fit_backend)
+    if strata is not None:
+        from .permutation import strata_indices
+        strata_indices(strata, counts.shape[1])          # shape/length check
 
     # Four independent streams from one seed: jitter, permutations, thinning,
     # bootstrap. Spawned children are deterministic by index, so adding the
@@ -769,7 +787,7 @@ def wade(
             subset=subset, thin=thin, pseudocount=pseudocount, n_boot=n_boot,
             sample_names=sample_names, condition_meta=cond_meta,
             max_probs=max_probs, gene_chunk=gene_chunk, stage1=stage1,
-            fit_backend=fit_backend)
+            fit_backend=fit_backend, strata=strata)
 
     normalize = lambda c: _normalize.tpm_like(  # noqa: E731
         c, normalizer, lib, noise=noise, norm_factor=norm_factor, jitter=jitter)
@@ -806,7 +824,7 @@ def wade(
         jitter=jitter, tpm=tpm, pseudocount=pc, corrected=corrected, shift=shift,
         n_boot=n_boot, boot_rng=boot_rng, sample_names=sample_names,
         condition_meta=cond_meta, max_probs=max_probs, stage1=stage1,
-        fit_backend=fit_backend,
+        fit_backend=fit_backend, strata=strata,
     )
 
 
@@ -830,6 +848,7 @@ def wade_from_matrix(
     sample_names=None,
     max_probs: int | None = DEFAULT_MAX_PROBS,
     stage1: str = "grid",
+    strata=None,
 ) -> WadeResult:
     """Run WADE on a matrix that is **already on a comparable scale**.
 
@@ -876,6 +895,7 @@ def wade_from_matrix(
         jitter=np.zeros_like(x), tpm=x, pseudocount=pc,
         n_boot=n_boot, boot_rng=boot_rng, sample_names=sample_names,
         condition_meta=cond_meta, max_probs=max_probs, stage1=stage1,
+        strata=strata,
     )
 
 

@@ -67,6 +67,13 @@ res = wade(counts, normalizer, cond, nperms=2000)
 | `z_mean_shift`, `z_subset` | how far past its own permutation null? — the ranking that keeps working when p-values hit the resolution floor (GSEA's NES, in z form) |
 | `log2_fc`, `w1` | fold change; 1-Wasserstein distance |
 
+**Batch-structured cohorts.** If your samples come from several studies,
+batches or protocols, pass `strata=` (per-sample labels) and the permutation
+null shuffles labels only *within* each stratum, holding that structure fixed
+rather than testing it as biology. `wade.permutation_space()` reports the
+permutation freedom that leaves you, because stratifying costs resolution —
+see [`docs/limits.md`](docs/limits.md) §2.1.
+
 On a large cohort the p-values saturate — thousands of genes tie at the
 resolution floor — so the working recipe is: **filter** by `padj_*`, then
 **rank** by magnitude (`subset_log2_fc`, `log2_fc`) or by `z_*`.

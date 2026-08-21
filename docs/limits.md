@@ -39,12 +39,22 @@ split is indistinguishable from signal.
 
 This is not an oversight to be patched: the permutation null is built by
 exchanging labels, and a covariate makes labels non-exchangeable. Adjusting
-would require a different null — a stratified or restricted permutation scheme —
-which is a change to the method, not a parameter.
+would require a different null — a stratified or restricted permutation scheme.
 
-**What to do instead.** Detect the confound and refuse, or stratify: run within
-each level of the confounder and combine afterwards. Refusing a confounded
-contrast is more honest than reporting one.
+**One such scheme now exists**, for a *categorical* confounder:
+`wade(..., strata=labels)` shuffles labels only within each stratum, so study,
+batch or protocol is held fixed instead of being tested as though it were
+biology. It is not covariate adjustment — there is still no design matrix, no
+continuous covariate and no random effect — and it is not free: within-stratum
+exchangeability shrinks the permutation space to a product of much smaller
+numbers, and a stratum containing only one class contributes no freedom at
+all. `wade.permutation_space()` reports what is left, and the manifest records
+it beside the results. A design stratified into many small studies can have a
+space too small to support the p-values asked of it.
+
+**What to do otherwise.** Detect the confound and refuse, or run within each
+level of the confounder and combine afterwards. Refusing a confounded contrast
+is more honest than reporting one.
 
 ### 2.2 No repeated-measures handling
 
@@ -53,8 +63,12 @@ subject are not. Feeding them in inflates the effective sample size and
 anticonservatively biases every p-value, silently.
 
 If your design has repeated measures, aggregate to one value per subject before
-running, or restrict the permutation to exchange whole subjects — again, a
-different null.
+running. `strata=` does **not** solve this case: it exchanges labels *within* a
+stratum, whereas repeated measures need whole subjects exchanged *between*
+groups — the subject is the unit, and a per-subject stratum has only one class
+in it, so the permutation space collapses to nothing. `permutation_space()`
+will say so (`uninformative_strata` equal to the number of subjects), which is
+the honest failure rather than a silent one.
 
 ### 2.3 The subset stage at low expression: what it does and does not fix
 

@@ -337,10 +337,16 @@ def test_write_results_writes_a_manifest_beside_the_table(result, tmp_path):
     assert man["wade_version"] == wade.__version__
     assert man["run"]["nperms"] == 100 and man["run"]["seed"] == 1
     assert man["run"]["correction"] == "thinning" and man["run"]["n_boot"] == 20
-    assert man["design"] == {"n_genes": G, "n_case": N // 2, "n_ctrl": N // 2,
-                             "nprobs": N // 2, "max_probs": wade.DEFAULT_MAX_PROBS,
-                             "case_label": None,
-                             "control_label": None, "condition_column": None}
+    design = man["design"]
+    space = design.pop("permutation_space")
+    assert design == {"n_genes": G, "n_case": N // 2, "n_ctrl": N // 2,
+                      "nprobs": N // 2, "max_probs": wade.DEFAULT_MAX_PROBS,
+                      "case_label": None,
+                      "control_label": None, "condition_column": None}
+    # An unrestricted run records the unrestricted permutation space, so a
+    # reader can see what resolution the design could support at all.
+    assert space["restricted"] is False and space["n_strata"] == 1
+    assert space["log10_space"] > 0 and 0 < space["p_floor"] < 1
     assert man["results"]["alpha"] == 0.05
     assert "n_significant_subset" in man["results"]
     assert "created_utc" in man and man["numpy_version"] == np.__version__

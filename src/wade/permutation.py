@@ -38,7 +38,7 @@ except ImportError:                     # pragma: no cover
 
 __all__ = ["draw_perms", "validate_perms", "null_statistics", "available_backends",
            "subset_null_backend", "mean_diff_stat", "mean_diff_null",
-           "HAVE_RUST_KERNEL"]
+           "strata_indices", "permutation_space", "HAVE_RUST_KERNEL"]
 
 #: Whether the compiled kernel was built and imported. The package is fully
 #: functional without it — the NumPy path is the correctness baseline and the
@@ -50,11 +50,74 @@ def available_backends() -> tuple[str, ...]:
     return ("numpy", "rust") if HAVE_RUST_KERNEL else ("numpy",)
 
 
+def strata_indices(strata, n_samples: int) -> list[np.ndarray]:
+    """Sample indices grouped by stratum label, in order of first appearance.
+
+    Any hashable labels are accepted (study names, batch ids, integers), and
+    the grouping is by equality. The order is deterministic — first
+    appearance, not sorted — so a run is reproducible whatever the label type.
+    """
+    strata = np.asarray(strata)
+    if strata.ndim != 1:
+        raise ValueError(f"strata must be a 1-D per-sample vector, got shape {strata.shape}")
+    if strata.shape[0] != n_samples:
+        raise ValueError(
+            f"strata must have one entry per sample: expected {n_samples}, "
+            f"got {strata.shape[0]}"
+        )
+    seen: dict = {}
+    for j, lab in enumerate(strata.tolist()):
+        seen.setdefault(lab, []).append(j)
+    return [np.asarray(v, dtype=np.intp) for v in seen.values()]
+
+
+def permutation_space(cond: np.ndarray, strata=None) -> dict:
+    """How many distinct label assignments the design admits, and the p-value
+    floor that implies — ``docs/limits.md`` §1, restricted to strata.
+
+    Unrestricted, the count is ``C(n, n1)``. **Restricted permutation
+    multiplies a product of much smaller numbers instead**: within-stratum
+    exchangeability gives ``prod_s C(n_s, k_s)``, and any stratum containing
+    only one class contributes a factor of 1 — no freedom at all. A design
+    stratified into many small studies can therefore have a permutation space
+    too small to support the p-values it is asked for, which is exactly the
+    kind of arithmetic this package surfaces rather than hides.
+
+    Returns ``n_strata``, ``log10_space``, ``p_floor`` (the smallest
+    attainable p-value, ``1 / space``), and ``uninformative_strata`` (those
+    with only one class present).
+    """
+    from math import comb, log10
+
+    cond = np.asarray(cond)
+    if strata is None:
+        groups = [np.arange(cond.shape[0], dtype=np.intp)]
+    else:
+        groups = strata_indices(strata, cond.shape[0])
+    log10_space = 0.0
+    uninformative = 0
+    for idx in groups:
+        c = cond[idx]
+        n_s = int(c.size)
+        k_s = int(np.sum(c == 1))
+        if k_s == 0 or k_s == n_s:
+            uninformative += 1
+            continue
+        log10_space += log10(comb(n_s, k_s))
+    return {
+        "n_strata": len(groups),
+        "log10_space": log10_space,
+        "p_floor": 10.0 ** (-log10_space),
+        "uninformative_strata": uninformative,
+    }
+
+
 def draw_perms(
     cond: np.ndarray,
     n_perms: int,
     seed: int | None = 1,
     rng: np.random.Generator | None = None,
+    strata=None,
 ) -> np.ndarray:
     """Draw ``n_perms`` label permutations. Returns ``(n_perms, n_samples)``.
 
@@ -65,18 +128,44 @@ def draw_perms(
     forces a 0-based/1-based convention into the fixture format, and a
     label matrix has no such ambiguity. It is also exactly what R's
     ``sample(cond)`` returns.
+
+    ``strata`` restricts the shuffle: labels are permuted **within** each
+    stratum, so every stratum keeps its own case/control counts. This is the
+    restricted permutation that a batch-structured cohort needs — permuting
+    study labels freely across studies tests exchangeability the design does
+    not have (``docs/limits.md`` §2.2), and the same machinery is what
+    donor-level permutation needs for single cell (``docs/scaling.md`` §5.3).
+    A stratum with only one class present contributes no freedom;
+    :func:`permutation_space` counts what is left.
+
+    ``strata=None`` is bitwise what it always was — the unrestricted branch
+    consumes the generator exactly as before, so existing seeds reproduce.
     """
     cond = np.asarray(cond)
     if rng is None:
         rng = np.random.default_rng(seed)
     out = np.empty((n_perms, cond.shape[0]), dtype=cond.dtype)
+    if strata is None:
+        for b in range(n_perms):
+            out[b] = rng.permutation(cond)
+        return out
+    groups = strata_indices(strata, cond.shape[0])
     for b in range(n_perms):
-        out[b] = rng.permutation(cond)
+        row = out[b]
+        for idx in groups:
+            row[idx] = rng.permutation(cond[idx])
     return out
 
 
-def validate_perms(perms: np.ndarray, cond: np.ndarray, n_perms: int) -> np.ndarray:
-    """Check a supplied permutation matrix is what it claims to be."""
+def validate_perms(perms: np.ndarray, cond: np.ndarray, n_perms: int,
+                   strata=None) -> np.ndarray:
+    """Check a supplied permutation matrix is what it claims to be.
+
+    With ``strata``, the check tightens: permuting within strata preserves the
+    global label multiset *and* every stratum's own counts, so a row that
+    moved a label across strata passes the global test and is still wrong.
+    Both are checked.
+    """
     perms = np.asarray(perms)
     cond = np.asarray(cond)
     if perms.ndim != 2:
@@ -97,6 +186,17 @@ def validate_perms(perms: np.ndarray, cond: np.ndarray, n_perms: int) -> np.ndar
             f"every row of perms must be a permutation of cond (group sizes are "
             f"preserved under label exchange); row {bad} is not."
         )
+    if strata is not None:
+        for idx in strata_indices(strata, cond.shape[0]):
+            want_s = int(np.sum(cond[idx] == 1))
+            got_s = np.sum(perms[:, idx] == 1, axis=1)
+            if not np.all(got_s == want_s):
+                bad = int(np.flatnonzero(got_s != want_s)[0])
+                raise ValueError(
+                    f"restricted permutation must preserve each stratum's case count: "
+                    f"row {bad} has {int(got_s[bad])} cases in a stratum that has "
+                    f"{want_s}. Labels were moved across strata."
+                )
     return perms
 
 

@@ -52,7 +52,8 @@ from .io import (
     write_results,
 )
 from .normalize import cpm, draw_jitter, library_sizes, rle, tpm_like
-from .permutation import draw_perms, mean_diff_null, mean_diff_stat, null_statistics
+from .permutation import (draw_perms, mean_diff_null, mean_diff_stat,
+                          null_statistics, permutation_space, strata_indices)
 from .plotting import plot_gene, plot_stages, plot_volcano
 from .pvalues import ALTERNATIVES, GPDFit, bh_adjust, gpd_tail_p, perm_pvalues
 from .quantiles import probability_grid, type7_quantiles
@@ -99,12 +100,14 @@ __all__ = [
     "mean_diff_null",
     "mean_diff_stat",
     "null_statistics",
+    "permutation_space",
     "one_count",
     "perm_pvalues",
     "plot_gene",
     "plot_stages",
     "plot_volcano",
     "probability_grid",
+    "strata_indices",
     "RESULT_COLUMNS",
     "rle",
     "subset_test",

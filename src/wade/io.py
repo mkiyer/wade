@@ -398,6 +398,24 @@ RESULT_COLUMNS = (
 )
 
 
+def _permutation_space_record(res) -> dict | None:
+    """How much permutation freedom the design had — unrestricted, or
+    restricted by ``strata``. Recorded because a stratified design can have a
+    permutation space too small to support the p-values reported beside it."""
+    if res.cond is None:
+        return None
+    from .permutation import permutation_space
+
+    space = permutation_space(res.cond, res.params.get("strata"))
+    return {
+        "restricted": res.params.get("strata") is not None,
+        "n_strata": space["n_strata"],
+        "log10_space": round(space["log10_space"], 3),
+        "p_floor": space["p_floor"],
+        "uninformative_strata": space["uninformative_strata"],
+    }
+
+
 def _neglog10(p):
     p = np.asarray(p, dtype=np.float64)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -489,6 +507,7 @@ def manifest(res, *, alpha: float = 0.05) -> dict:
             "n_ctrl": p.get("n0"),
             "nprobs": p.get("nprobs"),
             "max_probs": p.get("max_probs"),
+            "permutation_space": _permutation_space_record(res),
             "case_label": p.get("case_label"),
             "control_label": p.get("control_label"),
             "condition_column": p.get("condition_column"),
