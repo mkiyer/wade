@@ -42,6 +42,19 @@ convenience.
             └──────────────► matplotlib renderer
 ```
 
+`wade/plotting/` is that diagram, one file per box:
+
+| module | what it holds | what it imports |
+|---|---|---|
+| `theme.py` | the palette and every label a figure carries | **nothing at all** |
+| `data.py` | the three dataclasses and the arrays they hold | NumPy and the core |
+| `_plotly.py` | the interactive renderer | plotly, *inside* its functions |
+| `_matplotlib.py` | the static renderer | matplotlib, *inside* its functions |
+| `__init__.py` | backend resolution and the three `plot_*` | a renderer, on use |
+
+The dependencies only ever point left, and the two renderers never see each
+other — which is why a third one is additive rather than surgery.
+
 The split is load-bearing rather than decorative:
 
 * **A figure says the same thing in either backend**, because both read the

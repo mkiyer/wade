@@ -98,15 +98,22 @@ def main() -> None:
     fig.savefig(OUT / "stages.png", dpi=120)
 
     from wade.plotting import stages_data
-    import numpy as _np
     print("quadrant counts:", stages_data(res).counts())
     for tag, sl in (("null", slice(0, 3000)), ("global x2", slice(3000, 3015)),
                     ("subset 15% x8", slice(3015, 3030)), ("subset 5% x8", slice(3030, 3045))):
-        print(f"  {tag:>14}: log2fc {_np.median(res.log2_fc[sl]):+.2f}  "
-              f"p_mean {_np.median(res.p_mean_shift[sl]):.4f}  p_subset {_np.median(res.p_subset[sl]):.4f}  "
-              f"affected {_np.median(res.affected_fraction[sl]):.2f} "
-              f"[{_np.median(res.ci_affected_fraction[0, sl]):.2f}, {_np.median(res.ci_affected_fraction[1, sl]):.2f}]  "
-              f"f-hat {_np.median(res.fitted_fold_change[sl]):.2f}")
+        print(f"  {tag:>14}: log2fc {np.median(res.log2_fc[sl]):+.2f}  "
+              f"p_mean {np.median(res.p_mean_shift[sl]):.4f}  p_subset {np.median(res.p_subset[sl]):.4f}  "
+              f"affected {np.median(res.affected_fraction[sl]):.2f} "
+              f"[{np.median(res.ci_affected_fraction[0, sl]):.2f}, {np.median(res.ci_affected_fraction[1, sl]):.2f}]  "
+              f"f-hat {np.median(res.fitted_fold_change[sl]):.2f}")
+    # The three genes the figures actually draw, because those are the numbers
+    # the README quotes beside them. Printing the class medians alone is how
+    # that prose went stale once already.
+    for name in ("global_0", "subset15_0", "subset5_0"):
+        i = res.gene_index(name)
+        print(f"  {name:>14}: log2fc {res.log2_fc[i]:+.2f}  "
+              f"p_mean {res.p_mean_shift[i]:.2g}  p_subset {res.p_subset[i]:.2g}  "
+              f"affected {res.affected_fraction[i]:.2f}")
     print("wrote", sorted(p.name for p in OUT.iterdir()))
 
 

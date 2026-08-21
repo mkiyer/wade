@@ -232,3 +232,6 @@ notebooks/*.html
 notebooks/*_files/
 notebooks/.quarto/
 .quarto/
+
+# macOS
+.DS_Store

@@ -209,7 +209,7 @@ takes as its null — so the curve's departure from it is what `p_subset` prices
 
 ![plot_gene: a global 2× gene, a 15% subset at 8×, and a 5% subset at 8×](docs/figures/gene.png)
 
-The first two genes have the **same log₂ fold change** (+0.92 and +0.94). The
+The first two genes have the **same log₂ fold change** (+0.92 and +0.98). The
 mean-shift test cannot tell them apart; the curve, `p_subset` and
 `affected_fraction` (0.98 against 0.15) can.
 

@@ -19,6 +19,7 @@ import pytest
 
 import wade
 from wade import plotting as P
+from wade.plotting import data as PD, theme as PT
 
 # ---------------------------------------------------------------------------
 # A small, fast result with every kind of gene in it. Signal fraction is kept
@@ -160,7 +161,7 @@ def test_bh_cutoff_is_where_bh_rejects():
     rng = np.random.default_rng(0)
     p = np.r_[rng.uniform(0, 1, 300), rng.uniform(0, 1e-4, 12)]
     padj = wade.bh_adjust(p)
-    cut = P._bh_cutoff(p, padj, 0.05)
+    cut = PD._bh_cutoff(p, padj, 0.05)
     # Every gene at or below the cutoff is rejected, and every rejected gene is at or below it.
     np.testing.assert_array_equal(p <= cut, padj <= 0.05)
 
@@ -169,14 +170,14 @@ def test_bh_cutoff_when_nothing_passes_is_alpha_over_G():
     p = np.linspace(0.2, 0.9, 50)
     padj = wade.bh_adjust(p)
     assert not (padj <= 0.05).any()
-    assert P._bh_cutoff(p, padj, 0.05) == pytest.approx(0.05 / 50)
+    assert PD._bh_cutoff(p, padj, 0.05) == pytest.approx(0.05 / 50)
 
 
 def test_bh_cutoff_ignores_nan_and_is_nan_when_everything_is():
     p = np.array([np.nan, 0.001, 0.5, np.nan])
     padj = wade.bh_adjust(p)
-    assert np.isfinite(P._bh_cutoff(p, padj, 0.05))
-    assert np.isnan(P._bh_cutoff(np.full(3, np.nan), np.full(3, np.nan), 0.05))
+    assert np.isfinite(PD._bh_cutoff(p, padj, 0.05))
+    assert np.isnan(PD._bh_cutoff(np.full(3, np.nan), np.full(3, np.nan), 0.05))
 
 
 # ---------------------------------------------------------------------------
@@ -218,8 +219,8 @@ def test_volcano_colour_options(res, res_nosubset):
     # it spans zero — so a new statistic is colourable the day it exists.
     v = P.volcano_data(res, color="w1")
     np.testing.assert_array_equal(v.color, res.w1)
-    assert v.color_spec["range"] is None and v.color_spec["scale"] == P._SEQUENTIAL
-    assert P.volcano_data(res, color="log2_fc").color_spec["scale"] == P._DIVERGING
+    assert v.color_spec["range"] is None and v.color_spec["scale"] == PT._SEQUENTIAL
+    assert P.volcano_data(res, color="log2_fc").color_spec["scale"] == PT._DIVERGING
     # ... and a supplied per-gene array, for anything WADE cannot know about
     own = np.arange(float(G))
     np.testing.assert_array_equal(P.volcano_data(res, color=own).color, own)
@@ -295,6 +296,46 @@ def test_stages_table_and_labels(res):
     t = s.table()
     assert set(t) >= {"gene", "p_mean_shift", "p_subset", "quadrant", "affected_fraction"}
     np.testing.assert_allclose(t["p_mean_shift"], res.p_mean_shift)
+
+
+# ---------------------------------------------------------------------------
+# .table(): the one contract all three dataclasses share
+
+
+def test_every_dataclass_has_a_table_of_the_results_own_numbers(res):
+    """The chart's table-view twin, on all three.
+
+    This is the seam ``docs/plotting.md`` promises: the exact numbers a figure
+    draws, reachable without reading them off the pixels, and what a third
+    renderer or an export to ggplot is written against. Columns must be equal
+    length and must be the result's own values, not a re-derivation.
+    """
+    i = res.gene_index("g6")
+    [panel] = P.gene_panels(res, gene="g6")
+    panel_t, volcano_t, stages_t = (panel.table(), P.volcano_data(res).table(),
+                                    P.stages_data(res).table())
+    for t in (panel_t, volcano_t, stages_t):
+        assert "gene" in t
+        assert len({len(col) for col in t.values()}) == 1, "ragged table"
+
+    # The panel's rows are grid nodes, and its curves are the result's own.
+    d = res.gene_detail(i)
+    assert len(panel_t["p"]) == res.nprobs
+    assert set(panel_t["gene"]) == {"g6"}
+    for name, arr in (("p", d.p), ("r", d.r), ("y1", d.y1), ("y0", d.y0),
+                      ("cumulative_area", d.cumulative_area)):
+        np.testing.assert_array_equal(panel_t[name], arr)
+    # ... including stage 1's statistic, which is the last node of the area.
+    assert panel_t["cumulative_area"][-1] == pytest.approx(res.mean_shift[i], rel=1e-12)
+    # The scalars stay attributes, as the volcano's cutoff does.
+    assert panel.reference == pytest.approx(np.log2(res.fitted_fold_change[i]))
+
+    # The clouds' rows are genes, in the result's order.
+    for t in (volcano_t, stages_t):
+        np.testing.assert_array_equal(t["gene"], res.gene)
+    np.testing.assert_array_equal(volcano_t["log2_fc"], res.log2_fc)
+    np.testing.assert_array_equal(volcano_t["p_mean_shift"], res.p_mean_shift)
+    np.testing.assert_allclose(stages_t["p_subset"], res.p_subset)
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +477,7 @@ def test_volcano_axes_can_be_any_column(res):
     np.testing.assert_array_equal(v.y, res.z_subset)
     assert v.x_name == "subset_log2_fc" and v.y_name == "z_subset"
     assert "subset log₂ fold change" in v.xlabel
-    assert v.ylabel == P._AXIS_LABELS["z_subset"]
+    assert v.ylabel == PT._AXIS_LABELS["z_subset"]
     # off the p axis the BH line has no meaning and is not drawn
     assert np.isnan(v.cutoff_y)
     # the table names what it actually holds
