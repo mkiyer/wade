@@ -440,7 +440,8 @@ def result_columns(res) -> dict:
         if cols.get(p_col) is not None:
             cols[f"neglog10_{p_col}"] = _neglog10(cols[p_col])
     ordered = {k: cols[k] for k in RESULT_COLUMNS if cols.get(k) is not None}
-    for name in ("affected_fraction", "direction", "log2_fc"):
+    for name in ("affected_fraction", "direction", "subset_log2_fc",
+                 "log2_fc", "mean_shift"):
         ci = getattr(res, f"ci_{name}")
         if ci is not None:
             ordered[f"{name}_lo"] = ci[0]

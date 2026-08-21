@@ -99,11 +99,15 @@ def test_gemm_chunked_agrees_with_unchunked():
     np.testing.assert_array_equal(a.p_subset, b.p_subset)
 
 
-def test_gemm_from_matrix():
-    x = _counts(7) + 0.01
-    a = wade.wade_from_matrix(x, COND, nperms=50, seed=1, stage1="gemm")
-    lit = x[:, :N].mean(axis=1) - x[:, N:].mean(axis=1)
+def test_gemm_without_the_subset_stage():
+    """stage1='gemm' is independent of stage 2, so it works with it switched
+    off — which is the cheap configuration for a stage-1-only screen."""
+    counts = _counts(7)
+    a = wade.wade(counts, np.ones(G), COND, nperms=50, seed=1,
+                  stage1="gemm", subset=False)
+    lit = a.tpm[:, :N].mean(axis=1) - a.tpm[:, N:].mean(axis=1)
     np.testing.assert_allclose(a.mean_shift, lit, rtol=1e-12)
+    assert a.subset is None
 
 
 def test_gemm_level_holds_on_null_data():

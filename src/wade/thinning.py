@@ -35,8 +35,8 @@ zeros and integers stay integers. This module owns three pieces:
   ``affected_fraction`` at any sample size.
 
 Everything here works on the **raw count matrix**, which is why WADE takes
-one. :func:`wade.wade_from_matrix` has no counts to thin and keeps the
-division.
+one. ``thin=False`` falls back to the division, which is kept only so
+``tests/test_scale.py`` can demonstrate why thinning replaced it.
 """
 
 from __future__ import annotations

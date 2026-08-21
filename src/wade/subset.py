@@ -215,7 +215,7 @@ def shift_correct(x: np.ndarray, cond: np.ndarray, r: np.ndarray) -> np.ndarray:
 
     **This is the whole reason the shape test works**, and getting it wrong is
     not subtle. It is the correction for *continuous* data and for an
-    already-normalized matrix (:func:`wade.wade_from_matrix`); for raw counts
+    continuous data, reachable through ``thin=False``; for raw counts
     :func:`wade.wade` uses binomial thinning instead
     (:mod:`wade.thinning`, ``docs/method.md`` §10.3), because a division does
     not make count groups exchangeable at low expression.
@@ -438,8 +438,9 @@ def characterization_ci(
     gene_chunk: int | None = None,
     threads: int | None = None,
 ) -> dict[str, np.ndarray]:
-    """Bootstrap percentile intervals for ``affected_fraction``, ``direction``
-    and ``log2_fc`` — ``docs/method.md`` §10.5.
+    """Bootstrap percentile intervals for the five per-gene descriptors —
+    ``affected_fraction``, ``direction``, ``subset_log2_fc``, ``log2_fc`` and
+    ``mean_shift`` — ``docs/method.md`` §10.5.
 
     Samples are resampled **within each group** with replacement, the
     log-ratio curve is recomputed on the same grid with the same pseudocount,
@@ -451,7 +452,12 @@ def characterization_ci(
     ramp and reads larger than the planted fraction; a two-level departure
     reads as one effective fraction). ``log2_fc`` is bootstrapped as the log
     ratio of group means, which is what the grid quadrature is on a balanced
-    design.
+    design, and ``mean_shift`` as their difference — which is what the grid
+    quadrature is on a balanced design (``docs/method.md`` §2). ``subset_log2_fc``
+    is read off the same resampled curve as the other two descriptors, and it
+    is the interval that matters most in practice: it is the column to rank
+    subset findings by once ``p_subset`` saturates, so how wide it is decides
+    whether the ranking means anything.
 
     ``gene_chunk`` bounds the working set (``docs/scaling.md`` §2.2) and is
     bit-identical to the unchunked call: the replicate index sets do not
@@ -481,7 +487,8 @@ def characterization_ci(
         J1[b] = i1[rng.integers(0, n1, n1)]
         J0[b] = i0[rng.integers(0, n0, n0)]
 
-    aff = np.empty((n_boot, g)); dirn = np.empty((n_boot, g)); lfc = np.empty((n_boot, g))
+    aff = np.empty((n_boot, g)); dirn = np.empty((n_boot, g))
+    lfc = np.empty((n_boot, g)); slfc = np.empty((n_boot, g)); ms = np.empty((n_boot, g))
     if threads is None:
         import os
         threads = os.cpu_count() or 1
@@ -495,13 +502,18 @@ def characterization_ci(
                                     type7_quantiles(xp_ch[:, J0[b]], q))
                 aff[b, ch] = affected_fraction(r)
                 dirn[b, ch] = direction(r)
-                lfc[b, ch] = np.log2(x_ch[:, J1[b]].mean(axis=1) / x_ch[:, J0[b]].mean(axis=1))
+                slfc[b, ch] = subset_log2_fc(r)
+                m1 = x_ch[:, J1[b]].mean(axis=1)
+                m0 = x_ch[:, J0[b]].mean(axis=1)
+                lfc[b, ch] = np.log2(m1 / m0)
+                ms[b, ch] = m1 - m0
 
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
             list(pool.map(one_replicate, range(n_boot)))
     lo_q, hi_q = 100 * (1 - level) / 2, 100 * (1 + level) / 2
     out = {}
-    for name, arr in (("affected_fraction", aff), ("direction", dirn), ("log2_fc", lfc)):
+    for name, arr in (("affected_fraction", aff), ("direction", dirn),
+                      ("subset_log2_fc", slfc), ("log2_fc", lfc), ("mean_shift", ms)):
         out[name] = np.nanpercentile(arr, [lo_q, hi_q], axis=0)
     return out

@@ -134,7 +134,7 @@ def test_stage2_is_silent_on_a_global_nb_fold_change_at_low_counts(mu):
 
 
 def test_stage2_division_correction_is_what_it_was_and_still_fires_at_low_counts():
-    """The continuous-data correction is kept for wade_from_matrix and thin=False;
+    """The division correction is reachable through thin=False;
     on counts at 2 it fires on genuine global shifts (10.2). Pinned so the
     difference between the two corrections stays visible."""
     rng = np.random.default_rng(34)

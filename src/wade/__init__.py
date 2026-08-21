@@ -26,10 +26,11 @@ Quick start
 >>> res.nprobs                                # what the design resolves
 100
 
-The entry point takes **raw counts**: the continuity jitter that breaks ties
-in sparse data is applied at count precision before division, so a
-pre-normalized matrix cannot reproduce it. :func:`wade_from_matrix` accepts
-one anyway and documents the cost.
+The entry point takes **raw counts**, and nothing else: the continuity jitter
+that breaks ties in sparse data is applied at count precision before
+division, and the subset stage's null is built by thinning reads. A
+pre-normalized matrix can reproduce neither, so there is no entry point for
+one.
 """
 
 from .api import (
@@ -38,7 +39,6 @@ from .api import (
     WadeResult,
     wade,
     wade_contrast,
-    wade_from_matrix,
 )
 from .diagnostics import GeneDetail, library_qc, subset_drivers, wade_gene
 from .io import (
@@ -119,7 +119,6 @@ __all__ = [
     "type7_quantiles",
     "wade",
     "wade_contrast",
-    "wade_from_matrix",
     "wade_gene",
     "wade_stats",
     "write_results",

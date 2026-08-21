@@ -52,7 +52,7 @@ The package is `src/wade/`. Twelve modules, all small:
 | `pvalues.py` | empirical p, GPD refinement, BH, `alternative` |
 | `normalize.py` | `tpm_like` (ported) and the jitter. **One normalizer**: CPM is `normalizer=1.0`, other size factors go in via `lib_sizes=` — `cpm`/`rle` were deleted as unreachable from `wade()` |
 | `diagnostics.py` | `wade_gene()` — the per-gene curves; `library_qc()` — per-library depth/complexity/concentration; `subset_drivers()` — which samples drive a gene's subset |
-| `api.py` | `wade()`, `wade_from_matrix()`, `wade_contrast()`; `WadeResult` now carries `cond` and has `gene_index()` / `gene_detail()` |
+| `api.py` | `wade()` and `wade_contrast()` — **one driver**; `WadeResult` now carries `cond` and has `gene_index()` / `gene_detail()` |
 | `io.py` | the data boundary: `as_counts` (arrays, frames, sparse), `condition`, `to_frame`, `write_results` + manifest. **No file readers, by decision** |
 | `plotting.py` | `plot_gene()`, `plot_volcano()`, `plot_stages()`; a pure-NumPy data layer (`gene_panels`, `volcano_data`, `stages_data`) and two thin renderers, plotly and matplotlib, imported inside the functions |
 | `rust/src/lib.rs` | three kernels: `null_statistics` (mean shift, gene-major since 2026-08-20), `subset_null` (the subset test), `fit_bisect` (the fold-change fit, **opt-in and not bitwise** — see §3) |
@@ -98,8 +98,9 @@ Four standing decisions from the user, recorded in `ROADMAP.md`'s preamble,
   sparse matrices; your reader reads. The user's words: "I just don't want the
   wade method to have to own the I/O process."
 * **WADE is for discrete count data.** Continuous input is not a target and is
-  neither tested nor tuned for; `wade_from_matrix` and `thin=False` run on it
-  and carry caveats. Do not add features for it.
+  neither tested nor tuned for. `wade_from_matrix` was deleted 2026-08-21 for
+  offering a stage-2 test known broken at low counts; `thin=False` remains
+  only as the comparison that shows why thinning exists.
 * **Behaviour before performance** — behaviour settled 2026-08-19, the
   performance queue landed 2026-08-20. The rule that governed that work
   stands for any future performance change:
@@ -236,7 +237,7 @@ inflated 8.4% and every other gene's log-ratio shifted by log2(1.084).
 
 I wasted a cycle on this twice — once diagnosing a "bug" that was the effect,
 once writing a test whose premise it violated. **When simulating, keep the
-signal fraction realistic (under ~10%), or use `wade_from_matrix` to bypass
+signal fraction realistic (under ~10%), or pass `lib_sizes=np.ones(n)` to bypass
 normalization entirely.** The subset *test* is immune (its statistic is
 invariant to a global offset); the characterization is not.
 
@@ -393,7 +394,7 @@ Reasoning is in `method.md`; this is the index.
 | Bootstrap CIs stay within-group resampling with replacement; Poisson and hybrid schemes measured miscalibrated, m-of-n under-covers | `scaling.md` §6 |
 | Stage 2's shift correction is binomial thinning of raw counts (observed and null), `f̂` by middle-half matching after thinning | `method.md` §10.3 |
 | The `R` curve carries a one-count pseudocount — `log(x+1)`, the user's choice over a half-count floor, measured equal-or-better | `method.md` §10.4 |
-| `wade_from_matrix` keeps the division and says so; `thin=False` exists for continuous data | `method.md` §10.3 |
+| **Raw counts only** — no pre-normalized entry point; `thin=False` keeps the division as a demonstration, not an option | `method.md` §10.3 |
 
 **Prototypes are deleted once their findings are documented**, and recovered
 from git if a design choice ever needs re-litigating with the original

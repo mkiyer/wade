@@ -255,13 +255,6 @@ def test_wade_accepts_a_scalar_normalizer(matrix):
     np.testing.assert_array_equal(a.p_mean_shift, b.p_mean_shift)
 
 
-def test_wade_from_matrix_also_accepts_frames_and_conditions(matrix, sheet):
-    x = pl.DataFrame({"gene_id": GENES, **{s: matrix[:, j] + 1.0 for j, s in enumerate(SAMPLES)}})
-    cond = condition(sheet, key="sample_id", column="condition", case="tumor", control="normal")
-    res = wade.wade_from_matrix(x, cond, nperms=50, seed=1)
-    assert list(res.gene) == GENES and list(res.sample_names) == SAMPLES
-
-
 def test_wade_contrast_by_name_and_by_index(frame, matrix):
     case, ctrl = SAMPLES[:5], SAMPLES[6:11]
     by_name = wade.wade_contrast(frame, 1.0, case, ctrl, nperms=50, seed=1)
@@ -304,8 +297,11 @@ def test_report_columns_are_in_the_agreed_order_and_neglog10_is_right(result):
     cols = list(result.report())
     assert cols[:len(RESULT_COLUMNS)] == list(RESULT_COLUMNS)
     assert cols[len(RESULT_COLUMNS):] == [
-        "affected_fraction_lo", "affected_fraction_hi", "direction_lo",
-        "direction_hi", "log2_fc_lo", "log2_fc_hi"]
+        "affected_fraction_lo", "affected_fraction_hi",
+        "direction_lo", "direction_hi",
+        "subset_log2_fc_lo", "subset_log2_fc_hi",
+        "log2_fc_lo", "log2_fc_hi",
+        "mean_shift_lo", "mean_shift_hi"]
     rep = result.report()
     np.testing.assert_allclose(rep["neglog10_p_mean_shift"], -np.log10(result.p_mean_shift))
     np.testing.assert_allclose(rep["neglog10_p_subset"], -np.log10(result.p_subset))

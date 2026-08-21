@@ -83,7 +83,7 @@ after: 0.02–0.05 at every expression level and sample size tried.
 Two things this does **not** fix, both properties of the data rather than the
 method:
 
-* **`wade_from_matrix` cannot thin.** It has no counts, so it keeps the
+* **`thin=False` cannot thin.** It has no counts to draw from, so it keeps the
   division and inherits the old behaviour at low expression. If your matrix
   is count-derived and sparse, go through `wade()` with the counts.
 * **Below about five counts per sample the characterization is

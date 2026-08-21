@@ -22,7 +22,7 @@ run out, then BH-FDR.
 **Scope: discrete count data.** WADE takes raw counts and is built around what
 counts are — the tie-breaking jitter, and a subset stage whose null is built by
 binomial thinning of reads ([`docs/method.md`](docs/method.md) §10), neither of
-which has a meaning for continuous measurements. `wade_from_matrix` and
+which has a meaning for continuous measurements. `thin=False` and
 `thin=False` will run on continuous data and are not tested or tuned for it.
 
 ## Install
@@ -257,8 +257,14 @@ zero-heavy data where many samples share a count of zero and the quantile grid
 would otherwise degenerate into flat runs. Once counts have been divided by a
 normalizer and a library size that perturbation cannot be reconstructed.
 
-`wade_from_matrix(x, cond)` accepts an already-normalized matrix and documents
-what it costs: no tie-breaking, and no guaranteed positivity.
+**There is no entry point for an already-normalized matrix**, and that is a
+decision rather than a gap. Such a matrix loses the tie-breaking above *and*
+the subset stage's null, which is built by binomial thinning of reads — with no
+counts to thin it falls back to a division that we measured firing on 95% of
+genuine global 2× shifts at 2 counts (`docs/method.md` §10.2). Stage 1 alone
+would still be valid, but a stage-1-only WADE is a mean-difference permutation
+test, which is not what this package is for. If you only have TPM, go back to
+the counts.
 
 Normalization is `tpm_like` — counts over a per-gene normalizer over a library
 size — and it is the one the jitter is built into, which is why `wade()` takes

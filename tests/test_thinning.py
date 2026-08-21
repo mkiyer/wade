@@ -185,14 +185,20 @@ def test_wade_uses_thinning_by_default_and_division_on_request(counts):
     np.testing.assert_array_equal(res.tpm, res_div.tpm)
 
 
-def test_wade_from_matrix_has_no_counts_to_thin_and_says_so(counts):
-    x = counts + 0.5
-    res = wade.wade_from_matrix(x, COND, nperms=100, seed=1)
+def test_thin_false_falls_back_to_the_division_correction(counts):
+    """``thin=False`` is the only way to reach the division correction now that
+    there is no pre-normalized entry point. It is kept because
+    ``tests/test_scale.py`` uses it to *demonstrate* why thinning exists — on
+    counts at low expression the division fires on genuine global shifts — not
+    because it is an analysis option."""
+    res = wade.wade(counts, np.ones(60), COND, nperms=100, seed=1, thin=False)
     assert res.subset.correction == "division"
-    assert res.pseudocount is None
-    res2 = wade.wade_from_matrix(x, COND, nperms=100, seed=1, pseudocount=1.0)
-    np.testing.assert_array_equal(res2.pseudocount, 1.0)
-
+    assert res.fitted_fold_change is not None
+    # the bridge is exactly invariant to a division, so with no pseudocount the
+    # observed curve is untouched and only the null moves
+    res0 = wade.wade(counts, np.ones(60), COND, nperms=100, seed=1, thin=False,
+                     pseudocount=0.0)
+    np.testing.assert_array_equal(res0.subset.r, res0.subset.r_test)
 
 def test_the_pseudocount_is_one_count_in_each_samples_units_and_can_be_switched_off(counts):
     res = wade.wade(counts, np.ones(60), COND, nperms=50, seed=1)

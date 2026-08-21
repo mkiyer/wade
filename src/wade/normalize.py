@@ -14,7 +14,8 @@ matrix cannot reproduce it: once counts have been divided by a normalizer
 and a library size, you no longer know what one count was worth in that
 cell. A caller who supplies an already-normalized matrix is running a
 variant of the test whose ties were never broken and whose zeros are
-still exactly equal — see :func:`wade.wade_from_matrix`, which says so.
+still exactly equal. That is why there is no entry point for a
+pre-normalized matrix: the test it could run is not the test WADE claims.
 
 The jitter is drawn **once**, before any permutation. Inference is then
 conditional on that one realised draw, which is what makes a given seed

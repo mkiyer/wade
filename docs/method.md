@@ -170,7 +170,7 @@ columns by the estimated fold change, which makes the two groups exchangeable
 under $H_0$, and permute *that*.
 
 > **This division is the correction for continuous data**, and it is what
-> `wade_from_matrix` uses. For raw counts it is superseded: a division does not
+> `thin=False` selects. For raw counts it is superseded: a division does not
 > make count groups exchangeable at low expression, and §10.3 replaces it with
 > binomial thinning, which `wade()` does by default. The reasoning below —
 > that stage 2's null is a fitted global shift rather than no-difference — is
@@ -452,7 +452,8 @@ propagating. A caller who wants a consistent library size supplies one through
 `lib_sizes=`; CPM is `normalizer=1.0`. (Standalone `cpm` and `rle` functions
 existed briefly and were deleted — neither was reachable from `wade()`, whose
 whole point is that the jitter is applied at count precision, so their output
-could only enter through the degraded `wade_from_matrix` path.)
+could only enter through a pre-normalized matrix, for which there is no
+entry point.)
 
 ---
 
@@ -665,7 +666,7 @@ shifts.
 20,000 genes, 100 v 100 and $B = 2000$ the run goes from 9.7 s to 16.6 s.
 Speed is a later problem than behaviour and is deferred to `ROADMAP.md`.
 
-**Where it does not apply.** `wade_from_matrix` has no counts to thin: it keeps
+**Where it does not apply.** `thin=False` has no counts to thin: it keeps
 the division and inherits the low-expression caveat that `docs/limits.md`
 states. `thin=False` does the same on the raw-count path. On genuinely
 continuous data — which is **out of WADE's scope**, see the note at the head of

@@ -1,10 +1,14 @@
 """The driver: normalize, observe, permute, refine, adjust.
 
-The entry point takes **raw counts**, not a normalized matrix
-(``docs/method.md`` §8). The continuity jitter is applied at count precision
-before division, so a pre-normalized matrix cannot reproduce it;
-:func:`wade_from_matrix` exists for callers who have one anyway and says
-plainly what it costs.
+**WADE takes raw counts, and only raw counts.** The continuity jitter is
+applied at count precision before division and the subset stage's null is
+built by thinning reads, so a pre-normalized matrix can reproduce neither:
+its ties are never broken and its stage-2 null falls back to a division
+correction measured wrong at low expression (``docs/method.md`` §10.2). There
+was once a ``wade_from_matrix`` entry point for callers who had only a
+normalized matrix; it was removed 2026-08-21 because what it offered was a
+stage-2 test known to be broken in the regime this package exists for, and
+because deleting it leaves exactly one driver here instead of two.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from .stats import WadeStats, split_groups, wade_stats
 from .subset import SubsetResult, characterization_ci, subset_test
 from .thinning import fit_fold_change, one_count, thin_counts
 
-__all__ = ["WadeResult", "wade", "wade_from_matrix", "wade_contrast",
+__all__ = ["WadeResult", "wade", "wade_contrast",
            "DEFAULT_NPERMS", "DEFAULT_MAX_PROBS"]
 
 #: Permutations. Sets both the empirical p-value floor ``1/(B+1)`` and the
@@ -108,15 +112,16 @@ class WadeResult:
 
     #: The pseudocount added before the log-ratio curve, per cell — one count
     #: in each sample's normalized units for :func:`wade` (``method.md``
-    #: §10.4), whatever the caller passed for :func:`wade_from_matrix`, or
-    #: ``None``. Kept so :meth:`gene_detail` draws the curve the statistics
-    #: were read from.
+    #: §10.4), or ``None`` when ``pseudocount=0``. Kept so
+    #: :meth:`gene_detail` draws the curve the statistics were read from.
     pseudocount: np.ndarray | None = None
 
     #: Bootstrap 95% intervals, ``(2, genes)`` each, when ``n_boot > 0``.
     ci_affected_fraction: np.ndarray | None = None
     ci_direction: np.ndarray | None = None
+    ci_subset_log2_fc: np.ndarray | None = None
     ci_log2_fc: np.ndarray | None = None
+    ci_mean_shift: np.ndarray | None = None
 
     @property
     def affected_fraction(self) -> np.ndarray | None:
@@ -137,7 +142,7 @@ class WadeResult:
     @property
     def fitted_fold_change(self) -> np.ndarray | None:
         """The global fold change the subset stage's null was built under —
-        by thinning for :func:`wade`, by division for :func:`wade_from_matrix`
+        by thinning by default, by division under ``thin=False``
         (``subset.correction`` says which)."""
         return None if self.subset is None else self.subset.shift
 
@@ -216,7 +221,10 @@ class WadeResult:
             if self.z_subset is not None:
                 cols["z_subset"] = self.z_subset
         for name, ci in (("affected_fraction", self.ci_affected_fraction),
-                         ("direction", self.ci_direction), ("log2_fc", self.ci_log2_fc)):
+                         ("direction", self.ci_direction),
+                         ("subset_log2_fc", self.ci_subset_log2_fc),
+                         ("log2_fc", self.ci_log2_fc),
+                         ("mean_shift", self.ci_mean_shift)):
             if ci is not None:
                 cols[f"{name}_lo"] = ci[0]
                 cols[f"{name}_hi"] = ci[1]
@@ -429,7 +437,9 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
         cond=cond, sample_names=sample_names, pseudocount=pseudocount,
         ci_affected_fraction=ci.get("affected_fraction"),
         ci_direction=ci.get("direction"),
+        ci_subset_log2_fc=ci.get("subset_log2_fc"),
         ci_log2_fc=ci.get("log2_fc"),
+        ci_mean_shift=ci.get("mean_shift"),
         params=dict(nperms=nperms, seed=seed, alternative=alternative,
                     n_exc_min=n_exc_min, n_tail=n_tail,
                     nprobs=obs.nprobs, max_probs=max_probs, n1=obs.n1, n0=obs.n0,
@@ -438,58 +448,6 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
                     strata=None if strata is None else np.asarray(strata),
                     correction=None if sub is None else sub.correction,
                     **(condition_meta or {})),
-    )
-
-
-def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
-         alternative, allow_single_sample_group, keep_null, gene_names,
-         backend, subset, jitter, tpm, pseudocount=None, n_boot=0,
-         boot_rng=None, sample_names=None, condition_meta=None,
-         max_probs=None, stage1="grid", strata=None) -> WadeResult:
-    """The single-pass driver, for :func:`wade_from_matrix` only.
-
-    :func:`wade` goes through :func:`_wade_chunked` unconditionally — with
-    ``gene_chunk=None`` that is one chunk over the whole matrix, which the
-    equality tests pin as bit-identical — so there is one counts pipeline,
-    not two. This path exists because a pre-normalized matrix skips that
-    pipeline entirely: nothing to normalize, no jitter to index, no counts to
-    thin.
-    """
-    cond = np.asarray(cond)
-    obs = wade_stats(x, cond, allow_single_sample_group=allow_single_sample_group,
-                     max_probs=max_probs)
-    stage1_stat = mean_diff_stat(x, cond) if stage1 == "gemm" else None
-
-    if nperms > 0:
-        if perms is None:
-            perms = draw_perms(cond, nperms, seed=seed, rng=perm_rng, strata=strata)
-        perms = validate_perms(perms, cond, nperms, strata=strata)
-        null = (mean_diff_null(x, perms) if stage1 == "gemm"
-                else null_statistics(x, perms, backend=backend, max_probs=max_probs))
-    else:
-        perms = None
-        null = None
-
-    sub = None
-    if nperms > 0 and subset and obs.nprobs >= 3:
-        sub = subset_test(x, cond, perms, alternative=alternative, backend=backend,
-                          pseudocount=pseudocount, max_probs=max_probs)
-
-    ci = {}
-    # Gated on the subset stage, not merely on n_boot: an interval for a
-    # statistic the same table does not contain reads as a corrupt table.
-    if n_boot > 0 and sub is not None:
-        ci = characterization_ci(x, cond, pseudocount=pseudocount, n_boot=n_boot,
-                                 rng=boot_rng, max_probs=max_probs)
-
-    return _finish(
-        obs=obs, null=null, perms=perms, sub=sub, ci=ci, cond=cond,
-        nperms=nperms, seed=seed, n_exc_min=n_exc_min, n_tail=n_tail,
-        alternative=alternative, keep_null=keep_null, gene_names=gene_names,
-        tpm=tpm, jitter=jitter, pseudocount=pseudocount, n_boot=n_boot,
-        sample_names=sample_names, condition_meta=condition_meta,
-        max_probs=max_probs, stage1_stat=stage1_stat, stage1=stage1,
-        strata=strata,
     )
 
 
@@ -724,8 +682,8 @@ def wade(
         Build the subset stage's null by **binomial thinning** of the raw
         counts under the fitted global fold change (``docs/method.md``
         §10.3), which is exact for counts where the division it replaces is
-        not. ``False`` falls back to the division, which is what
-        :func:`wade_from_matrix` has to do without counts.
+        not. ``False`` falls back to that division — kept as the comparison
+        that shows why thinning exists, not as an analysis option.
     pseudocount
         In **counts**. Added to every cell, in that sample's normalized
         units, before the log-ratio curve is taken (``§10.4``): a zero means
@@ -853,91 +811,6 @@ def wade(
         sample_names=sample_names, condition_meta=cond_meta,
         max_probs=max_probs, gene_chunk=gene_chunk, stage1=stage1,
         fit_backend=fit_backend, strata=strata)
-
-def wade_from_matrix(
-    x: np.ndarray,
-    cond: np.ndarray,
-    *,
-    nperms: int = DEFAULT_NPERMS,
-    seed: int | None = 1,
-    perms: np.ndarray | None = None,
-    gene_names=None,
-    n_exc_min: int = DEFAULT_N_EXC_MIN,
-    n_tail: int = DEFAULT_N_TAIL,
-    alternative: str = "two-sided",
-    allow_single_sample_group: bool = False,
-    keep_null: bool = False,
-    backend: str = "auto",
-    subset: bool = True,
-    pseudocount: float = 0.0,
-    n_boot: int = 0,
-    sample_names=None,
-    max_probs: int | None = DEFAULT_MAX_PROBS,
-    stage1: str = "grid",
-    strata=None,
-) -> WadeResult:
-    """Run WADE on a matrix that is **already on a comparable scale**.
-
-    Be explicit about what this costs: **no continuity jitter is applied**,
-    because it cannot be. The jitter is added at count precision before
-    division, and once counts have been divided by a normalizer and a library
-    size the information needed to reconstruct that perturbation is gone.
-
-    So this is a **variant of the test without tie-breaking**. On sparse,
-    zero-heavy data many samples share a count of zero, the quantile grid
-    degenerates into flat runs, and the statistic reads those runs as genuine
-    agreement. It also loses the strict positivity the jitter provides, which
-    the log-ratio curve needs.
-
-    And the subset stage **cannot thin** what it cannot count: its null is
-    built by the division correction, which at low expression is not exact
-    (``docs/method.md`` §10.2). ``pseudocount`` is in the matrix's own units
-    (there is no "one count" to convert) and defaults to none.
-    """
-    data, _, cond, cond_meta = _resolve_input(x, 1.0, cond, gene_names, sample_names)
-    cond_meta.update(entry_point="wade_from_matrix", subset=subset,
-                     pseudocount_units="the matrix's own",
-                     perms_supplied=perms is not None)
-    x = data.values
-    gene_names, sample_names = data.gene_names, data.sample_names
-    if cond.shape[0] != x.shape[1]:
-        raise ValueError(
-            f"cond has {cond.shape[0]} entries but the matrix has {x.shape[1]} samples"
-        )
-    if alternative not in ALTERNATIVES:
-        raise ValueError(f"alternative must be one of {ALTERNATIVES}; got {alternative!r}")
-    split_groups(cond)
-    _validate_stage1(stage1, cond)
-    if pseudocount < 0:
-        raise ValueError(f"pseudocount must be non-negative, got {pseudocount}")
-    if seed is None:
-        perm_rng, boot_rng = np.random.default_rng(), np.random.default_rng()
-    else:
-        children = np.random.SeedSequence(seed).spawn(4)
-        perm_rng, boot_rng = np.random.default_rng(children[1]), np.random.default_rng(children[3])
-    if pseudocount == 0 and subset and nperms > 0 and np.any(x <= 0):
-        smallest = float(x[x > 0].min()) if np.any(x > 0) else 1.0
-        raise ValueError(
-            f"the subset stage's log-ratio curve needs strictly positive values and "
-            f"this matrix has {int(np.sum(x <= 0))} that are not. WADE cannot pick a "
-            f"pseudocount for you — the matrix is on a scale only you know — so pass "
-            f"one in its own units (half the smallest positive value, "
-            f"{0.5 * smallest:.4g}, is a reasonable choice), or subset=False to run "
-            f"stage 1 alone. wade() on raw counts needs none of this: it derives the "
-            f"pseudocount from one count in each sample's units."
-        )
-    pc = np.full(x.shape, float(pseudocount)) if pseudocount > 0 else None
-    return _run(
-        x, cond, nperms=nperms, perms=perms, seed=seed, perm_rng=perm_rng,
-        n_exc_min=n_exc_min, n_tail=n_tail, alternative=alternative,
-        allow_single_sample_group=allow_single_sample_group, keep_null=keep_null,
-        gene_names=gene_names, backend=backend, subset=subset,
-        jitter=np.zeros_like(x), tpm=x, pseudocount=pc,
-        n_boot=n_boot, boot_rng=boot_rng, sample_names=sample_names,
-        condition_meta=cond_meta, max_probs=max_probs, stage1=stage1,
-        strata=strata,
-    )
-
 
 def wade_contrast(
     counts,
