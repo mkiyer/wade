@@ -22,6 +22,10 @@ res.to_frame()                     # ... as a polars DataFrame
 wade.write_results(res, "out.tsv") # ... on disk, with a JSON manifest
 ```
 
+The one exception is `plot_drivers`, which is per-**sample** rather than
+per-gene: its numbers come from `wade.subset_drivers` and `wade.library_qc`,
+both public and both callable without this layer.
+
 **Exporting and plotting elsewhere is a first-class path**, not a fallback. If
 you are more fluent in ggplot, `write_results` and then `read_tsv` loses you
 nothing — most RNA-seq DE tools stop exactly here, and the columns are named
@@ -73,13 +77,14 @@ d.table()          # gene, x, y, p, padj, significant, colour
 d.xlabel, d.ylabel # what the axes mean
 ```
 
-## The three figures
+## The four figures
 
 | function | the question it answers |
 |---|---|
 | `plot_gene` | *What does this gene's difference look like?* |
 | `plot_volcano` | *Which genes?* |
 | `plot_stages` | *What kind of difference?* |
+| `plot_drivers` | *Should I believe this one?* |
 
 **`plot_gene`** is the figure that makes the method legible: the log-ratio
 curve `R(p)` above, the two quantile functions it is the ratio of below. A
@@ -96,6 +101,37 @@ the second.
 
 **`plot_stages`** is the two stages against each other — the reading table in
 the README, drawn, with each gene in the quadrant that names its pattern.
+
+**`plot_drivers`** is the check to run before believing a hit, and the one that
+reversed a tempting Ewing-sarcoma reading of a real plasma cohort
+(`docs/scaling.md` §7.2). A distributional test faithfully reports a subset in
+every gene that a low-complexity library happens to detect, so *which* samples
+are in the affected region is only half the answer; whether those samples are
+unremarkable is the other half. Four columns, one row per driver, each read
+against the **cohort** — a dashed line at its median, a band over its
+interquartile range — because "5,563 genes detected" means nothing except
+beside "11,114 elsewhere":
+
+| column | what it tells you |
+|---|---|
+| the gene, normalized | why these samples |
+| **its share of the library** | **the discriminating number** |
+| complexity | the fraction of genes the library detects |
+| library size | its depth in counts |
+
+```python
+plot_drivers(res, "ETV4", counts)      # the counts the run was given
+```
+
+`counts` is required and is the raw matrix: a `WadeResult` does not carry it —
+`res.tpm` is normalized *and* jittered, so it has no exact zeros left and
+cannot be asked what a library detected — and WADE does not read files, so the
+caller who has the counts passes them. Drivers that are ordinary libraries
+which happen to share a diagnosis are the finding; drivers that are
+low-complexity outliers are the artefact. A gene taking 12% of a driver's
+library is telling you about the library; one taking a fraction of a percent is
+telling you about the gene. `DriverPanel.table()` is the same thing as numbers,
+and carries the libraries' concentration, which the figure does not draw.
 
 ### Either axis takes any column
 
@@ -149,8 +185,8 @@ and one of symbols is biology.
 
 * **Publication typesetting.** Fonts, panel letters, journal templates —
   export the table.
-* **Arbitrary layouts.** Three figures answer three questions; a fourth
-  question is a `.table()` and your own code.
+* **Arbitrary layouts.** Four figures answer four questions; a fifth question
+  is a `.table()` and your own code.
 * **Anything the statistic depends on.** If a change here would alter a
   reported number, it belongs in the core, not here.
 

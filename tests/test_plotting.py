@@ -76,6 +76,46 @@ def _backends():
     return P.available_backends()
 
 
+GD, GN = 300, 30
+COND_D = np.r_[np.ones(GN, int), np.zeros(GN, int)]
+BAD = np.array([1, 4, 9])              # low-complexity libraries
+ARTEFACT, GENUINE = 3, 200
+
+
+@pytest.fixture(scope="module")
+def res_drivers():
+    """``docs/scaling.md`` §7.2 in miniature, and the two genes are built to be
+    the two real cases rather than merely different.
+
+    ``BAD`` are three libraries that detect half as many genes as their peers
+    and hold most of their mass in a handful — blood transcripts dominating a
+    plasma prep. ``ARTEFACT`` is one of that handful and is abundant, as FLI1
+    was at ~297,000 junction counts against ~1,600 elsewhere. ``GENUINE`` is
+    ``ETV4``: near zero across the cohort, elevated in nine ordinary libraries
+    chosen disjoint from ``BAD``. Both of §7.2's discriminators — the gene's
+    share of its drivers' libraries, and those libraries' complexity — should
+    therefore separate them, which is what the figure has to show.
+    """
+    rng = np.random.default_rng(7)
+    mu = 10 ** rng.uniform(0, 2.6, GD)
+    mu[ARTEFACT] = 300.0
+    mu[GENUINE] = 8.0
+    counts = rng.poisson(mu[:, None] * np.ones(2 * GN)).astype(float)
+    for j in BAD:
+        # The dominant handful is exempt from the dropout: a blood-dominated
+        # prep still detects its own dominant transcripts. Zeroing them instead
+        # makes ARTEFACT a *downward* subset, which is a different gene.
+        counts[rng.choice(np.arange(6, GD), int(0.55 * GD), replace=False), j] = 0.0
+        counts[:6, j] *= 120.0
+    ordinary = np.setdiff1d(np.arange(GN), BAD)
+    counts[GENUINE, rng.choice(ordinary, 9, replace=False)] *= 9.0
+    names = [f"g{i}" for i in range(GD)]
+    names[ARTEFACT], names[GENUINE] = "ARTEFACT", "GENUINE"
+    res = wade.wade(counts, np.ones(GD), COND_D, nperms=200, seed=3, gene_names=names,
+                    sample_names=[f"lib{j:02d}" for j in range(2 * GN)])
+    return res, counts
+
+
 # ---------------------------------------------------------------------------
 # The optional-dependency contract
 
@@ -538,6 +578,13 @@ def test_every_built_in_theme_renders_every_figure_on_every_backend(res, backend
     assert wade.plot_volcano(res, color=None, backend=backend, theme=name) is not None
 
 
+@pytest.mark.parametrize("backend", P.available_backends())
+@pytest.mark.parametrize("name", sorted(P.THEMES))
+def test_every_theme_renders_the_driver_figure(res_drivers, backend, name):
+    res, counts = res_drivers
+    assert wade.plot_drivers(res, "ARTEFACT", counts, backend=backend, theme=name) is not None
+
+
 def test_a_theme_can_be_a_name_an_instance_or_the_session_default(res, monkeypatch):
     from dataclasses import replace
 
@@ -644,6 +691,99 @@ def test_a_drawn_error_bar_spans_exactly_the_reported_interval(res_boot, backend
         t = next(t for t in fig.data if t.error_x is not None and t.error_x.array is not None)
         assert t.x[0] - t.error_x.arrayminus[0] == pytest.approx(lo)
         assert t.x[0] + t.error_x.array[0] == pytest.approx(hi)
+
+
+# ---------------------------------------------------------------------------
+# The driver figure
+
+
+def test_the_driver_panel_is_subset_drivers_and_library_qc_and_not_a_re_derivation(res_drivers):
+    res, counts = res_drivers
+    p = P.driver_panel(res, "GENUINE", counts)
+    d = wade.subset_drivers(res, "GENUINE")
+    qc = wade.library_qc(counts)
+    np.testing.assert_array_equal(p.columns, d["columns"])
+    np.testing.assert_array_equal(p.value, d["values"])
+    np.testing.assert_array_equal(p.share, d["share"])
+    for name in ("detected_fraction", "depth", "top_share"):
+        np.testing.assert_array_equal(getattr(p, name), qc[name][d["columns"]])
+    # The cohort context is over ALL samples, not the case arm: a library's
+    # complexity has nothing to do with which arm it is in.
+    for name in ("detected_fraction", "depth", "top_share"):
+        assert p.cohort[name] == pytest.approx(tuple(np.nanpercentile(qc[name], [25, 50, 75])))
+    # One row per driver, and the table carries the concentration the figure
+    # does not draw.
+    t = p.table()
+    assert len({len(c) for c in t.values()}) == 1 and len(t["sample"]) == p.columns.size
+    assert set(t["gene"]) == {"GENUINE"} and "top_share" in t
+
+
+def test_the_driver_panel_separates_an_artefact_from_a_genuine_hit(res_drivers):
+    """The figure exists for exactly this call, and it is the check that
+    reversed a tempting Ewing-sarcoma reading of a real cohort
+    (``docs/scaling.md`` §7.2)."""
+    res, counts = res_drivers
+    art = P.driver_panel(res, "ARTEFACT", counts)
+    gen = P.driver_panel(res, "GENUINE", counts)
+    cohort_complexity = gen.cohort["detected_fraction"][1]
+
+    # The artefact's drivers ARE the planted low-complexity libraries, and they
+    # sit far below the cohort; the genuine hit's are ordinary libraries.
+    assert len(set(art.columns) & set(BAD)) >= 2      # most of its drivers are BAD
+    assert np.median(art.detected_fraction) < 0.6 * cohort_complexity
+    assert np.median(gen.detected_fraction) > 0.95 * cohort_complexity
+    # On the median, not the min: k is ceil(affected_fraction * nprobs), so the
+    # last driver can sit one past the real edge of the subset — here that is a
+    # single BAD library among nine ordinary ones. The figure shows it honestly,
+    # as one dot away from the rest, which is the behaviour to keep.
+    assert len(set(gen.columns) & set(BAD)) <= 1
+    # ... and the share is the other discriminating number: the artefact takes a
+    # large slice of its drivers' libraries — that is what it is telling you
+    # about — where the genuine gene takes a fraction of a percent.
+    assert art.share.max() > 20 * gen.share.max()
+    assert gen.share.max() < 0.01
+
+
+def test_the_driver_axes_go_logarithmic_only_when_the_data_spans_a_decade(res_drivers):
+    res, counts = res_drivers
+    p = P.driver_panel(res, "GENUINE", counts)
+    # The gene's value spans decades across a cohort; depth within one does not.
+    assert p.log_axis("value") is True
+    assert p.log_axis("depth") is False
+    assert p.log_axis("share") is False and p.log_axis("detected_fraction") is False
+
+
+def test_the_driver_panel_needs_the_counts_it_was_run_on(res_drivers):
+    """A WadeResult cannot supply them: res.tpm is normalized *and* jittered,
+    so it has no exact zeros left and cannot be asked what a library detected.
+    """
+    res, counts = res_drivers
+    assert (np.asarray(res.tpm) > 0).all(), "the jitter removed every zero"
+    with pytest.raises(ValueError, match="counts must be the matrix"):
+        P.driver_panel(res, "GENUINE", counts[:, :-1])
+    with pytest.raises(ValueError, match="no subset stage"):
+        P.driver_panel(wade.wade(counts, np.ones(GD), COND_D, subset=False, nperms=20),
+                       0, counts)
+
+
+@pytest.mark.parametrize("backend", P.available_backends())
+def test_both_backends_draw_one_row_per_driver_and_the_cohort_context(res_drivers, backend):
+    res, counts = res_drivers
+    p = P.driver_panel(res, "ARTEFACT", counts)
+    fig = wade.plot_drivers(res, "ARTEFACT", counts, backend=backend)
+    n = len(P.data.DRIVER_PANELS)
+    if backend == "matplotlib":
+        assert _n_axes(fig, backend) == n
+        # A dashed cohort median and a shaded IQR band in every panel.
+        assert all(ax.patches for ax in fig.axes[:n])
+        np.testing.assert_array_equal(fig.axes[0].get_yticks(), np.arange(p.sample.size))
+        assert [t.get_text() for t in fig.axes[0].get_yticklabels()] == list(p.sample)
+    else:
+        assert _n_axes(fig, backend) == n
+        assert sum(1 for sh in fig.layout.shapes if sh.type == "rect") == n
+        assert sum(1 for sh in fig.layout.shapes if sh.type == "line") == n
+    # Strongest driver at the top, in subset_drivers' order.
+    assert p.sample[0] == f"lib{p.columns[0]:02d}"
 
 
 def test_no_colour_literal_lives_outside_theme_py():

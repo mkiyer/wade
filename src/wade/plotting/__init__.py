@@ -57,9 +57,11 @@ from __future__ import annotations
 
 from ..api import WadeResult
 from .data import (
+    DriverPanel,
     GenePanel,
     StagesData,
     VolcanoData,
+    driver_panel,
     gene_panels,
     stages_data,
     volcano_data,
@@ -75,13 +77,16 @@ __all__ = [
     "GenePanel",
     "VolcanoData",
     "StagesData",
+    "DriverPanel",
     "available_backends",
     "gene_panels",
     "volcano_data",
     "stages_data",
+    "driver_panel",
     "plot_gene",
     "plot_volcano",
     "plot_stages",
+    "plot_drivers",
 ]
 
 BACKENDS = ("plotly", "matplotlib")
@@ -291,3 +296,62 @@ def plot_stages(res: WadeResult, *, alpha: float = 0.05,
         return _stages_plotly(data, th, title=title, width=width, height=height)
     from ._matplotlib import _stages_mpl
     return _stages_mpl(data, th, title=title, width=width, height=height)
+
+
+def plot_drivers(res: WadeResult, gene, counts, *, k=None, top_n: int = 10,
+                 backend: str | None = None, theme=None, title: str | None = None,
+                 width: float | None = None, height: float | None = None):
+    """Who drives this gene's subset, and are they ordinary libraries?
+
+    The fourth question, and the one to ask before believing a hit. A
+    distributional test faithfully reports a subset in every gene that a
+    low-complexity library happens to detect, so the samples in the affected
+    region are only half the answer; whether those samples are unremarkable is
+    the other half. Four columns, one row per driver, each read against the
+    **cohort** — a dashed line at the cohort median and a band over its
+    interquartile range, because "5,563 genes detected" means nothing except
+    beside "11,114 elsewhere":
+
+    ``the gene``
+        Its normalized value in each driver — why these samples.
+    ``its share of the library``
+        **The discriminating number.** A gene taking 12% of a driver's library
+        is telling you about the library; one taking a fraction of a percent is
+        telling you about the gene.
+    ``complexity``
+        The fraction of genes the library detects.
+    ``library size``
+        Its depth in counts.
+
+    Parameters
+    ----------
+    res, gene
+        A result with a subset stage, and one gene by name or index.
+    counts
+        **The raw count matrix the run was given.** A :class:`WadeResult` does
+        not carry it — ``res.tpm`` is normalized *and* jittered, so it has no
+        exact zeros left and cannot be asked how many genes a library detected
+        — and WADE does not read files, so the caller who has the counts passes
+        them.
+    k, top_n
+        See :func:`driver_panel`. ``k`` overrides the number of drivers, which
+        otherwise is the gene's own ``affected_fraction`` of the case samples.
+    backend, theme, title, width, height
+        As for :func:`plot_gene`.
+
+    This is the check that reversed a tempting Ewing-sarcoma reading of a real
+    plasma cohort, where a handful of anomalous libraries topped the subset
+    ranking of thousands of genes at once (``docs/scaling.md`` §7.2). Drivers
+    that are ordinary libraries which happen to share a diagnosis are the
+    finding; drivers that are low-complexity outliers are the artefact.
+    ``DriverPanel.table()`` is the same thing as numbers, and carries the
+    libraries' concentration as well.
+    """
+    panel = driver_panel(res, gene, counts, k=k, top_n=top_n)
+    be = _resolve_backend(backend)
+    th = _resolve_theme(theme)
+    if be == "plotly":
+        from ._plotly import _drivers_plotly
+        return _drivers_plotly(panel, th, title=title, width=width, height=height)
+    from ._matplotlib import _drivers_mpl
+    return _drivers_mpl(panel, th, title=title, width=width, height=height)

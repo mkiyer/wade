@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..api import WadeResult
-from ..diagnostics import GeneDetail, wade_gene
+from ..diagnostics import GeneDetail, library_qc, subset_drivers, wade_gene
 from ..subset import affected_fraction as _affected_fraction, direction as _direction
 from .theme import QUADRANTS, _COLOR_SPECS, _STAGE_LABELS, _axis_label
 
@@ -223,6 +223,141 @@ def _name_or(names, k: int, default: str) -> str:
     if isinstance(names, str):
         return names if k == 0 else f"{names} {k}"
     return str(names[k])
+
+
+# ---------------------------------------------------------------------------
+# The drivers of one gene's subset
+
+
+#: The columns the driver figure draws, in order, with their axis labels. Both
+#: renderers read this, so the figure's shape is stated once.
+DRIVER_PANELS = (
+    ("value", "the gene, normalized"),
+    ("share", "its share of the library"),
+    ("detected_fraction", "complexity: fraction of genes detected"),
+    ("depth", "library size (counts)"),
+)
+
+#: The panels whose quantity *can* span orders of magnitude. Whether the axis
+#: actually goes logarithmic is per-figure — :meth:`DriverPanel.log_axis`.
+_MAY_BE_LOG = frozenset({"value", "depth"})
+
+
+@dataclass(frozen=True)
+class DriverPanel:
+    """Which samples drive one gene's subset, and whether they are ordinary
+    libraries — the check to run before believing a hit.
+
+    A distributional test faithfully reports a subset in every gene that a
+    low-complexity library detects, so "which samples" is only half the
+    question; the other half is whether those samples are unremarkable. On real
+    plasma cfRNA a handful of libraries topped the subset ranking of thousands
+    of genes at once and produced a thoroughly convincing false story
+    (``docs/scaling.md`` §7.2). What separated the artefact from the genuine
+    ``ETV4`` finding was **the gene's share of each driver's library** —
+    :attr:`share` — together with those libraries' complexity and depth read
+    *against the cohort*, which is what :attr:`cohort` is for. A driver's
+    complexity in isolation says nothing.
+    """
+
+    gene: str
+    #: The driving samples, strongest first (the deepest into the affected tail).
+    sample: np.ndarray
+    #: Their positions in ``res.tpm``.
+    columns: np.ndarray
+    #: The gene's normalized value in each driver.
+    value: np.ndarray
+    #: **The discriminating number**: the gene's value as a fraction of that
+    #: library's total. A gene taking 12% of a driver's library is telling you
+    #: about the library; one taking a fraction of a percent is telling you
+    #: about the gene.
+    share: np.ndarray
+    #: Complexity and depth, from :func:`wade.library_qc` on the raw counts.
+    detected_fraction: np.ndarray
+    depth: np.ndarray
+    #: Concentration — the library's top-``top_n`` share. Carried but not
+    #: drawn; ``36% against a cohort median of 15%`` was §7.2's other number.
+    top_share: np.ndarray
+    #: ``(q25, median, q75)`` over **all** samples for each quantity above. The
+    #: cohort, not the group: a library's complexity has nothing to do with
+    #: which arm it is in, and "5,563 genes detected" only means something
+    #: beside "11,114 elsewhere".
+    cohort: dict
+    direction: float
+    affected_fraction: float
+
+    def log_axis(self, field: str) -> bool:
+        """Whether one panel's axis should be logarithmic.
+
+        Only when what it holds — the drivers *and* the cohort band drawn
+        behind them — actually spans a decade. A log axis over a 1.5x range
+        earns nothing, and in a panel this narrow it can leave no labelled tick
+        at all: library depth within one cohort is usually such a range, while
+        across cohorts it is not. Deciding it here rather than in each renderer
+        is what keeps the two backends from drifting apart.
+        """
+        if field not in _MAY_BE_LOG:
+            return False
+        v = np.asarray(getattr(self, field), dtype=np.float64)
+        q25, _, q75 = self.cohort[field]
+        lo = np.nanmin(np.r_[v, q25])
+        hi = np.nanmax(np.r_[v, q75])
+        return bool(np.isfinite(lo) and lo > 0 and hi / lo >= 10.0)
+
+    @property
+    def subtitle(self) -> str:
+        way = "up" if self.direction >= 0 else "down"
+        return (f"{self.sample.size} drivers · affected {self.affected_fraction:.2f} "
+                f"· direction {self.direction:+.2f} ({way})")
+
+    def table(self) -> dict[str, np.ndarray]:
+        """One row per driver — the figure's table-view twin, and the form the
+        text answer to "who drives this?" already took."""
+        return {"gene": np.full(self.sample.shape, self.gene, dtype=object),
+                "sample": self.sample, "column": self.columns,
+                "value": self.value, "share": self.share,
+                "detected_fraction": self.detected_fraction, "depth": self.depth,
+                "top_share": self.top_share}
+
+
+def driver_panel(res: WadeResult, gene, counts, *, k=None, top_n: int = 10) -> DriverPanel:
+    """The arrays behind :func:`wade.plot_drivers`.
+
+    ``counts`` is the **raw count matrix the run was given**. A
+    :class:`WadeResult` does not carry it — ``res.tpm`` is normalized *and*
+    jittered, so it has no exact zeros left and cannot be asked how many genes
+    a library detected — and WADE does not read files, so the caller who has
+    the counts passes them.
+
+    ``k`` overrides the number of drivers, which otherwise is the gene's own
+    ``affected_fraction`` of the case samples and so introduces no threshold.
+    ``top_n`` is :func:`wade.library_qc`'s concentration window.
+    """
+    d = subset_drivers(res, gene, k=k)
+    counts = np.asarray(counts, dtype=np.float64)
+    tpm = np.asarray(res.tpm)
+    if counts.shape != tpm.shape:
+        raise ValueError(
+            f"counts must be the matrix this result was computed from: expected "
+            f"shape {tpm.shape}, got {counts.shape}")
+    qc = library_qc(counts, top_n=top_n)
+    cols = d["columns"]
+    lib = tpm.sum(axis=0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        share_all = np.where(lib > 0, tpm[res.gene_index(gene)] / lib, np.nan)
+    whole = {"value": tpm[res.gene_index(gene)], "share": share_all,
+             "detected_fraction": qc["detected_fraction"], "depth": qc["depth"],
+             "top_share": qc["top_share"]}
+    return DriverPanel(
+        gene=str(d["gene"]),
+        sample=(np.array([f"sample {c}" for c in cols], dtype=object)
+                if d["samples"] is None else np.asarray(d["samples"], dtype=object)),
+        columns=cols, value=d["values"], share=d["share"],
+        detected_fraction=qc["detected_fraction"][cols], depth=qc["depth"][cols],
+        top_share=qc["top_share"][cols],
+        cohort={name: tuple(np.nanpercentile(v, [25, 50, 75])) for name, v in whole.items()},
+        direction=d["direction"], affected_fraction=d["affected_fraction"],
+    )
 
 
 # ---------------------------------------------------------------------------

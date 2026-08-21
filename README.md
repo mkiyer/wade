@@ -182,18 +182,21 @@ correctly **not** flagged as a subset.
 
 ### Seeing it
 
-Three figures, each answering one question. They are a **convenience layer**,
+Four figures, each answering one question. They are a **convenience layer**,
 deliberately kept at arm's length from the statistic — `import wade` imports no
 plotting library, neither backend is a dependency, and every number a figure
-draws is already in `res.report()`. Exporting the table and plotting in ggplot
-loses you nothing. [`docs/plotting.md`](docs/plotting.md) is the full story.
+draws is already in `res.report()` or in one of the diagnostics
+(`wade.subset_drivers`, `wade.library_qc`). Exporting the table and plotting in
+ggplot loses you nothing. [`docs/plotting.md`](docs/plotting.md) is the full
+story.
 
 ```python
-from wade import plot_gene, plot_volcano, plot_stages
+from wade import plot_gene, plot_volcano, plot_stages, plot_drivers
 
 plot_gene(res, gene=[300, 320])             # what does this gene's difference look like?
 plot_volcano(res, stage="both", label=5)    # which genes?
 plot_stages(res)                            # what kind of difference?
+plot_drivers(res, 300, counts)              # should I believe this one?
 
 # Either axis takes any result column. On a large cohort, where the p-values
 # saturate, this is the view that still separates genes:

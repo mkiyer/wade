@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .data import _label_positions
+from .data import DRIVER_PANELS, _label_positions
 from .theme import QUADRANTS, _STAGE_LABELS
 
 
@@ -185,4 +185,39 @@ def _stages_mpl(data, theme, *, title, width, height):
     ax.set_ylabel(data.ylabel)
     ax.set_title(title or f"the two stages (FDR {data.alpha:g})", color=theme.ink)
     _mpl_style(ax, theme)
+    return fig
+
+
+def _drivers_mpl(panel, theme, *, title, width, height):
+    import matplotlib.pyplot as plt
+
+    k = panel.sample.size
+    n = len(DRIVER_PANELS)
+    fig, axes = plt.subplots(1, n, figsize=(width or (2.4 * n + 1.8),
+                                            height or max(3.0, 1.4 + 0.30 * k)),
+                             sharey=True, squeeze=False, constrained_layout=True)
+    fig.patch.set_facecolor(theme.surface)
+    axes = axes[0]
+    y = np.arange(k, dtype=float)
+    for ax, (field_name, label) in zip(axes, DRIVER_PANELS):
+        v = np.asarray(getattr(panel, field_name), dtype=np.float64)
+        q25, med, q75 = panel.cohort[field_name]
+        ax.axvspan(q25, q75, color=theme.grid, alpha=0.55, lw=0, zorder=0,
+                   label="cohort interquartile range" if ax is axes[0] else None)
+        ax.axvline(med, color=theme.muted, lw=1, ls="--", zorder=1,
+                   label="cohort median" if ax is axes[0] else None)
+        ax.scatter(v, y, s=34, color=theme.case, linewidths=0.5,
+                   edgecolors=theme.surface, zorder=3)
+        if panel.log_axis(field_name):
+            # One label per decade: minor labels mash together in a panel this
+            # narrow, which is the same reason _gene_mpl's y axis has dtick=1.
+            ax.set_xscale("log")
+            ax.xaxis.set_minor_formatter(plt.NullFormatter())
+        ax.set_xlabel(label, fontsize=9)
+        _mpl_style(ax, theme)
+    axes[0].set_yticks(y)
+    axes[0].set_yticklabels(panel.sample, fontsize=8)
+    axes[0].set_ylim(k - 0.5, -0.5)          # strongest driver at the top
+    fig.legend(loc="outside lower center", frameon=False, fontsize=9, ncol=2)
+    fig.suptitle(title or f"{panel.gene}: {panel.subtitle}", color=theme.ink, fontsize=11)
     return fig

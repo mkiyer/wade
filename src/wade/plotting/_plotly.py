@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .data import _label_positions
+from .data import DRIVER_PANELS, _label_positions
 from .theme import QUADRANTS, _STAGE_LABELS
 
 
@@ -264,4 +264,48 @@ def _stages_plotly(data, theme, *, title, width, height):
     fig.update_yaxes(title_text=data.ylabel)
     _plotly_layout(fig, theme, title=title or f"the two stages (FDR {data.alpha:g})",
                    width=width or 700, height=height or 600)
+    return fig
+
+
+def _drivers_plotly(panel, theme, *, title, width, height):
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    k = panel.sample.size
+    y = np.arange(k, dtype=float)
+    fig = make_subplots(rows=1, cols=len(DRIVER_PANELS), shared_yaxes=True,
+                        subplot_titles=[lbl for _, lbl in DRIVER_PANELS],
+                        horizontal_spacing=0.035)
+    for j, (field_name, _) in enumerate(DRIVER_PANELS, start=1):
+        v = np.asarray(getattr(panel, field_name), dtype=np.float64)
+        q25, med, q75 = panel.cohort[field_name]
+        fig.add_trace(go.Scatter(
+            x=v, y=y, mode="markers", text=panel.sample,
+            marker=dict(size=8, color=theme.case, line=dict(width=0.5, color=theme.surface)),
+            hovertemplate=("<b>%{text}</b><br>" + field_name +
+                           " = %{x:.4g}<br>cohort median " + f"{med:.4g}<extra></extra>"),
+            showlegend=False,
+        ), row=1, col=j)
+        # After the trace: plotly skips shapes on subplots that are still empty.
+        fig.add_vrect(x0=q25, x1=q75, fillcolor=theme.grid, opacity=0.55, line_width=0,
+                      layer="below", row=1, col=j)
+        fig.add_vline(x=med, line=dict(color=theme.muted, width=1, dash="dash"),
+                      row=1, col=j)
+        if panel.log_axis(field_name):
+            fig.update_xaxes(type="log", dtick=1, minor=dict(showgrid=False), row=1, col=j)
+        fig.update_yaxes(tickvals=y, ticktext=panel.sample if j == 1 else [""] * k,
+                         autorange="reversed", row=1, col=j)
+    # The cohort context is the point of the figure, so it says so in the legend.
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers",
+                             marker=dict(size=9, symbol="square", color=theme.grid),
+                             name="cohort interquartile range"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
+                             line=dict(color=theme.muted, width=1, dash="dash"),
+                             name="cohort median"), row=1, col=1)
+    for ann in fig.layout.annotations:
+        ann.font.size = 11
+    _plotly_layout(fig, theme, title=title or f"{panel.gene}: {panel.subtitle}",
+                   width=width or 1080, height=height or max(320, 130 + 26 * k),
+                   legend_below=True)
+    fig.update_layout(margin=dict(l=140, r=30, t=90, b=70))
     return fig
