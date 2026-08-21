@@ -46,6 +46,11 @@ def _gene_mpl(panels, theme, *, share_y, title, width, height):
         top.axhline(p.reference, color=theme.muted, lw=1, ls="--",
                     label=("fitted global shift" if p.log2_fitted_shift is not None
                            else "median(R): fitted global shift") if j == 0 else None)
+        span = p.affected_span
+        if span is not None:
+            # How firm the extent of the affected region is.
+            top.axvspan(span[0], span[1], color=theme.case, alpha=0.16, lw=0, zorder=0,
+                        label="affected fraction, 95% CI" if j == 0 else None)
         top.plot(d.p, d.r, color=theme.ink, lw=1.6, label="log$_2$ ratio" if j == 0 else None)
         top.set_title(p.name, fontsize=11.5, color=theme.ink, pad=30)
         top.text(0.5, 1.015, "\n".join(p.subtitle_lines), transform=top.transAxes,
@@ -94,6 +99,25 @@ def _scatter_mpl(ax, data, theme, *, colorbar_ax=None, fig=None):
     return sc
 
 
+def _intervals_mpl(ax, data, theme):
+    """Bootstrap intervals on the **labelled** points, as error bars.
+
+    Only the labelled ones: a transcriptome of error bars is mush, every gene's
+    interval is already in the result's own columns, and ``label=`` is exactly
+    the "these are the genes I care about" the caller has already given.
+    """
+    idx = np.flatnonzero(data.labelled)
+    if idx.size == 0 or (data.x_ci is None and data.y_ci is None):
+        return
+
+    def arms(ci, v):
+        return None if ci is None else np.vstack([v[idx] - ci[0][idx], ci[1][idx] - v[idx]])
+
+    ax.errorbar(data.x[idx], data.y[idx], xerr=arms(data.x_ci, data.x),
+                yerr=arms(data.y_ci, data.y), fmt="none", ecolor=theme.muted,
+                elinewidth=0.9, capsize=2, capthick=0.9, zorder=2)
+
+
 def _volcano_mpl(data, theme, *, title, width, height):
     import matplotlib.pyplot as plt
 
@@ -113,6 +137,7 @@ def _volcano_mpl(data, theme, *, title, width, height):
                     va="bottom", fontsize=8, color=theme.muted,
                     bbox=dict(facecolor=theme.surface, alpha=0.8, edgecolor="none", pad=2))
         _scatter_mpl(ax, d, theme, fig=fig if j == k - 1 else None)
+        _intervals_mpl(ax, d, theme)
         ax.axvline(0.0, color=theme.axis, lw=1)
         if np.isfinite(d.cutoff_y):
             ax.axhline(d.cutoff_y, color=theme.muted, lw=1, ls="--")

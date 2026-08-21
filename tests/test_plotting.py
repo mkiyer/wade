@@ -29,16 +29,31 @@ G, N1, N0, B = 160, 40, 40, 300
 COND = np.r_[np.ones(N1, int), np.zeros(N0, int)]
 
 
-@pytest.fixture(scope="module")
-def res():
+def _counts():
     rng = np.random.default_rng(11)
     counts = rng.poisson(60, size=(G, N1 + N0)).astype(float)
     counts[:4, :N1] *= 3.0                              # global up
     counts[4:6, :N1] *= 0.3                             # global down
     for i in range(6, 10):                              # 10% subset up, x6
         counts[i, rng.choice(N1, 4, replace=False)] *= 6.0
-    names = [f"g{i}" for i in range(G)]
-    return wade.wade(counts, np.ones(G), COND, nperms=B, gene_names=names, seed=3)
+    return counts
+
+
+@pytest.fixture(scope="module")
+def res():
+    return wade.wade(_counts(), np.ones(G), COND, nperms=B, seed=3,
+                     gene_names=[f"g{i}" for i in range(G)])
+
+
+@pytest.fixture(scope="module")
+def res_boot():
+    """The same result with bootstrap intervals, for the figures that draw them.
+
+    Kept separate from ``res`` so every other test still runs the ``n_boot=0``
+    path, where a figure must draw no interval at all.
+    """
+    return wade.wade(_counts(), np.ones(G), COND, nperms=B, seed=3, n_boot=200,
+                     gene_names=[f"g{i}" for i in range(G)])
 
 
 @pytest.fixture(scope="module")
@@ -551,6 +566,84 @@ def test_the_theme_resolves_colour_roles_and_the_label_box(res):
     assert dark.box(0.5) == "rgba(20,20,16,0.5)"
     # plotly's template has to follow too, or the ground stays light.
     assert light.plotly_template == "plotly_white" and dark.plotly_template == "plotly_dark"
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap intervals, drawn
+
+
+def test_an_axis_gets_an_interval_exactly_when_the_result_has_one(res, res_boot):
+    """The rule is the column's name: an axis holding ``foo`` gets error bars
+    iff the result carries ``ci_foo``. Nothing else is wired."""
+    assert P.volcano_data(res).x_ci is None                       # n_boot = 0
+    v = P.volcano_data(res_boot, label=4)
+    np.testing.assert_array_equal(v.x_ci, res_boot.ci_log2_fc)
+    assert v.y_ci is None                                         # y is −log₁₀ p
+    v2 = P.volcano_data(res_boot, "subset", x="subset_log2_fc", y="affected_fraction")
+    np.testing.assert_array_equal(v2.x_ci, res_boot.ci_subset_log2_fc)
+    np.testing.assert_array_equal(v2.y_ci, res_boot.ci_affected_fraction)
+    # A permutation z has no interval, so that axis gets none rather than erroring.
+    assert P.volcano_data(res_boot, y="z_subset").y_ci is None
+    # The table names them as the result does, so it stays a subset of it.
+    t = v.table()
+    np.testing.assert_array_equal(t["log2_fc_lo"], res_boot.ci_log2_fc[0])
+    np.testing.assert_array_equal(t["log2_fc_hi"], res_boot.ci_log2_fc[1])
+    assert "log2_fc_lo" not in P.volcano_data(res).table()
+
+
+def test_the_gene_panel_band_is_where_the_affected_region_ends(res, res_boot):
+    """``affected_fraction`` is a participation ratio, so it is an extent along
+    the quantile axis — on the side ``direction`` points to."""
+    assert P.gene_panels(res, gene="g6")[0].affected_span is None  # n_boot = 0
+
+    [up] = P.gene_panels(res_boot, gene="g6")                      # a 10% subset, up
+    lo, hi = up.stats["ci_affected_fraction"]
+    assert up.direction > 0
+    assert up.affected_span == pytest.approx((1.0 - hi, 1.0 - lo))
+    assert up.affected_span[1] > 0.5, "an upward subset moved the top of the distribution"
+
+    [down] = P.gene_panels(res_boot, gene="g4")                    # a global down gene
+    assert down.direction < 0
+    assert down.affected_span == pytest.approx(tuple(down.stats["ci_affected_fraction"]))
+    # A wider interval is a wider band: that is the whole point of drawing it.
+    assert up.affected_span[1] - up.affected_span[0] == pytest.approx(hi - lo)
+
+
+@pytest.mark.parametrize("backend", P.available_backends())
+def test_both_backends_draw_the_intervals_and_omit_them_at_n_boot_zero(res, res_boot, backend):
+    """Not merely "it rendered": the bars and the band have to be in the figure
+    when there are intervals, and **absent** when there are none — a figure must
+    not imply a precision the run did not measure."""
+    def drawn(r):
+        v = wade.plot_volcano(r, label=4, backend=backend)
+        g = wade.plot_gene(r, gene=["g6"], backend=backend)
+        if backend == "plotly":
+            bars = any(t.error_x is not None and t.error_x.array is not None for t in v.data)
+            band = any(sh.type == "rect" for sh in g.layout.shapes)
+        else:
+            bars = any(type(c).__name__ == "LineCollection" for c in v.axes[0].collections)
+            band = bool(g.axes[0].patches)
+        return bars, band
+
+    assert drawn(res_boot) == (True, True)
+    assert drawn(res) == (False, False)
+
+
+@pytest.mark.parametrize("backend", P.available_backends())
+def test_a_drawn_error_bar_spans_exactly_the_reported_interval(res_boot, backend):
+    """The endpoints, not merely the presence. A doubled arm or a swapped
+    lo/hi renders perfectly plausibly and says the wrong thing."""
+    i = res_boot.gene_index("g0")
+    lo, hi = res_boot.ci_log2_fc[0, i], res_boot.ci_log2_fc[1, i]
+    fig = wade.plot_volcano(res_boot, label=["g0"], backend=backend)
+    if backend == "matplotlib":
+        [lc] = [c for c in fig.axes[0].collections if type(c).__name__ == "LineCollection"]
+        seg = lc.get_segments()[0]
+        assert (seg[0][0], seg[-1][0]) == pytest.approx((lo, hi))
+    else:
+        t = next(t for t in fig.data if t.error_x is not None and t.error_x.array is not None)
+        assert t.x[0] - t.error_x.arrayminus[0] == pytest.approx(lo)
+        assert t.x[0] + t.error_x.array[0] == pytest.approx(hi)
 
 
 def test_no_colour_literal_lives_outside_theme_py():

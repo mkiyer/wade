@@ -196,6 +196,12 @@ def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
     curve's departure from it is what ``p_subset`` prices. The solid line is
     zero. Bottom: the two quantile functions on a log axis, which is
     the raw evidence the curve above is the ratio of.
+
+    At ``n_boot > 0`` a shaded band marks where the **edge of the affected
+    region** lies (:attr:`GenePanel.affected_span`) — the bootstrap interval on
+    ``affected_fraction``, on the side ``direction`` points to. A narrow band is
+    a well-determined extent; a wide one is a subset resting on a handful of
+    samples, which the point estimate alone does not distinguish.
     """
     panels = gene_panels(source, cond, gene=gene, names=names, pseudocount=pseudocount)
     be = _resolve_backend(backend)
@@ -238,7 +244,10 @@ def plot_volcano(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
     label
         Genes to annotate directly: an integer ``n`` labels the ``n`` most
         significant, a list of names labels those. Labels are selective by
-        design; the hover carries the rest.
+        design; the hover carries the rest. **The labelled points also carry
+        their bootstrap error bars**, on whichever axis holds a descriptor the
+        result has an interval for — so the genes you named are the ones whose
+        firmness you can see.
 
     ``mean_shift`` is available as an axis but is a poor choice: it is in
     TPM-like units and spans thousands, so it collapses a transcriptome onto a

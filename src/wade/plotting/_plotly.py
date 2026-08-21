@@ -62,6 +62,12 @@ def _gene_plotly(panels, theme, *, share_y, title, width, height):
         ), row=1, col=j)
         fig.add_hline(y=0.0, line=dict(color=theme.axis, width=1), row=1, col=j)
         fig.add_hline(y=p.reference, line=dict(color=theme.muted, width=1, dash="dash"), row=1, col=j)
+        # How firm the extent of the affected region is. Added after the trace:
+        # plotly skips shapes on subplots that are still empty.
+        span = p.affected_span
+        if span is not None:
+            fig.add_vrect(x0=span[0], x1=span[1], fillcolor=theme.case, opacity=0.16,
+                          line_width=0, layer="below", row=1, col=j)
         fig.add_trace(go.Scatter(
             x=d.p, y=d.y1, mode="lines", line=dict(color=theme.case, width=1.8),
             name="case", legendgroup="case", showlegend=(j == 1),
@@ -83,6 +89,11 @@ def _gene_plotly(panels, theme, *, share_y, title, width, height):
     fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
                              line=dict(color=theme.muted, width=1, dash="dash"),
                              name=label), row=1, col=1)
+    if any(p.affected_span is not None for p in panels):
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers",
+                                 marker=dict(size=9, symbol="square", color=theme.case,
+                                             opacity=0.16),
+                                 name="affected fraction, 95% CI"), row=1, col=1)
     fig.update_yaxes(title_text="log₂(Q<sub>case</sub> / Q<sub>ctrl</sub>)", row=1, col=1)
     fig.update_yaxes(title_text="expression", row=2, col=1)
     for ann in fig.layout.annotations:
@@ -146,6 +157,34 @@ def _labels_plotly(data, go, fig, theme, row=None, col=None):
         ), row=row, col=col)
 
 
+def _intervals_plotly(data, go, fig, theme, row=None, col=None):
+    """Bootstrap intervals on the **labelled** points, as error bars.
+
+    Only the labelled ones, deliberately: a transcriptome of error bars is
+    mush, every gene's interval is already in the hover, and ``label=`` is
+    exactly the "these are the genes I care about" the caller has already
+    given. A one-pixel marker carries the bars so the coloured point beneath
+    stays the point.
+    """
+    idx = np.flatnonzero(data.labelled)
+    if idx.size == 0 or (data.x_ci is None and data.y_ci is None):
+        return
+
+    def arms(ci, v):
+        if ci is None:
+            return None
+        return dict(type="data", symmetric=False, array=ci[1][idx] - v[idx],
+                    arrayminus=v[idx] - ci[0][idx], color=theme.muted,
+                    thickness=1, width=3)
+
+    fig.add_trace(go.Scatter(
+        x=data.x[idx], y=data.y[idx], mode="markers",
+        marker=dict(size=1, color=theme.muted),
+        error_x=arms(data.x_ci, data.x), error_y=arms(data.y_ci, data.y),
+        hoverinfo="skip", showlegend=False,
+    ), row=row, col=col)
+
+
 def _volcano_plotly(data, theme, *, title, width, height):
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -178,6 +217,7 @@ def _volcano_plotly(data, theme, *, title, width, height):
                           annotation_text=f"FDR {d.alpha:g}: {d.n_significant} genes",
                           annotation_position="bottom right" if d.alternative == "less" else "bottom left",
                           annotation_font=dict(size=10, color=theme.muted))
+        _intervals_plotly(d, go, fig, theme, row=1, col=j)
         _labels_plotly(d, go, fig, theme, row=1, col=j)
         fig.update_xaxes(title_text=d.xlabel, row=1, col=j)
         # The promised shared x: pan/zoom one panel and the other follows, so a

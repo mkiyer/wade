@@ -113,6 +113,29 @@ p-value axis the BH cutoff line is suppressed, because it means nothing there.
 `label=n` names the top *n* by y, **broken by |x|**, so ties at the floor
 select the largest effects rather than an arbitrary handful.
 
+### Bootstrap intervals are drawn, not just carried
+
+All five descriptors carry a 95% interval at `n_boot > 0`, and until now no
+figure showed any — so a subset resting on four affected samples looked exactly
+as firm as one resting on four hundred. Two places now show them, and **nothing
+is drawn at `n_boot = 0`**, because a figure must not imply a precision the run
+did not measure.
+
+* **On a volcano**, error bars on whichever axis holds a descriptor the result
+  has an interval for. The rule is the column's name: an axis holding `foo`
+  gets bars iff the result carries `ci_foo`, so `x="subset_log2_fc"` and
+  `y="affected_fraction"` both get them and a p-value or `z_subset` axis gets
+  none. Bars go on the **labelled** points only — a transcriptome of error bars
+  is mush, `label=` is already the caller saying which genes matter, and every
+  gene's interval is in `res.columns()` and therefore in the hover.
+* **On `plot_gene`**, a band marking where the **edge of the affected region**
+  lies. `affected_fraction` is a participation ratio — for a subset of size
+  `pi` it reads `pi` — so it is an extent along the quantile axis: the top `pi`
+  when the change is upward, the bottom `pi` when downward. The band is that
+  edge's interval, and it lands exactly where the curve leaves the dashed
+  reference. A narrow band is a well-determined extent; a wide one is a subset
+  resting on a handful of samples.
+
 ## Per-gene metadata is displayed, never used
 
 WADE's core needs **one gene id column and nothing more**. If your input frame

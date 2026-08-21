@@ -94,6 +94,26 @@ class GenePanel:
     def subtitle(self) -> str:
         return " · ".join(self.subtitle_lines)
 
+    @property
+    def affected_span(self) -> tuple[float, float] | None:
+        """The quantile interval the affected fraction's bootstrap CI puts the
+        edge of the affected region in — ``None`` when there is no interval.
+
+        ``affected_fraction`` is a participation ratio: for a subset of size
+        ``pi`` it reads ``pi`` (``wade.subset.affected_fraction``), so the part
+        of the distribution that moved is the **top** ``pi`` of quantiles when
+        the change is upward and the **bottom** ``pi`` when it is downward.
+        This is therefore where the edge of that region lies, and a wide band
+        is a poorly determined extent — which is exactly what a point estimate
+        hides: a subset resting on four affected samples reads the same as one
+        resting on four hundred.
+        """
+        ci = self.stats.get("ci_affected_fraction")
+        if ci is None:
+            return None
+        lo, hi = float(ci[0]), float(ci[1])
+        return (lo, hi) if self.direction < 0 else (1.0 - hi, 1.0 - lo)
+
     def table(self) -> dict[str, np.ndarray]:
         """The panel's curves, one row per grid node — its table-view twin.
 
@@ -283,6 +303,20 @@ def _color_arrays(res: WadeResult, color):
                       range=None, key=key)
 
 
+def _column_ci(res: WadeResult, name: str | None) -> np.ndarray | None:
+    """The bootstrap interval for an axis's column, ``(2, genes)`` or ``None``.
+
+    The rule is exactly the name: an axis holding ``foo`` gets error bars iff
+    the result carries ``ci_foo``. So a descriptor that gains an interval needs
+    nothing wired here, and an axis that is a p-value or a permutation z — for
+    which there is no interval — silently gets none.
+    """
+    if name is None:
+        return None
+    ci = getattr(res, f"ci_{name}", None)
+    return None if ci is None else np.asarray(ci, dtype=np.float64)
+
+
 def _result_columns(res: WadeResult) -> dict[str, np.ndarray]:
     """Every column the result carries, for the hover. ``res.columns()`` is the
     single namespace for the axes, the colour and the hover, which is what
@@ -353,6 +387,11 @@ class VolcanoData:
     #: the BH cutoff line is meaningful.
     x_name: str = "log2_fc"
     y_name: str | None = None
+    #: Bootstrap 95% intervals for whichever axes hold a descriptor that has
+    #: one, ``(2, genes)`` each. ``None`` at ``n_boot=0``, and on the p-value
+    #: and permutation-z axes, which have no interval.
+    x_ci: np.ndarray | None = None
+    y_ci: np.ndarray | None = None
 
     @property
     def xlabel(self) -> str:
@@ -383,6 +422,10 @@ class VolcanoData:
             cols[self.y_name] = self.y
         if self.color is not None:
             cols[self.color_spec["key"]] = self.color
+        # Named as the result names them, so the table stays a subset of it.
+        for name, ci in ((self.x_name, self.x_ci), (self.y_name, self.y_ci)):
+            if ci is not None:
+                cols[f"{name}_lo"], cols[f"{name}_hi"] = ci[0], ci[1]
         return cols
 
 
@@ -411,6 +454,13 @@ def volcano_data(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
     top ``n`` by y, **broken by |x|**, so ties at the p-value floor do not
     produce an arbitrary selection.
 
+    Either axis gets **bootstrap error bars** on the labelled points when it
+    holds a descriptor the result has an interval for — ``log2_fc``,
+    ``mean_shift``, ``subset_log2_fc``, ``affected_fraction`` or ``direction``
+    at ``n_boot > 0``. Only the labelled ones: a transcriptome of error bars is
+    mush, and every gene's interval is in ``res.columns()`` and so in the
+    hover. A p-value or a permutation-z axis has no interval and gets none.
+
     ``alternative`` is read from the result: under a one-sided alternative the
     untested half of the fold-change axis cannot produce a small p-value, and
     the renderers shade it so the emptiness is read as *untested* rather than
@@ -429,6 +479,7 @@ def volcano_data(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
         labelled=_label_mask(yv, res.gene, label, tiebreak=xv),
         alternative=str(res.params.get("alternative", "two-sided")),
         hover=_result_columns(res), x_name=x, y_name=y,
+        x_ci=_column_ci(res, x), y_ci=_column_ci(res, y),
     )
 
 
