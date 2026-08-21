@@ -9,11 +9,19 @@ covers only what is *not* obvious from them.
 ## 1. Where things stand
 
 The statistic is finished and tested, both permutation loops have Rust
-kernels, the subset stage is count-native, the plotting layer exists — and
-as of 2026-08-20 **the performance queue is done**: the 30,000 × 80,000
-target that needed ~163 GB and did not run completes, measured, in **29.7
-minutes at a 55.6 GB peak** (B = 2,000, all fast paths; `scaling.md` §1).
-**694 tests pass in about 15 seconds.**
+kernels, the subset stage is count-native, and as of 2026-08-20 **the
+performance queue is done**: the 30,000 × 80,000 target that needed ~163 GB
+and did not run completes, measured, in **29.7 minutes at a 55.6 GB peak**
+(B = 2,000, all fast paths; `scaling.md` §1). Since then the package has been
+audited, corrected and **cut down**: ~1,300 lines deleted, five redundant
+paths collapsed to one, and the documents rewritten to match the code.
+**694 tests pass in about 10 seconds**, parity at **9.155e-15** over 436
+comparisons.
+
+**The immediate work is [`plan.md`](plan.md)** — Phases A and D are done,
+**Phase B (plotting becomes a subpackage) is next**, then Phase C (the
+visualization work), then three notebooks. That document is the recipe; this
+one is the context it assumes.
 
 ```bash
 export PATH="/usr/local/bin:$PATH"          # only if you need R
@@ -40,53 +48,54 @@ The new `wade()` surface, all documented in the docstring: `max_probs`
 `fit_backend="rust"` (the fold-change fit's bisection in the kernel, opt-in
 because it is *not* bitwise against NumPy — see §3 below).
 
-The package is `src/wade/`. Twelve modules, all small:
+The package is `src/wade/`. Eleven modules plus the kernel:
 
 | module | what it owns |
 |---|---|
 | `quantiles.py` | the probability grid, type-7 quantiles, `capped_nprobs` |
 | `stats.py` | `wade_stats()` — the grids, `mean_shift`, `w1`, `fc` |
 | `subset.py` | the bridge, the subset test, `affected_fraction`, `direction`, `subset_log2_fc` (the subset's magnitude), the bootstrap (threaded, chunkable) |
-| `thinning.py` | the count-native shift correction: `fit_fold_change` (normalize path + affine `alpha=` path + kernel backend), `thin_counts`, `one_count`, `gene_chunks` (§10.3–10.4) |
-| `permutation.py` | the nulls; dispatches to the Rust kernel; `mean_diff_stat` / `mean_diff_null` (the GEMM stage 1); `draw_perms(strata=)` and `permutation_space()` (restricted permutation) |
+| `thinning.py` | the count-native shift correction: `fit_fold_change` (one affine `alpha=` path, NumPy or kernel backend), `midmean`, `thin_counts`, `one_count`, `gene_chunks` (§10.3–10.4) |
+| `permutation.py` | the nulls; dispatches to the Rust kernel; `mean_diff_stat` / `mean_diff_null` (the GEMM stage 1); `draw_perms(strata=)`, `permutation_space()` (restricted permutation) and `detectability_floor()` (`limits.md` §1's pre-flight check) |
 | `pvalues.py` | empirical p, GPD refinement, BH, `alternative` |
 | `normalize.py` | `tpm_like` (ported) and the jitter. **One normalizer**: CPM is `normalizer=1.0`, other size factors go in via `lib_sizes=` — `cpm`/`rle` were deleted as unreachable from `wade()` |
 | `diagnostics.py` | `wade_gene()` — the per-gene curves; `library_qc()` — per-library depth/complexity/concentration; `subset_drivers()` — which samples drive a gene's subset |
 | `api.py` | `wade()` and `wade_contrast()` — **one driver**; `WadeResult` now carries `cond` and has `gene_index()` / `gene_detail()` |
-| `io.py` | the data boundary: `as_counts` (arrays, frames, sparse), `condition`, `to_frame`, `write_results` + manifest. **No file readers, by decision** |
-| `plotting.py` | `plot_gene()`, `plot_volcano()`, `plot_stages()`; a pure-NumPy data layer (`gene_panels`, `volcano_data`, `stages_data`) and two thin renderers, plotly and matplotlib, imported inside the functions |
+| `io.py` | the data boundary: `as_counts` (arrays, frames, sparse), `condition`, `to_frame`, `write_results` + manifest. **No file readers, by decision.** Per-gene columns are carried in `Counts.meta` for display and read by no statistic |
+| `plotting.py` | **an extension, not the core** (`plotting.md`): `plot_gene()`, `plot_volcano()`, `plot_stages()`; a pure-NumPy data layer (`gene_panels`, `volcano_data`, `stages_data`, each with `.table()`) and two thin renderers imported inside the functions. 1,124 lines and the largest module — **Phase B splits it** |
 | `rust/src/lib.rs` | three kernels: `null_statistics` (mean shift, gene-major since 2026-08-20), `subset_null` (the subset test), `fit_bisect` (the fold-change fit, **opt-in and not bitwise** — see §3) |
 
-## 2. What is NOT built, in priority order
+## 2. What is NOT built, in order
 
-See [`../ROADMAP.md`](../ROADMAP.md) for the queue.
+The queue is [`../ROADMAP.md`](../ROADMAP.md); the recipe for the next two
+phases is [`plan.md`](plan.md). In short:
 
-1. **The real dataset — first contact made** (`notebooks/rna100k.qmd`,
-   2026-08-20; renders end to end with quarto, which needs
-   `fastexcel`/`pyyaml`/`ipykernel`, now declared in `mamba_env.yaml`).
-   **Everything it measured is `scaling.md` §7** — the saturation of
+1. **Phase B — plotting becomes a subpackage.** `plotting.py` is 1,124 lines,
+   the largest module, and it is an *extension* rather than the method. Split
+   along its own section banners into `theme.py` / `data.py` / `_plotly.py` /
+   `_matplotlib.py` / `__init__.py`. Pure relocation: no public name changes,
+   no behaviour changes, `import wade` stays NumPy-only. `plan.md` has the
+   table of what goes where and the verification commands.
+2. **Phase C — the visualization work.** Theme and palette tokens first
+   (everything else renders through them), then drawn bootstrap intervals, a
+   driver figure, optional gene metadata in figures, linked plotly views, a
+   stage-1 figure, label de-collision. Sized and specified in `plan.md`.
+3. **Three notebooks, after C**: a small-synthetic `demo` (the showcase), a
+   `benchmark` head-to-head against COPA / OS / ORT / MOST / LSOSS, t-test,
+   Wilcoxon and waddR on simulated *and* literature data, and `rna100k`
+   relabelled as manuscript material rather than a demo.
+4. **The real dataset's own agenda** — `scaling.md` §7, which is where
+   everything `notebooks/rna100k.qmd` measured now lives: the saturation of
    significance and the two controls that explain it, the artefact libraries
-   and the diagnostic that was measured and refuted, group-associated depth,
-   the observed p-value pile-up, and the sparsity. Read that section rather
-   than this paragraph. The full-cohort run is gated in the notebook (~60 GB);
-   rendered HTML is gitignored, so the `.qmd` is the artifact and nothing
-   patient-derived enters the repo.
-2. **Demo notebook** — nothing exists. `tools/make_readme_figures.py` already
-   builds the dataset and the three figures it should open with. Deferred so
-   it could be a real analysis; with the target unblocked, it can be.
-3. **The resident-matrix question** (ROADMAP §2.2): the chunked driver's peak
-   is now the four full `genes × samples` residents `WadeResult` carries
-   (counts, jitter, tpm, pseudocount) — the jitter is a seeded stream and the
-   pseudocount a rank-1 product, so neither *has* to be materialized. A
-   contract question, not a kernel one.
-4. **The audited package queue — ROADMAP §3.** A five-dimension audit
-   (2026-08-20) found 40 verified gaps; the nine release blockers are fixed
-   (see the git log), and the remaining 31 are grouped and sized there. The
-   largest clusters are the plotting layer (bootstrap intervals computed but
-   never drawn, no driver figure, no linked views, no dark theme) and the
-   data boundary (per-gene annotation cannot reach the written results, the
-   featureCounts/MatrixMarket helpers, GPD-refinement flags unexported).
-5. **Format helpers** (featureCounts, MatrixMarket) — ROADMAP §5, small.
+   and the diagnostic that was measured and *refuted*, group-associated depth,
+   the observed p-value pile-up, 47% sparsity. The rank-recovery benchmark on
+   real background is the priority there, and it wants the `benchmark`
+   notebook first.
+5. **The resident-matrix question** — `scaling.md` §2.3. The one driver's peak
+   is four full `genes × samples` residents `WadeResult` carries (counts,
+   jitter, tpm, pseudocount); the jitter is a seeded stream and the pseudocount
+   a rank-1 product, so neither *has* to be materialized. A contract question
+   about what a result carries, not a kernel question.
 
 Four standing decisions from the user, recorded in `ROADMAP.md`'s preamble,
 `method.md`'s scope note and `wade/io.py`'s module docstring:
@@ -166,9 +175,14 @@ two were kept:
   makes adding one a ~100-line renderer.
 
 Both renderers read the same dataclasses, so a figure says the same thing in
-either — and every dataclass has a `table()` (the arrays, for any other tool,
-and the table-view twin of the chart). `tests/test_plotting.py` pins the
-contract that `import wade` imports neither library.
+either. `VolcanoData` and `StagesData` each have a `table()` — the arrays, for
+any other tool, and the table-view twin of the chart; **`GenePanel` does not
+yet**, which is Phase B2. `tests/test_plotting.py` pins the contract that
+`import wade` imports neither library.
+
+The stance, and why the split matters, is now [`plotting.md`](plotting.md):
+this layer is an extension, the results table is the interface, and exporting
+to ggplot is a first-class path rather than a fallback.
 
 ### The documentation map
 
@@ -407,22 +421,37 @@ cites them.
 
 ## 5. Suggested first move
 
-**The real dataset.** The performance queue landed and a synthetic run at the
-target's exact shape (30,000 × 80,000, B = 2,000, `gene_chunk=2000`,
-`stage1="gemm"`, `fit_backend="rust"`) measured **29.7 min, 55.6 GB peak** on
-the 128 GB laptop (`scaling.md` §1). The user has the real matrix and
-**offered to point at it; ask.** Then the demo notebook (ROADMAP §1), which
-can now open with a real analysis.
+**Phase B, from [`plan.md`](plan.md).** Split `src/wade/plotting.py` into a
+subpackage along the section banners already in the file. It is the cleanest
+possible first task: pure relocation, no public names change, and the
+verification is that the existing suite passes untouched. Doing it before
+Phase C means the theme work has one obvious home instead of a 1,124-line
+module to grep.
 
-The rules that governed the performance work stay in force for whatever
-touches it next: measure before and after with `tools/bench_scaling.py` and
-put the numbers in `scaling.md`, not a commit message; and nothing changes an
-answer — `pytest -q` (694 tests) is the check.
+```bash
+conda activate wade
+pytest -q                                   # 694 passing, ~10 s — the baseline
+sed -n '/^# ---/,+2p' src/wade/plotting.py  # the seams to split along
+```
+
+Three rules govern everything here, and they have earned their place:
+
+* **Nothing changes a reported number.** `pytest -q` is the check and the
+  parity ledger printed at the end of the run is the sharper one (currently
+  9.155e-15 over 436 comparisons). Fast paths that *do* change numbers are
+  opt-in and named — `stage1="gemm"`, `fit_backend="rust"`.
+* **Measure before and after**, and put the numbers in the document that owns
+  the subject (`scaling.md` for performance), never in a commit message.
+  `tools/bench_scaling.py` reproduces every performance claim.
+* **Prefer deleting to adding.** A four-hunter audit removed ~1,300 lines on
+  2026-08-21 and the package got better. Before adding a parameter or a code
+  path, ask whether an existing one already covers the case — twice recently
+  the answer was yes (CPM is `normalizer=1.0`; the chunked driver with one
+  chunk *is* the one-pass driver).
 
 To see the current state in one command:
 
 ```bash
-conda activate wade
 python tools/bench_scaling.py --genes 1000 --n 6000 --nperms 200 --full \
     --stage1 gemm --fit-backend rust     # ~2.3 s; drop the flags for ~9 s
 ```

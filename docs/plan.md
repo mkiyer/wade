@@ -1,231 +1,161 @@
-# Plan: make the documents true, and make visualization an extension
+# Plan: finish the reorganization, then the visualization extension
 
-A working document, for review before execution. **It is deleted when done** —
-its outcome lives in `ROADMAP.md`, `docs/plotting.md` and the code. Written
-2026-08-21, after the correctness and simplification passes landed
-(`fddf2c1` … `d2bddee`).
+A working document. **Delete it when Phase C lands** — its outcome belongs in
+`ROADMAP.md`, `docs/plotting.md` and the code. Written 2026-08-21.
 
-Two goals, in this order:
+## Status
 
-1. **The documents do not describe the package any more.** Fix that first,
-   because a stale queue makes every later decision worse.
-2. **Visualization should read as an extension of the statistical core**, not
-   as part of it — decoupled by organization, documentation and demos.
+| Phase | State |
+|---|---|
+| **A — make the documents true** | **done** (`340fc1f`) |
+| **D — the last six core gaps** | **done** (`46e9446`) |
+| **B — plotting becomes a subpackage** | **next** |
+| **C — the visualization work** | after B |
+| Notebooks (three of them) | after C |
 
-**Decided 2026-08-21** (§7's questions, answered):
+Order decided 2026-08-21: documents true first, then the core finished, then
+the reorganization — so the split happens against a codebase with nothing
+outstanding in it. That is now the case: `pytest -q` is **694 passing in ~10 s**,
+parity at **9.155e-15** over 436 comparisons, working tree clean.
 
-* **Order: A → D → B**, then C in a later session. Documents true first, then
-  the core finished, then the reorganization — so the subpackage split happens
-  against a codebase with nothing outstanding in it.
-* **B1 goes ahead**, with organization left to judgement. The bar: clean,
-  concise, readable, maintainable, simple, elegant.
-* **D6 is not a data-boundary change.** WADE needs *one gene id column and
-  nothing more*. Extra per-gene metadata is a **display** concern: carry it if
-  the user supplied it, and let the display layer optionally show it (gene
-  symbol above all). That moves the work out of the core and into Phase C,
-  and shrinks it.
-* **Notebooks are three separate deliverables, all after the implementation**
-  — see §8.
+**Standing constraints for everything below.** Nothing may change a reported
+number (`pytest -q` is the check, and the parity ledger printed at the end of
+the run is the sharper one). Fast paths that *do* change numbers are opt-in and
+named. Measure before and after, and put the numbers in the doc that owns the
+subject, not in a commit message. Prefer deleting to adding: the goal is clean,
+concise, readable, maintainable, simple, elegant.
 
 ---
 
-## 0. The problem, measured
+## Phase B — plotting becomes a subpackage
 
-`ROADMAP.md` is 301 lines and much of it is wrong or duplicated:
+`src/wade/plotting.py` is **1,124 lines, the largest module in the package**,
+bigger than `api.py` (931). It is already lazily imported and already has a
+data-layer/renderer split *described in comments*; B makes that structural.
 
-| Section | Lines | Problem |
+### B1. Split the module
+
+The seams are the file's own section banners, which are stable landmarks even
+as line numbers move:
+
+| New file | Take the section(s) | Contents |
 |---|---|---|
-| §1 Demo notebook | 24 | Still says "synthetic data, no download, decided" — but `notebooks/rna100k.qmd` exists and runs on the real cohort. Two different deliverables are conflated. |
-| §2 What the real data demands | 95 | Mostly **scale narrative and measurements**, which is `docs/scaling.md`'s job. A queue should say what to do, not re-derive why. |
-| §3 The audited queue | 56 | Raw audit output. **Eleven of its items are already fixed**; two describe a function that no longer exists; the prose is auditor-voice, not queue-voice. |
-| §4 Inference refinements | 28 | Broadly accurate. |
-| §5 Format helpers, other small things | 27 | **Duplicates §3** on the plotting items and the format helpers; says pandas is untested (it is tested now). |
-| §6 Packaging and release | 7 | Says CI is unstarted. CI exists (`.github/workflows/ci.yml`). |
+| `plotting/theme.py` | `# Theme` | `_INK`…`_DIVERGING`, `_COLOR_SPECS`, `_STAGE_LABELS`, `_AXIS_LABELS`, `_axis_label`, `_column_array`. **This is where C1's tokens land.** |
+| `plotting/data.py` | `# Data layer: the single-gene panel`, `# Data layer: the point clouds` | `GenePanel`/`gene_panels`, `VolcanoData`/`volcano_data`, `StagesData`/`stages_data` and their private helpers (`_bh_cutoff`, `_neglog10`, `_stage_arrays`, `_color_arrays`, `_result_columns`, `_label_mask`, `_fmt_p`, `_panel_from_detail`, `_stats_for`, `_name_or`). **Imports no backend.** |
+| `plotting/_plotly.py` | `# plotly renderers` | `_plotly_layout`, `_gene_plotly`, `_volcano_plotly`, `_stages_plotly` and their helpers. |
+| `plotting/_matplotlib.py` | `# matplotlib renderers` | the matplotlib twins. |
+| `plotting/__init__.py` | `# Backend resolution`, `# Public API` | `BACKENDS`, `DEFAULT_BACKEND`, `available_backends`, `_resolve_backend`, `plot_gene`, `plot_volcano`, `plot_stages`, and re-exports of everything in `data.py` and the two dataclasses' friends. `__all__` **unchanged**. |
 
-And `src/wade/plotting.py` is **1,124 lines — the largest module in the
-package**, bigger than `api.py` (931). It is already lazily imported and
-already has a documented data-layer/renderer split, but nothing in the file
-layout, the export list or the docs says "extension".
+Rules for the move:
 
-Verification for this section: `wc -l`, and the eleven fixed items are each
-traceable to a commit in `git log fddf2c1..d2bddee`.
+* **No public name changes and no behaviour changes.** The diff should be
+  almost entirely relocation. If something needs rewriting to move cleanly,
+  that is a signal the seam is wrong — move it as-is and note it.
+* The renderers are imported **inside** the `plot_*` functions, exactly as
+  today. `plotting/__init__.py` must not import plotly or matplotlib at module
+  scope, or `import wade` stops being NumPy-only.
+* Private helpers travel with their only caller. Anything used by both the
+  data layer and a renderer goes in `theme.py` (it will be a label or a token).
 
----
+*Verify:*
 
-## 1. Target document structure
+```bash
+pytest -q                          # 694, unchanged
+pytest -q tests/test_plotting.py   # 33 collected, unchanged
+python -c "import sys, wade; assert not {'plotly','matplotlib'} & set(sys.modules)"
+git diff --stat                    # should read as a move, not a rewrite
+```
 
-| File | Owns | Now | Target |
-|---|---|---|---|
-| `README.md` | The user-facing contract | 354 | ~330 (plotting section → pointer) |
-| `ROADMAP.md` | **A work queue. Nothing else.** | 301 | **~110** |
-| `docs/method.md` | What WADE computes and why | 797 | unchanged |
-| `docs/limits.md` | What it cannot do | 260 | unchanged |
-| `docs/scaling.md` | Large-data agenda + every measurement | 667 | ~700 (absorbs ROADMAP §2's narrative) |
-| `docs/plotting.md` | **New.** The visualization extension | — | ~120 |
-| `docs/implementation-notes.md` | Parity, kernels, cross-language traps | 357 | unchanged |
-| `docs/HANDOFF.md` | What is not obvious from the above | 429 | ~430 (map updated) |
+### B2. Make the data layer first-class
 
-The rule that decides where a paragraph goes: **ROADMAP says what to do next;
-everything explaining *why* lives in the doc that owns the subject.**
-
----
-
-## 2. Phase A — make the documents true
-
-No code changes. Each step is verified by reading the result, plus the greps
-named.
-
-**A1. Rewrite `ROADMAP.md` as a queue.** Target ~110 lines, structured as:
-
-- *Preamble*: scope (counts only), the standing decisions, and what landed
-  recently with commit references rather than re-explanation.
-- *§1 Now* — the two or three things actually next, each ≤ 5 lines.
-- *§2 Soon* — real items with a use case, grouped, one line each.
-- *§3 Not doing, and why* — the list that stops items reappearing. This
-  section is load-bearing: it is what keeps the queue from re-growing.
-- *§4 Open questions* — genuine unknowns, unchanged in spirit.
-
-Drop from §3 the eleven items now fixed: the `cumulative_area` invariant, the
-`slow` marker, the README dashed line, the bare-`pytest` step, `mamba_env.yaml`
-drift, manifest provenance, `alternative="less"`, pandas, `allow_extra`,
-plotly's shared x axis, and `subset_log2_fc`'s missing interval. Drop the two
-`wade_from_matrix` items — the function is gone. Merge §5's plotting bullets
-into the visualization group and delete §5. Rewrite §6 to name CI as done and
-wheels/publishing as release-time.
-
-*Verify:* `grep -c` for each dropped item returns 0; `wc -l ROADMAP.md` ≈ 110.
-
-**A2. Move ROADMAP §2's narrative into `docs/scaling.md`.** The measurements
-(depth imbalance 1.7×, 18.8% of genes at the floor, 47% zeros, the artefact
-libraries) belong beside the other measured findings. ROADMAP keeps a ~12-line
-§1 entry pointing at them.
-
-*Verify:* every number in the moved text appears exactly once in the repo.
-
-**A3. Write `docs/plotting.md`.** The extension's own document:
-
-- The stance: **the results table is the interface.** Every statistic is in
-  `res.report()` / `write_results()`; plotting is a convenience, and exporting
-  to ggplot or seaborn is a first-class path, not a fallback.
-- The architecture: one pure-NumPy data layer (`gene_panels`, `volcano_data`,
-  `stages_data`, each with `.table()`), two thin renderers. Writing a third
-  renderer is ~100 lines against the data layer.
-- The three figures, what question each answers, and how to re-axis them
-  (`x=`, `y=`, `color=`).
-- What is *not* WADE's job: publication typesetting, arbitrary layouts.
-- The theme/palette contract, once B1 lands.
-
-**A4. README plotting section → pointer**, and update the documentation map in
-`README.md` and `docs/HANDOFF.md` to list `docs/plotting.md`.
+* `GenePanel` gains the `.table()` its two siblings already have — the numbers
+  behind the flagship figure, currently extractable only by hand.
+* One test that builds all three dataclasses and calls `.table()` on each,
+  asserting the arrays match the result's own columns.
+* `docs/plotting.md` already documents this seam; check its claims still hold
+  after the move and update the one code block if the import path shifts.
 
 ---
 
-## 3. Phase B — organization: plotting becomes a subpackage
+## Phase C — the visualization work
 
-**B1. Split `src/wade/plotting.py` (1,124 lines) into `src/wade/plotting/`.**
-The seams already exist in the file's own section comments:
+Independent items; land them separately. Each is cheaper after B.
 
-| New file | From (current lines) | Holds |
-|---|---|---|
-| `__init__.py` | 133–173, 624–740 | backend resolution (`available_backends`, `_resolve_backend`), the three `plot_*` dispatchers, and the data layer re-exported |
-| `theme.py` | 75–131 | colour tokens, fonts, axis labels, the column resolver — **and where dark mode and the palette knob land** |
-| `data.py` | 175–622 | `GenePanel`, `VolcanoData`, `StagesData` and their builders. Pure NumPy, no backend import |
-| `_plotly.py` | 742–… | the plotly renderer |
-| `_matplotlib.py` | remainder | the matplotlib renderer |
+### C1. Theme and palette tokens — do this first
 
-Why this and not "leave it and document it": the theme work in Phase C touches
-one file instead of grepping a 1,124-line module, the data layer's
-independence becomes structural instead of a comment, and the largest module
-in the package stops being the one that is not the method.
+Everything else in C renders through it.
 
-*Verify:* `tests/test_plotting.py` passes unchanged — 27 test functions,
-33 collected with parametrization — because they import
-`wade.plotting as P`, which a subpackage still resolves. `import wade` still imports
-neither plotly nor matplotlib (already pinned by
-`test_importing_wade_imports_neither_frame_library` and
-`test_importing_wade_costs_only_numpy`); no public name changes, so the
-diff is a move.
+* One dataclass of tokens (ink, muted, grid, axis, surface, case, control,
+  sequential scale, diverging scale, font), three built-ins: `"light"`
+  (today's), `"dark"`, `"high-contrast"`.
+* `theme=` on `plot_gene` / `plot_volcano` / `plot_stages`, accepting a name or
+  a token instance; a module-level default for a whole session.
+* plotly's hard-coded `plotly_white` template must follow the theme, or dark
+  mode is a light slab with dark points.
+* *Verify:* every built-in renders all three figures on both backends; a test
+  asserts no colour literal remains outside `theme.py`.
 
-**B2. Export the data layer.** `volcano_data`, `stages_data`, `gene_panels`,
-`GenePanel`, `VolcanoData`, `StagesData` become importable from
-`wade.plotting` explicitly, and `GenePanel` gains the `.table()` its two
-siblings have. This is the "plot it yourself" seam made real.
+### C2. Draw the bootstrap intervals
 
-*Verify:* a test that builds all three dataclasses and calls `.table()` on
-each with no backend installed.
+All five descriptors carry one and no figure shows any, so a subset resting on
+four affected samples looks exactly as firm as one resting on four hundred.
+Error bars on whichever axis holds a descriptor; a band in `plot_gene`. Draw
+nothing when `n_boot=0`.
 
----
+### C3. A driver figure
 
-## 4. Phase C — the visualization work
+The figure form of `subset_drivers` + `library_qc`: which samples are in the
+affected region, with their complexity and depth beside them. This is the check
+that reversed a tempting Ewing-sarcoma reading of the real data
+(`scaling.md` §7.2) and it should not be text-only. Show the gene's share of
+each driver's library — that is the number that separated the artefact from
+`ETV4`.
 
-Each item is independent and lands separately. Phase B first makes each
-cheaper.
+### C4. Optional per-gene metadata in figures and tables
 
-| Item | Size | Note |
-|---|---|---|
-| **C1. Theme + palette tokens** | medium | One token set, three built-ins (light / dark / high-contrast), `theme=` on every plot function and a module default. Dark mode is then a palette, not a feature. |
-| **C2. Draw the bootstrap intervals** | medium | Error bars on the volcano's y (or x, when the axis is a magnitude), a band in `plot_gene`. All five descriptors now carry intervals, so there is something to draw for whatever axis is selected. |
-| **C3. Driver figure for a gene** | medium | The figure form of `subset_drivers` + `library_qc`: which samples are in the affected region, and their complexity/depth beside them. This is the check that reversed the Ewing reading; it should not be text-only. |
-| **C4. Linked views (plotly)** | medium | Click a volcano point → its `plot_gene` panel. `go.FigureWidget` callback. **Caveat to document: needs a live kernel, so it does not survive into exported HTML.** |
-| **C5. A stage-1 figure** | small | `GeneDetail.cumulative_area` is stage 1's statistic and is drawn nowhere. |
-| **C6. Label de-collision** | small | Only worth doing after C1/C2; the current smear is worst exactly where p-values tie. |
+`WadeResult.gene_meta` is carried and read by nothing (Phase D). Let the
+display layer show it: gene symbol as the point label and in the hover, other
+columns on request. **No statistic may read it** — a test already asserts that
+adding metadata moves no number; keep that true.
 
----
+### C5. Linked views (plotly)
 
-## 5. Phase D — the remaining core items
+Click a volcano point, see that gene's panel. `go.FigureWidget` callback over
+the existing data layer. **Document the limitation**: needs a live kernel, so
+it does not survive into exported HTML.
 
-Short, because the audit's correctness half is done. Ordered by whether a use
-case exists today.
+### C6. A stage-1 figure
 
-| Item | Size | Use case |
-|---|---|---|
-| **D1. Stage-2 exceedance / refinement flags** | small | `limits.md` §5 makes a reading rule out of "is this gene *at* the floor" and it is only appliable to stage 1. `nexc`/`refined` are computed for stage 2 and thrown away — this is plumbing, not new work. |
-| **D2. Export the GPD-extrapolation flag** | small | Same fix; `refined_*` should reach the written table so a reader can tell a counted p-value from an extrapolated one. |
-| **D3. Combinatorial-floor helper** | small | The one check `limits.md` says to do *before* running. `permutation_space()` already does the restricted case; this is the `C(n1,k)/C(n,k)` sibling. |
-| **D4. Bootstrap `level=`** | small | Settable from `wade()`; `characterization_ci` already takes it. |
-| **D5. Missing-count errors say where** | small | Name the row/column instead of just the condition. |
-| **D6. Carry per-gene metadata (do not use it)** | small | `as_counts` keeps *numeric* leftover columns in `Counts.meta` and silently **drops string ones**, so a frame of `gene_id, gene_name, samples…` loses the symbol. WADE's core needs one id and nothing more, so this is only about *carrying*: keep every per-gene column, expose it on the result, and let the display layer optionally show it (Phase C). No statistic reads it. |
+`GeneDetail.cumulative_area` is stage 1's statistic and is drawn nowhere.
+
+### C7. Label de-collision
+
+Last, because C1/C2 change the geometry. The smear is worst where p-values tie,
+which is where real cohorts sit. `adjustText` only if an in-house approach
+fails — it would be a third optional dependency.
 
 ---
 
-## 6. Not doing, and why
+## Then: notebooks
 
-To be recorded in the rewritten ROADMAP so it stops resurfacing:
+Three deliverables, in this order, after C.
 
-- **A second chunked driver** for pre-normalized input — there is no
-  pre-normalized entry point any more.
-- **An API documentation build** — deferred to release (Phase E), not
-  abandoned. Twelve modules of essay-length docstrings; Sphinx earns its
-  keep when there is a published version to point at.
-- **featureCounts / MatrixMarket readers** — built when the data is in hand
-  and the shape is known, per the standing "polars can read it" decision.
-- **Drawing `GeneDetail.cumulative_area`** — superseded by C5, which does it
-  properly as a stage-1 figure rather than an extra line.
-- **`adjustText` as a dependency** — reconsider only if C6's own approach
-  fails.
-
----
-
-## 7. Decisions I need from you
-
-1. **B1, the subpackage split.** It is a pure move (no public name changes,
-   tests unchanged), but it touches the largest file in the package. Do it, or
-   leave `plotting.py` as one module and decouple by docs alone?
-2. **D6.** Widen the data boundary to carry string annotation columns, or
-   document the two-line polars join and close the item?
-3. **Phase order.** A → B → C → D as written, or pull D1–D3 (small, core,
-   correctness-adjacent) ahead of the visualization work?
-*(All four resolved — see the decisions at the top and §8.)*
+1. **`demo`** — small synthetic data, planted ground truth. The showcase and
+   gallery: a README in executable form, every claim checkable. Its job is to
+   answer "what does this tool do?" in one read.
+2. **`benchmark`** — the head-to-head, on simulated counts *and* a few real
+   datasets from the literature: COPA / OS / ORT / MOST / LSOSS as the
+   subset-detection competitors, t-test and Wilcoxon as floors, waddR as the
+   nearest Wasserstein relative. Where WADE's claim is tested against
+   alternatives rather than against itself.
+3. **`rna100k`** (exists) — manuscript material, not a demo. Relabel it as
+   such.
 
 ---
 
-## 8. Notebooks — three deliverables, not one
+## Not doing, and why
 
-Sequenced **after** all of the above, because each documents behaviour that
-should have stopped moving first.
-
-| Notebook | Data | Purpose |
-|---|---|---|
-| **`demo`** | small, synthetic, in-notebook | The showcase and gallery: a README in executable form. What the tool does, what each figure answers, planted ground truth so every claim is checkable. |
-| **`benchmark`** | simulated counts **plus a few real datasets from the literature** | The head-to-head: COPA / OS / ORT / MOST / LSOSS as the subset-detection competitors, t-test and Wilcoxon as floors, waddR as the nearest Wasserstein relative. This is where WADE's claim is tested against alternatives rather than against itself. |
-| **`rna100k`** (exists) | the real 31k × 83k cohort | Not a demo — it is manuscript material. Keep it as the real-data workbench and say so. |
+Mirrored in `ROADMAP.md` §4 so it survives this document's deletion: a second
+chunked driver, `cpm`/`rle` as functions, format readers before the data is in
+hand, gene metadata in the statistics, `adjustText` by default, publication
+typesetting.

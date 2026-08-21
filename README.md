@@ -296,7 +296,7 @@ Implemented and tested: the statistic, both stages, the characterization, the
 normalizers, permutation inference with GPD refinement and BH, Rust kernels
 for both permutation loops, the count-native subset stage (binomial thinning,
 the one-count pseudocount, bootstrap intervals), the plotting layer, and the
-data-in/results-out boundary. **694 tests, about 15 s.**
+data-in/results-out boundary. **694 tests, about 10 s.**
 
 At 20,000 genes, 100 v 100 and 2,000 permutations a full run takes about 17 s
 on a 16-core laptop (9.7 s with `thin=False`); the permutation loops, which
