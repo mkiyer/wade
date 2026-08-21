@@ -94,6 +94,15 @@ class WadeResult:
     p_subset: np.ndarray | None = None
     padj_subset: np.ndarray | None = None
 
+    #: Stage 2's exceedance count and GPD-refinement flag — the stage-1 pair
+    #: (``nexc_mean_shift`` / ``refined_mean_shift``) computed for the subset
+    #: test too. ``docs/limits.md`` §5 makes a reading rule out of these: a
+    #: gene *at* the resolution floor has not been measured there, it has been
+    #: censored there, and until now that rule could only be applied to
+    #: stage 1.
+    nexc_subset: np.ndarray | None = None
+    refined_subset: np.ndarray | None = None
+
     #: Permutation z-scores, ``(observed - mean(null)) / sd(null)`` per gene —
     #: the GSEA-NES analogue, for ranking past the p-value floor (see
     #: :func:`_perm_z`). ``z_mean_shift`` is NaN when there were no
@@ -109,6 +118,11 @@ class WadeResult:
     #: Sample labels, one per column of ``tpm`` — from the input frame, the
     #: ``sample_names`` argument, or positional.
     sample_names: np.ndarray | None = None
+
+    #: Per-gene metadata the input carried — a symbol, a biotype, coordinates.
+    #: **Read by nothing here.** It exists so figures and tables can optionally
+    #: show it (``docs/plotting.md``); dropping it would change no number.
+    gene_meta: dict = field(default_factory=dict)
 
     #: The pseudocount added before the log-ratio curve, per cell — one count
     #: in each sample's normalized units for :func:`wade` (``method.md``
@@ -209,6 +223,8 @@ class WadeResult:
         }
         if self.z_mean_shift is not None:
             cols["z_mean_shift"] = self.z_mean_shift
+        cols["nexc_mean_shift"] = self.nexc_mean_shift
+        cols["refined_mean_shift"] = self.refined_mean_shift
         if self.subset is not None:
             cols.update({
                 "subset_stat": self.subset.statistic,
@@ -220,6 +236,9 @@ class WadeResult:
             })
             if self.z_subset is not None:
                 cols["z_subset"] = self.z_subset
+            if self.nexc_subset is not None:
+                cols["nexc_subset"] = self.nexc_subset
+                cols["refined_subset"] = self.refined_subset
         for name, ci in (("affected_fraction", self.ci_affected_fraction),
                          ("direction", self.ci_direction),
                          ("subset_log2_fc", self.ci_subset_log2_fc),
@@ -383,7 +402,7 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
             alternative, keep_null, gene_names, tpm, jitter, pseudocount,
             n_boot, sample_names, condition_meta, max_probs,
             gene_chunk=None, stage1_stat=None, stage1="grid",
-            fit_backend="numpy", strata=None) -> WadeResult:
+            fit_backend="numpy", strata=None, gene_meta=None) -> WadeResult:
     """P-values, BH and the result object, from assembled per-gene arrays.
 
     Shared by the one-pass path (:func:`_run`) and the gene-chunked driver
@@ -410,11 +429,11 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
         z_mean = np.full(g, np.nan)
 
     p_subset = padj_subset = None
-    z_subset = None
+    z_subset = nexc_subset = refined_subset = None
     if sub is not None:
         # The subset statistic is already a maximum over widths, oriented by
         # `alternative` inside the scan, so its p-value is an upper-tail one.
-        p_subset, _, _ = perm_pvalues(
+        p_subset, nexc_subset, refined_subset = perm_pvalues(
             sub.statistic, sub.null, n_exc_min=n_exc_min, n_tail=n_tail,
             alternative="greater",
         )
@@ -433,8 +452,10 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
         stats=obs, tpm=tpm, jitter=jitter, perms=perms,
         null_mean_shift=null if keep_null else None,
         subset=sub, p_subset=p_subset, padj_subset=padj_subset,
+        nexc_subset=nexc_subset, refined_subset=refined_subset,
         z_mean_shift=z_mean, z_subset=z_subset,
-        cond=cond, sample_names=sample_names, pseudocount=pseudocount,
+        cond=cond, sample_names=sample_names, gene_meta=dict(gene_meta or {}),
+        pseudocount=pseudocount,
         ci_affected_fraction=ci.get("affected_fraction"),
         ci_direction=ci.get("direction"),
         ci_subset_log2_fc=ci.get("subset_log2_fc"),
@@ -483,7 +504,7 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
                   keep_null, gene_names, backend, subset, thin, pseudocount,
                   n_boot, sample_names, condition_meta, max_probs,
                   gene_chunk, stage1="grid", fit_backend="numpy",
-                  strata=None) -> WadeResult:
+                  strata=None, boot_level=0.95, gene_meta=None) -> WadeResult:
     """The gene-chunked driver — ``docs/scaling.md`` §2.2.
 
     **Bit-identical to the unchunked path**, by construction rather than by
@@ -593,7 +614,7 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
     if n_boot > 0 and sub is not None:
         ci = characterization_ci(tpm, cond, pseudocount=pc_full, n_boot=n_boot,
                                  rng=boot_rng, max_probs=max_probs,
-                                 gene_chunk=gene_chunk)
+                                 gene_chunk=gene_chunk, level=boot_level)
 
     return _finish(
         obs=obs, null=null, perms=perms, sub=sub, ci=ci, cond=cond,
@@ -603,7 +624,7 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
         sample_names=sample_names, condition_meta=condition_meta,
         max_probs=max_probs, gene_chunk=gene_chunk,
         stage1_stat=stage1_stat, stage1=stage1, fit_backend=fit_backend,
-        strata=strata,
+        strata=strata, gene_meta=gene_meta,
     )
 
 
@@ -637,6 +658,7 @@ def wade(
     fit_backend: str = "numpy",
     strata=None,
     allow_empty_samples: bool = False,
+    boot_level: float = 0.95,
 ) -> WadeResult:
     """Run WADE on a raw count matrix. The primary entry point.
 
@@ -689,9 +711,12 @@ def wade(
         units, before the log-ratio curve is taken (``§10.4``): a zero means
         "less than one", and without this the tie-breaking jitter turns it
         into a log-ratio of 7–10. Default one count; ``0`` disables.
+    boot_level
+        Coverage of the bootstrap intervals; ``0.95`` by default.
     n_boot
-        Bootstrap replicates for 95% intervals on ``affected_fraction``,
-        ``direction`` and ``log2_fc`` (``§10.5``); ``0`` (default) skips them.
+        Bootstrap replicates for intervals on ``affected_fraction``,
+        ``direction``, ``subset_log2_fc``, ``log2_fc`` and ``mean_shift``
+        (``§10.5``); ``0`` (default) skips them.
         Resampled within groups. A few hundred is enough; the cost is a few
         quantile grids per replicate.
     max_probs
@@ -810,7 +835,8 @@ def wade(
         subset=subset, thin=thin, pseudocount=pseudocount, n_boot=n_boot,
         sample_names=sample_names, condition_meta=cond_meta,
         max_probs=max_probs, gene_chunk=gene_chunk, stage1=stage1,
-        fit_backend=fit_backend, strata=strata)
+        fit_backend=fit_backend, strata=strata, boot_level=boot_level,
+        gene_meta=data.meta)
 
 def wade_contrast(
     counts,

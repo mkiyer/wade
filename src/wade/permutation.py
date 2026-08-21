@@ -38,7 +38,8 @@ except ImportError:                     # pragma: no cover
 
 __all__ = ["draw_perms", "validate_perms", "null_statistics",
            "subset_null_backend", "mean_diff_stat", "mean_diff_null",
-           "strata_indices", "permutation_space", "HAVE_RUST_KERNEL"]
+           "strata_indices", "permutation_space", "detectability_floor",
+           "HAVE_RUST_KERNEL"]
 
 #: Whether the compiled kernel was built and imported. The package is fully
 #: functional without it — the NumPy path is the correctness baseline and the
@@ -106,6 +107,44 @@ def permutation_space(cond: np.ndarray, strata=None) -> dict:
         "p_floor": 10.0 ** (-log10_space),
         "uninformative_strata": uninformative,
     }
+
+
+def detectability_floor(n_case: int, n_ctrl: int, k: int) -> float:
+    """The smallest p-value any label-permutation test can return for a signal
+    carried by ``k`` samples — ``docs/limits.md`` §1.
+
+    Shuffling labels puts all ``k`` affected samples in one group with
+    probability ``C(n_case, k) / C(n_case + n_ctrl, k)``, and **no permutation
+    test can report a p-value below that**, whatever the effect size, the
+    statistic or the number of permutations. Where this exceeds your alpha the
+    signal is undetectable by this family of methods, and that is a property of
+    the *design*: it is why a study with 18 controls cannot find a 5% subtype
+    however dramatic the subtype is.
+
+    ``limits.md`` tells the reader to check this before running anything, so
+    here it is as one call instead of a formula to transcribe:
+
+    >>> round(detectability_floor(77, 18, 15), 6)
+    0.031963
+
+    It is driven by *imbalance* rather than size, so balancing the groups buys
+    far more than adding cases — the same 95 samples, split evenly:
+
+    >>> round(detectability_floor(48, 47, 15), 8)
+    9.9e-06
+    """
+    from math import comb
+
+    n_case, n_ctrl, k = int(n_case), int(n_ctrl), int(k)
+    if min(n_case, n_ctrl) < 1:
+        raise ValueError("both groups must be non-empty")
+    if not 1 <= k <= n_case + n_ctrl:
+        raise ValueError(f"k must be between 1 and n_case + n_ctrl; got {k}")
+    if k > n_case:
+        # The affected samples cannot all land in the case group at all, so
+        # that configuration has probability zero and imposes no floor.
+        return 0.0
+    return comb(n_case, k) / comb(n_case + n_ctrl, k)
 
 
 def draw_perms(

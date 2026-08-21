@@ -95,9 +95,15 @@ def test_as_counts_id_column_auto_name_index_or_none(frame, matrix):
         as_counts(frame, id_column="nope")
 
 
-def test_as_counts_refuses_a_non_numeric_leftover_and_keeps_a_numeric_one(matrix):
+def test_as_counts_refuses_a_non_numeric_leftover_and_carries_every_column(matrix):
     """The featureCounts layout: Chr/Strand must not be read as expression, and
-    Length must land where the normalizer is looked up."""
+    Length must land where the normalizer is looked up.
+
+    Once ``sample_columns`` says which columns are counts, **every** leftover
+    per-gene column is carried — string ones included, because a symbol is what
+    makes a ranked table readable. No statistic reads any of it; only a numeric
+    column can serve as the normalizer.
+    """
     fc = pl.DataFrame({
         "Geneid": GENES, "Chr": ["chr1"] * G, "Start": np.arange(G),
         "Strand": ["+"] * G, "Length": np.arange(100, 100 + G, dtype=float),
@@ -107,7 +113,10 @@ def test_as_counts_refuses_a_non_numeric_leftover_and_keeps_a_numeric_one(matrix
         as_counts(fc)
     c = as_counts(fc, sample_columns=SAMPLES)
     assert c.shape == (G, N)
-    assert set(c.meta) == {"Start", "Length"}       # numeric leftovers kept
+    assert set(c.meta) == {"Chr", "Start", "Strand", "Length"}   # all of them
+    assert list(c.meta["Chr"][:2]) == ["chr1", "chr1"]
+    with pytest.raises(TypeError, match="not numeric"):
+        c.normalizer("Chr")
     np.testing.assert_allclose(c.normalizer("Length"), np.arange(100, 100 + G))
     with pytest.raises(KeyError, match="no column 'Width'"):
         c.normalizer("Width")
@@ -144,10 +153,16 @@ def test_as_counts_validates_labels_and_values(matrix):
         as_counts(matrix, sample_names=["x"] * N)
     with pytest.raises(ValueError, match="one entry per gene"):
         as_counts(matrix, gene_names=GENES[:-1])
-    with pytest.raises(ValueError, match="non-finite"):
+    # A bad count is located, not merely reported: a blank in a big file is
+    # the ordinary cause and "contains non-finite values" leaves you hunting.
+    with pytest.raises(ValueError, match=r"non-finite.*gene0/sample1"):
         as_counts(np.array([[1.0, np.nan]]))
-    with pytest.raises(ValueError, match="non-negative"):
-        as_counts(np.array([[1.0, -2.0]]))
+    with pytest.raises(ValueError, match=r"negative.*g1/S0"):
+        as_counts(np.array([[1.0, 2.0], [-2.0, 3.0]]),
+                  gene_names=["g0", "g1"], sample_names=["S0", "S1"])
+    # ... and no value is substituted, because a missing count is not a zero
+    with pytest.raises(ValueError, match="not a zero"):
+        as_counts(np.array([[1.0, np.nan]]))
     with pytest.raises(ValueError, match="2-D"):
         as_counts(np.arange(5.0))
 

@@ -9,7 +9,8 @@ with the statistic. What this module does instead:
   in (NumPy array, polars or pandas DataFrame, any sparse matrix with
   ``.toarray()``) and turn it into the one shape the statistic uses: a dense
   ``genes x samples`` float64 array with gene and sample labels beside it.
-  Labels are optional; the orientation is not guessed.
+  Labels are optional; the orientation is not guessed. Other per-gene columns
+  are carried in ``Counts.meta`` and read by no statistic.
 * :func:`condition` — turn a **sample metadata** table into a case/control
   assignment, and align it to the matrix's samples *strictly*. This is the
   one genuinely error-prone step in the whole area and the reason the helper
@@ -60,8 +61,11 @@ class Counts:
     values: np.ndarray                  # (genes, samples) float64
     gene_names: np.ndarray              # (genes,) object
     sample_names: np.ndarray            # (samples,) object
-    #: Numeric non-sample columns of an input frame, per gene — where
-    #: ``normalizer="Length"`` is looked up.
+    #: Every non-sample column of an input frame, per gene — a symbol, a
+    #: biotype, a length. **No statistic reads any of it**: WADE's core needs
+    #: one gene id and nothing more. It is carried so the display layer can
+    #: optionally show it (``docs/plotting.md``) and so
+    #: ``normalizer="Length"`` has somewhere to look.
     meta: dict = field(default_factory=dict)
 
     @property
@@ -69,14 +73,26 @@ class Counts:
         return self.values.shape
 
     def normalizer(self, column: str) -> np.ndarray:
-        """The per-gene vector held in ``meta`` under ``column``."""
+        """The per-gene **numeric** vector held in ``meta`` under ``column``.
+
+        ``meta`` carries every per-gene column the input had, including string
+        ones (a symbol, a biotype); only a numeric column can be a normalizer,
+        so naming a non-numeric one raises here rather than failing later
+        inside the arithmetic.
+        """
         if column not in self.meta:
             raise KeyError(
                 f"no column {column!r} to use as a normalizer; the matrix carries "
                 f"{sorted(self.meta) or 'no metadata columns'}. Pass the values as an "
                 f"array instead, or name a column that is in the counts frame."
             )
-        return self.meta[column]
+        col = np.asarray(self.meta[column])
+        if not _numeric(col):
+            raise TypeError(
+                f"column {column!r} is not numeric, so it cannot be a normalizer; "
+                f"it is carried as per-gene metadata instead."
+            )
+        return col
 
 
 def _is_frame(obj) -> bool:
@@ -150,8 +166,11 @@ def _from_frame(frame, id_column, sample_columns, exclude=()):
         values = np.asarray(frame[sample_columns].to_numpy(), dtype=np.float64)
     except (TypeError, KeyError, AttributeError):
         values = np.column_stack([_column(frame, c) for c in sample_columns]).astype(np.float64)
-    meta = {c: _column(frame, c) for c in rest
-            if c not in sample_columns and _numeric(_column(frame, c))}
+    # Every leftover column is carried, string ones included: WADE's core reads
+    # one gene id and nothing else, but a symbol is what makes a ranked table
+    # readable, so dropping it silently was the wrong default. `normalizer=` can
+    # only name a numeric one, which `Counts.normalizer` enforces.
+    meta = {c: _column(frame, c) for c in rest if c not in sample_columns}
     return values, gene_names, np.asarray(sample_columns, dtype=object), meta
 
 
@@ -247,13 +266,38 @@ def as_counts(
             raise ValueError(f"duplicate {label} names: {dup[:8]}"
                              + (f" and {len(dup) - 8} more" if len(dup) > 8 else ""))
 
-    if not np.all(np.isfinite(values)):
-        raise ValueError("the count matrix contains non-finite values")
-    if np.any(values < 0):
-        raise ValueError("counts must be non-negative")
+    _locate_bad_counts(values, found_genes, found_samples)
 
     meta = {k: np.asarray(v) for k, v in meta.items() if len(v) == g}
     return Counts(values=values, gene_names=found_genes, sample_names=found_samples, meta=meta)
+
+
+def _locate_bad_counts(values, gene_names, sample_names) -> None:
+    """Refuse a non-finite or negative count, **and say which cell**.
+
+    A blank in a large counts file is the ordinary cause, and "the matrix
+    contains non-finite values" leaves the caller to find it. There is no
+    handling policy on offer because there is no good default: a missing count
+    is not a zero (a zero is an observation), so substituting one would invent
+    data. Naming the cell is the help WADE can honestly give.
+    """
+    bad = ~np.isfinite(values)
+    what = "non-finite (NaN or inf)"
+    if not bad.any():
+        bad = values < 0
+        what = "negative"
+        if not bad.any():
+            return
+    rows, cols = np.nonzero(bad)
+    where = ", ".join(f"{gene_names[i]}/{sample_names[j]}"
+                      for i, j in zip(rows[:5].tolist(), cols[:5].tolist()))
+    raise ValueError(
+        f"{rows.size} count(s) are {what}: {where}"
+        + (f" and {rows.size - 5} more." if rows.size > 5 else ".")
+        + " A missing count is not a zero — a zero is an observation — so WADE "
+          "will not substitute one. Drop the gene, drop the sample, or decide "
+          "what the value should be."
+    )
 
 
 def _duplicates(arr: np.ndarray) -> list:
@@ -391,11 +435,16 @@ def condition(
 #: the raw p-value. ``z_*`` are the permutation z-scores (the GSEA-NES
 #: analogue) — the ranking that keeps working when p-values pile up at the
 #: resolution floor; ``subset_log2_fc`` is the subset's magnitude, the log2
-#: fold change within the affected fraction.
+#: fold change within the affected fraction. ``refined_*`` says whether that
+#: stage's p-value was **counted from permutations or extrapolated** by the
+#: GPD tail fit, which is the distinction that matters most for the genes at
+#: the floor (``docs/limits.md`` §5).
 RESULT_COLUMNS = (
     "gene", "case_mean", "ctrl_mean", "mean_shift", "log2_fc",
     "p_mean_shift", "padj_mean_shift", "neglog10_p_mean_shift", "z_mean_shift",
+    "refined_mean_shift",
     "subset_stat", "p_subset", "padj_subset", "neglog10_p_subset", "z_subset",
+    "refined_subset",
     "affected_fraction", "subset_log2_fc", "direction", "w1",
 )
 

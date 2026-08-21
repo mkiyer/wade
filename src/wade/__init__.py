@@ -52,8 +52,9 @@ from .io import (
     write_results,
 )
 from .normalize import draw_jitter, library_sizes, tpm_like
-from .permutation import (draw_perms, mean_diff_null, mean_diff_stat,
-                          null_statistics, permutation_space, strata_indices)
+from .permutation import (detectability_floor, draw_perms, mean_diff_null,
+                          mean_diff_stat, null_statistics, permutation_space,
+                          strata_indices)
 from .plotting import plot_gene, plot_stages, plot_volcano
 from .pvalues import ALTERNATIVES, GPDFit, bh_adjust, gpd_tail_p, perm_pvalues
 from .quantiles import probability_grid, type7_quantiles
@@ -89,6 +90,7 @@ __all__ = [
     "bridge",
     "characterization_ci",
     "condition",
+    "detectability_floor",
     "direction",
     "draw_jitter",
     "fit_fold_change",

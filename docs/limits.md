@@ -24,8 +24,20 @@ statistic or the permutation count. Where the floor exceeds your alpha, the
 signal is undetectable by this family of methods. Check it for your design
 before you run anything.
 
+`wade.detectability_floor(n_case, n_ctrl, k)` computes it, so the check is one
+call rather than a formula to transcribe:
+
+```python
+>>> wade.detectability_floor(77, 18, 15)      # 15 affected of 77 cases
+0.031963032251420324
+>>> wade.detectability_floor(48, 47, 15)      # the same 95 samples, balanced
+9.904929906140583e-06
+```
+
 Both are properties of the *design*. They are the reason a study with 18
-controls cannot find a 5% subtype, no matter how dramatic the subtype is.
+controls cannot find a 5% subtype, no matter how dramatic the subtype is — and
+the second call above is why **balancing the groups buys more than adding
+cases**.
 
 ---
 
@@ -230,9 +242,21 @@ not tied in strength; they are both unresolved.
 
 **The reading rule.** Treat the floor as a censoring point. If ranking genes by
 p-value puts several at the floor, break the tie with the effect size and the
-characterization, not by pretending the p-values differ. If you need to resolve
-below it, the only remedy is more permutations — and the floor moves as `1/B`,
-so an order of magnitude costs an order of magnitude.
+characterization, not by pretending the p-values differ. `subset_log2_fc`,
+`log2_fc` and the permutation z-scores (`z_mean_shift`, `z_subset`) exist for
+exactly this, and on a large cohort they are the operative outputs rather than
+a fallback — see `scaling.md` §7.1, where a real contrast put 18.8% of genes at
+the floor. If you need to resolve *below* it, the only remedy is more
+permutations — and the floor moves as `1/B`, so an order of magnitude costs an
+order of magnitude.
+
+**Which p-values were extrapolated is reported.** `refined_mean_shift` and
+`refined_subset` (both in the written table) say whether a stage's p-value was
+counted from permutations or read off the GPD tail fit. That distinction
+matters most for exactly the genes this section is about, and it is worth
+knowing that refinement can move a p-value in **either** direction: it replaces
+a coarse count with a model estimate, so a refined p-value is not necessarily
+smaller than an unrefined one.
 
 A port that "improves" the floor by returning smaller values has removed an
 honesty constraint, not added resolution.
