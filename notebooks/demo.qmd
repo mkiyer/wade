@@ -1,0 +1,541 @@
+---
+title: "WADE: a guided tour"
+subtitle: "What it does, how to run it, and how to read what comes back"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-expand: 2
+    embed-resources: true
+    fig-dpi: 150
+    code-fold: false
+    code-tools: true
+  typst:
+    toc: true
+    papersize: us-letter
+jupyter: python3
+execute:
+  warning: false
+  cache: false
+---
+
+<!--
+OUTLINE ONLY — 2026-08-21.
+Structure and intent are settled; no data or analysis code is written yet.
+Every `TODO` marks a cell to be filled in. The document renders as-is, so the
+toolchain stays proven while the content is being written.
+
+Decisions this file encodes, so they are not re-litigated:
+
+* **Quarto `.qmd`, jupyter engine** — plain text (clean diffs, no output blobs
+  in git), one toolchain shared with `rna100k.qmd`, and both render targets
+  work today: `--to html` (5.7 s, self-contained, plotly stays interactive with
+  no kernel) and `--to typst` (Quarto bundles Typst 0.15.1, so no LaTeX
+  install; plotly figures auto-convert to static via kaleido).
+* **`jupyter: python3`** resolves to the `wade` env on this machine. Do not
+  pin a named kernel: Quarto also sees a `hulkrna-devel` kernel from another
+  env whose launcher is missing, and a named kernel would make the notebook
+  non-portable for anyone else running it.
+* **Interactivity: plotly's own, plus `panel-tabset`.** The rendered HTML keeps
+  hover, zoom, pan and WebGL on every plotly figure with no kernel. Exploring
+  gene by gene is a Quarto `.panel-tabset` of pre-rendered matplotlib panels —
+  Quarto-native, zero hand-written JavaScript, beautiful in HTML, and it
+  degrades to sequential sections in the PDF so nothing is lost there.
+  `plot_linked` appears once, in a section marked as live-kernel-only.
+* **§7 is a signpost.** The head-to-head against COPA / OS / ORT / MOST /
+  LSOSS, t-test, Wilcoxon and waddR is `notebooks/benchmark.qmd`'s job. This
+  notebook is a **user guide**.
+-->
+
+::: {.callout-note appearance="simple"}
+This notebook is the guided tour. It runs on small synthetic data with
+**planted ground truth**, so every claim below is checkable against something
+known — and it is meant to be re-run: `quarto render notebooks/demo.qmd`, or
+open it in VS Code or Jupyter and step through the cells with a live kernel.
+
+For what WADE *cannot* do, read [`docs/limits.md`](../docs/limits.md) before
+using it on your own data. For the method's derivation,
+[`docs/method.md`](../docs/method.md).
+:::
+
+---
+
+# 1. What WADE is for
+
+*Intent: the problem, in the reader's language, before any machinery.*
+
+Two paragraphs and one figure's worth of motivation:
+
+- The standard differential-expression question is *did the average move?* That
+  question has an answer for every gene, and for a subset of samples it is
+  usually **no** — a gene elevated eightfold in 5% of cases barely moves the
+  mean of 300.
+- The question WADE adds is *did the **distribution** change, and in what
+  shape?* A global two-fold shift and a fifteen-percent subset at eightfold can
+  have the **same log₂ fold change**. They are different biology. WADE reports
+  which one you are looking at.
+- Where this matters: rare molecular subtypes, fusion-positive subsets,
+  contaminating cell populations, dosage effects present in some patients only.
+
+`TODO` — one small figure here, before any API is introduced: two genes with
+the same fold change and different shape. Reuses the `plot_gene` panel from §6
+but with no code shown (`echo: false`), purely as motivation.
+
+::: {.callout-tip appearance="simple"}
+## The one-sentence version
+WADE asks whether two groups' **whole distributions** differ, splits the answer
+into *a shift of everything* versus *a change in some of them*, and reports the
+two separately with a size and a direction for the second.
+:::
+
+---
+
+# 2. The method, in brief
+
+*Intent: enough to read the output honestly, and no more. Derivation, proofs
+and the scale/counts analysis belong to the manuscript and its supplement —
+[`docs/method.md`](../docs/method.md) is the working version.*
+
+### 2.1 One curve
+
+`TODO` — the log-ratio curve `R(p) = log₂ Q_case(p) − log₂ Q_ctrl(p)` over the
+quantile grid, in three sentences and a schematic:
+
+- **flat** at `c` → a global fold change of `2^c`;
+- **at zero, then climbing** near `p = 1` → a subset of cases expressing higher;
+- **dipping** near `p = 0` → a subset expressing lower.
+
+### 2.2 Two stages, reported separately
+
+| stage | the question | the statistic | what it is compared against |
+|---|---|---|---|
+| 1 — mean shift | did the average move? | area between the quantile functions | label permutation |
+| 2 — subset | is the difference confined to some samples? | departure of `R(p)` from flat | permutation **under the fitted global shift** |
+
+Two points the reader needs and cannot guess:
+
+- **Stage 2's null is not "no difference"** — it is *the global shift this gene
+  actually has*. That is what makes "a subset, on top of a shift" a meaningful
+  finding (`method.md` §3).
+- **They are never combined.** No pooled p-value, no categorical label. Two
+  numbers, read together — §6.3 draws the four combinations.
+
+### 2.3 Two descriptors
+
+- `affected_fraction` — the effective fraction of samples that differ. Exactly
+  `π` for a clean subset of size `π`, exactly `1.0` for a global change.
+- `direction` — `+1` all up, `−1` all down, `0` two-sided (a spread change, or
+  some up and some down in equal measure).
+
+### 2.4 Counts, not a normalized matrix
+
+`TODO` — brief, and it explains an API constraint the reader will hit
+immediately: WADE takes **raw counts**. The continuity jitter needs count
+precision, and stage 2's null is built by *binomial thinning of reads*, which a
+pre-normalized matrix cannot reproduce. There is deliberately no entry point
+for one (`method.md` §10.3).
+
+---
+
+# 3. Installation
+
+*Intent: shortest path to a working import, and an honest statement of what is
+optional.*
+
+```{python}
+#| label: install-note
+#| eval: false
+# TODO — the real commands. Sketch:
+#   conda create -n wade python=3.12 numpy && conda activate wade
+#   pip install wade                      # statistic only: one dependency
+#   pip install 'wade[plot]'              # + plotly and matplotlib
+#   pip install 'wade[io]'                # + polars, for to_frame/write_results
+#   pip install 'wade[linked]'            # + anywidget, for plot_linked
+```
+
+`TODO` — a table of what each extra buys, and the one rule worth stating up
+front: **the statistic has exactly one dependency, NumPy.** Both plotting
+backends are imported *inside* the plotting functions, so `import wade` pulls
+in neither. Everything below except the figures runs on a bare install.
+
+```{python}
+#| label: versions
+# TODO — print wade.__version__, numpy, and which optional pieces resolved,
+# so a reader comparing their output against this page knows what produced it.
+```
+
+---
+
+# 4. How to run WADE
+
+*Intent: the whole API in one screen. A reader who stops here should still be
+able to use the tool.*
+
+```{python}
+#| label: how-to
+#| eval: false
+# TODO — the canonical call, annotated line by line.
+#
+# res = wade.wade(
+#     counts,              # (genes x samples) RAW counts: array, DataFrame, or sparse
+#     normalizer,          # per-gene: effective length, intron count, or 1.0 for CPM
+#     cond,                # 1 = case, 0 = control
+#     nperms=2000,         # permutations; sets the p-value floor at 1/(B+1)
+#     n_boot=200,          # bootstrap intervals for the five descriptors
+#     seed=1,              # everything is reproducible from this
+#     gene_names=...,      # optional; positional if omitted
+# )
+```
+
+`TODO` — then, briefly:
+
+- **the arguments that matter and why**, not all of them: `nperms` (it sets the
+  resolution floor, not just the runtime), `normalizer` (the one normalizer —
+  CPM is `normalizer=1.0`, other size factors go in via `lib_sizes=`),
+  `alternative`, `n_boot`.
+- **getting data in**: `wade.as_counts` accepts arrays, polars/pandas frames
+  and `.toarray()`-able sparse; `wade.condition` builds `cond` from sample
+  metadata with strict alignment. **WADE reads no files** — your reader reads,
+  by decision (`ROADMAP.md`).
+- **getting results out**: `res.report()`, `res.to_frame()`,
+  `wade.write_results(res, "out.tsv")` with a JSON manifest.
+- a pointer to `wade.detectability_floor()` as the pre-flight check:
+  *is a subset of this size even findable at this sample size?*
+
+---
+
+# 5. The simulated dataset
+
+*Intent: the reader must know exactly what is planted before reading any
+result, so that every number afterwards is checkable rather than asserted.*
+
+### 5.1 What is in it
+
+Negative-binomial counts — dispersion 0.1, per-gene mean drawn log-uniformly
+from 1 to 1000 counts so the panel spans the range where the log scale is
+noise-dominated as well as the range where it is not. **300 case vs 300
+control**, `B = 2000`, `n_boot = 200`.
+
+| class | genes | what is planted | what WADE should say |
+|---|---|---|---|
+| null | 3,000 | nothing | neither stage significant |
+| global 2× | 15 | every case doubled | stage 1 only; `affected_fraction ≈ 1` |
+| subset 15% @ 8× | 15 | 45 of 300 cases at 8× | **both** stages; `affected ≈ 0.15` |
+| subset 5% @ 8× | 15 | 15 of 300 cases at 8× | stage 2; near the combinatorial floor |
+| two-sided | 15 | half the cases up, half down | stage 2 only; `direction ≈ 0` |
+| subset 5% down | 15 | 15 of 300 cases at ⅛× | stage 2; `direction ≈ −1` |
+
+The last two are the cases the README's figures do not cover, and they are the
+ones that exercise `direction` and fill the *distributional change, no net mean
+shift* quadrant in §6.3.
+
+::: {.callout-important appearance="simple"}
+## Why the null genes outnumber the signal genes 40 to 1
+Library-size normalization divides every gene by a column total that **every
+gene contributes to**, so a matrix with too much signal produces nonsense null
+genes. The load-bearing quantity is the signal's share of the **library mass**,
+not of the gene count: a first version of the README's figure had 45 signal
+genes in 645 — 7% of genes, 6.6% of mass — and **186 of 600 null genes cleared
+BH** purely because the case libraries had inflated.
+
+`TODO` — compute and print this dataset's actual signal share of mass, and the
+null genes' median `log2_fc`, and assert both are small. It is a cliff, not a
+slope (`docs/limits.md`, `docs/HANDOFF.md` §3).
+:::
+
+### 5.2 Generating it
+
+```{python}
+#| label: simulate
+# TODO — the generator. Deliberately in the notebook rather than imported, so a
+# reader can see and change exactly what is planted.
+#
+# tools/make_readme_figures.py already generates the first four classes and the
+# README quotes its numbers; the two new classes extend it. Decide while
+# writing whether to import from there (numbers cross-check against the README
+# for free) or to inline it (the notebook stays self-contained). Leaning
+# inline, with a comment naming the tool as the origin.
+```
+
+```{python}
+#| label: load
+# TODO — and separately, how to load YOUR data, which is what a reader
+# actually needs: a polars frame with a gene_id column and one column per
+# sample -> wade.as_counts(frame, sample_columns=...), plus wade.condition()
+# from a sample-metadata frame. Show the strict-alignment error too — it names
+# the offenders, and that is a feature.
+```
+
+---
+
+# 6. Running WADE, and reading what comes back
+
+*Intent: the heart of the notebook. This is the section a user returns to.*
+
+### 6.1 The run
+
+```{python}
+#| label: run
+# TODO — one call, timed. Print the shape, the realized grid size m, and the
+# elapsed time so §8's numbers have a reference point on the reader's machine.
+```
+
+### 6.2 The results table, column by column
+
+```{python}
+#| label: results-table
+# TODO — res.to_frame(), the planted genes first, then a few nulls.
+```
+
+`TODO` — a table explaining all 20 written columns, grouped so it can be
+skimmed. The grouping is the point:
+
+| group | columns | what to do with them |
+|---|---|---|
+| identity | `gene` | the one column the core needs |
+| expression | `case_mean`, `ctrl_mean` | context, not evidence |
+| stage 1 | `mean_shift`, `log2_fc`, `p_mean_shift`, `padj_mean_shift`, `neglog10_p_mean_shift`, `z_mean_shift`, `refined_mean_shift` | did the average move |
+| stage 2 | `subset_stat`, `p_subset`, `padj_subset`, `neglog10_p_subset`, `z_subset`, `refined_subset` | is it confined to some samples |
+| shape | `affected_fraction`, `subset_log2_fc`, `direction` | **what kind** of difference |
+| other | `w1` | reported; nothing consumes it |
+
+Four points to make explicitly, because each is a way to misread the table:
+
+1. **`log2_fc` is the whole gene's fold change; `subset_log2_fc` is the
+   affected part's.** For a 5% subset these differ by a lot, and the second is
+   the one a concentrated finding should be read on.
+2. **`z_mean_shift` / `z_subset` are for *ranking*, never for a p-value.** They
+   are the observed statistic against its own permutation null — the GSEA-NES
+   analogue. Do not push them through a normal CDF.
+3. **`refined_*` says the p-value came from the GPD tail fit**, not from
+   counting permutations. A gene *at* the floor `1/(B+1)` has not been measured
+   there, it has been censored there (`limits.md` §5).
+4. **`padj` is BH within each stage separately.** There is no combined test.
+
+`TODO` — then verify the planted truth: recover `affected_fraction` for each
+class and check it lands on what was planted (expect ≈ 1.0, 0.15, 0.05, and
+`direction` ≈ 0 and −1 for the last two). This is the notebook's central claim
+and it should be an assertion, not a paragraph.
+
+### 6.3 The figures
+
+Each answers one question. Overview figures are **plotly** — the hover carries
+the gene name and every statistic, and that survives into this page with no
+kernel. Per-gene panels are **matplotlib**, which is the publication path:
+vector PDF/SVG with nothing but the library.
+
+#### Which genes? — `plot_volcano`
+
+```{python}
+#| label: fig-volcano
+# TODO — plot_volcano(res, stage="both", label=..., meta=...). Hover a point.
+# Say what the colour means (affected_fraction on the sequential ramp: dark is
+# a subset, light is everything) and why the x axis is log2_fc and never
+# mean_shift, which is in TPM-like units and would collapse the cloud to a line.
+```
+
+#### What kind of difference? — `plot_stages`
+
+```{python}
+#| label: fig-stages
+# TODO — plot_stages(res). The four quadrants ARE the reading table, and this
+# dataset now has a gene class in each of them, including the upper-left that
+# the README's dataset leaves thin. Print .counts() beside it.
+```
+
+#### What does this gene look like? — `plot_gene`
+
+The flagship figure, and the one that makes the method legible. Publication
+quality, so: matplotlib.
+
+::: {.panel-tabset}
+
+```{python}
+#| label: fig-gene-tabs
+#| output: asis
+# TODO — one tab per planted class (6 tabs), each a full plot_gene panel with
+# cumulative_area=True. Rendered with matplotlib at fig-dpi 150.
+#
+# This is the kernel-free "explore gene by gene": Quarto's own .panel-tabset,
+# no JavaScript written here, and it degrades to sequential sections in the
+# PDF so the static reader loses nothing.
+#
+# for label, gene in PLANTED.items():
+#     print(f"\n## {label}\n")
+#     ... savefig ... print(f"![]({path})\n")
+```
+
+:::
+
+`TODO` — beneath the tabs, how to read the panel, in the order the eye moves:
+the log-ratio curve against the dashed **fitted global shift** (the null stage
+2 argues against); the shaded band showing where the affected region's edge
+lies, from the bootstrap; the cumulative-area row, which is **stage 1's
+statistic accumulating** and whose last point *is* `mean_shift`; and the
+quantile functions, which are the raw evidence the curve above is a ratio of.
+
+#### Should I believe it? — `plot_drivers`
+
+```{python}
+#| label: fig-drivers
+# TODO — plot_drivers(res, gene, counts) on a planted subset gene.
+#
+# This is the section that keeps the notebook honest, and it needs a REAL
+# cautionary example, not just the clean case: plant a low-complexity library
+# (half the genes zeroed, mass piled into a handful) and show that a gene it
+# happens to dominate reads as a convincing subset — and that the figure gives
+# it away, because the driver's complexity sits far below the cohort and the
+# gene takes a large share of its library. On real plasma cfRNA that pattern
+# topped the subset ranking of thousands of genes at once and produced a
+# thoroughly convincing false story (docs/scaling.md §7.2).
+```
+
+#### Both backends say the same thing
+
+```{python}
+#| label: fig-backends
+# TODO — the same figure twice, backend="plotly" and backend="matplotlib",
+# side by side (::: {layout-ncol=2}). Demonstrates the layer's promise rather
+# than asserting it, and shows the reader they can choose.
+```
+
+#### Themes
+
+```{python}
+#| label: fig-themes
+# TODO — one figure in "light", "dark" and "high-contrast", and the
+# dataclasses.replace() recipe for a lab palette. Brief; it is a knob, not a
+# concept.
+```
+
+### 6.4 Live exploration (needs a running kernel)
+
+::: {.callout-warning appearance="simple"}
+The cell below returns a `plotly` **FigureWidget**, and a widget's click
+handler runs in *your Python kernel*. It works in Jupyter, JupyterLab, VS Code
+and Colab. In this rendered page it is a static picture of one gene — nothing
+is lost, but nothing is linked either. Open the notebook to use it.
+:::
+
+```{python}
+#| label: fig-linked
+# TODO — wade.plot_linked(res, "subset", label=8, meta=...). Needs
+# `pip install 'wade[linked]'` (anywidget). One sentence on when to reach for
+# it versus the tabset above.
+```
+
+### 6.5 The table is the interface
+
+```{python}
+#| label: export
+# TODO — write_results + the manifest, to_frame(), and .table() on a figure's
+# dataclass. Then the point: every number these figures draw is in the result,
+# so exporting and plotting in ggplot loses nothing. That is a first-class
+# path, not a fallback (docs/plotting.md).
+```
+
+---
+
+# 7. WADE versus other methods
+
+*Intent: a signpost, not a benchmark. Keeping the comparison out of the user
+guide is deliberate — a fair head-to-head needs power curves, FDR calibration
+under the null, and several real datasets, and that is a different document.*
+
+`TODO` — a short section:
+
+- **what WADE is closest to**: `waddR` (Wasserstein two-sample), and the
+  outlier/subset detectors COPA, OS, ORT, MOST, LSOSS.
+- **what it adds over them**, in one line each, and where a plain t-test or
+  Wilcoxon is the better tool (a global shift — WADE's stage 1 is not trying to
+  beat a t-test at the t-test's own question).
+- a pointer: **the head-to-head is [`benchmark.qmd`](benchmark.qmd)** — the
+  full competitor set on simulated counts *and* literature datasets, with power
+  and calibration, which is where WADE's claim is tested against alternatives
+  rather than against itself.
+
+---
+
+# 8. Performance and scale
+
+*Intent: what a run costs, what to turn on when it gets big, and what breaks
+first. Measurements live in [`docs/scaling.md`](../docs/scaling.md); this
+section quotes and links, it does not re-derive.*
+
+### 8.1 What this notebook's run cost
+
+```{python}
+#| label: perf-local
+# TODO — the timing and peak RSS from §6.1, so the reader has one measured
+# point on their own machine before reading anyone else's numbers.
+```
+
+### 8.2 Where the time goes
+
+`TODO` — a table, quoting `docs/scaling.md`:
+
+- the two permutation loops are almost all of it, and both have Rust kernels;
+- 20,000 genes × (100 v 100) × 2,000 permutations ≈ 17 s on a 16-core laptop;
+- the measured 30,000 × 80,000 target: **29.7 min at 55.6 GB peak**.
+
+### 8.3 The knobs, and which of them change an answer
+
+This is the part worth being precise about, because two of them do.
+
+| knob | what it buys | changes an answer? |
+|---|---|---|
+| `gene_chunk` | memory: 5,000 genes went 7.2 → 3.7 GB | **no** — bit-identical, asserted with `assert_array_equal` |
+| `threads` (bootstrap) | 19.7 → 4.0 s at 20k × (100 v 100) | **no** — bit-identical at any thread count |
+| `backend="rust"` | the permutation loops | **no** — held bitwise to NumPy |
+| `max_probs` | caps the quantile grid; default 2,000 | **yes, by design** — the one deliberate change, stated in `method.md` §1, realized `m` recorded in the result |
+| `stage1="gemm"` | the exact mean difference as one matrix product | **allclose, not bitwise** — BLAS blocking depends on shape; balanced designs only |
+| `fit_backend="rust"` | the fold-change fit's bisection | **not bitwise** — no two samplers consume randomness alike; never auto-dispatched |
+
+The rule behind that column: **a fast path that changes a number is opt-in and
+says so.** `backend="auto"` never picks an answer for you.
+
+### 8.4 Running it on something large
+
+`TODO` — a checklist, each item with the reason and a link:
+
+- **budget memory, do not discover it** — the resident matrices and what
+  `gene_chunk` does to them;
+- **`nperms` sets the resolution floor** at `1/(B+1)`, so at 30,000 genes BH at
+  0.05 needs roughly `1e-6` — which is about today's floor. When p-values
+  saturate, **filter by `padj` and rank by `subset_log2_fc` or `z_subset`**
+  (`scaling.md` §4);
+- **check the drivers before believing a hit** — §6.3, and it is the check that
+  reversed a real reading;
+- **the pre-flight check**: `detectability_floor()` for whether a subset of the
+  size you care about is findable at your `n` at all;
+- **`strata=`** for restricted permutation when samples are not exchangeable
+  across batches.
+
+### 8.5 What is not solved
+
+`TODO` — brief and honest, because a user guide that only lists strengths is
+not a user guide:
+
+- **p-value resolution at scale** — on the real cohort 18.8% of genes sit at
+  the mean-shift floor. The *ordering* problem is addressed (magnitude, `z`);
+  a calibrated tail probability past the floor is open (`scaling.md` §4).
+- **composition** — library-size normalization couples genes, so a
+  signal-saturated matrix distorts `affected_fraction` and `direction`. The
+  subset *test* is immune; the characterization is not (`limits.md`).
+- **single cell** — sparsity is an opportunity, but **cells are not
+  exchangeable, donors are.** A million cells from twenty donors is twenty
+  samples. Permuting cell labels tests a hypothesis nobody holds
+  (`scaling.md` §5).
+
+---
+
+::: {.callout-note appearance="simple"}
+## Reproducing this page
+```bash
+conda activate wade
+quarto render notebooks/demo.qmd --to html     # self-contained, plotly interactive
+quarto render notebooks/demo.qmd --to typst    # PDF, no LaTeX needed
+```
+Everything is seeded. If a number here differs from a number you get, the seed
+or the version differs — `§3` prints both.
+:::
