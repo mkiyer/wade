@@ -355,7 +355,10 @@ def test_affected_fraction_is_robust_to_signal_shape_and_the_scan_argmax_is_not(
         for frac in (0.05, 0.10, 0.25):
             x = np.array([gen(shape, frac) for _ in range(60)])
             res = subset_test(x, COND, perms)
-            err["argmax"] += abs(float(np.median(res.scan_fraction)) - frac)
+            # argmax_k / m — the width the scan chose, computed here rather than
+            # carried as a property nothing else consumed.
+            scan_fraction = res.argmax_k / res.r.shape[1]
+            err["argmax"] += abs(float(np.median(scan_fraction)) - frac)
             err["affected_fraction"] += abs(float(np.median(res.affected_fraction)) - frac)
             assert abs(float(np.median(res.affected_fraction)) - frac) < max(0.04, 0.2 * frac), (
                 f"affected_fraction must track {frac:.0%} under a {shape} signal"

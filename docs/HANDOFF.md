@@ -50,7 +50,7 @@ The package is `src/wade/`. Twelve modules, all small:
 | `thinning.py` | the count-native shift correction: `fit_fold_change` (normalize path + affine `alpha=` path + kernel backend), `thin_counts`, `one_count`, `gene_chunks` (§10.3–10.4) |
 | `permutation.py` | the nulls; dispatches to the Rust kernel; `mean_diff_stat` / `mean_diff_null` (the GEMM stage 1); `draw_perms(strata=)` and `permutation_space()` (restricted permutation) |
 | `pvalues.py` | empirical p, GPD refinement, BH, `alternative` |
-| `normalize.py` | `tpm_like` (ported), `cpm`, `rle` (new) |
+| `normalize.py` | `tpm_like` (ported) and the jitter. **One normalizer**: CPM is `normalizer=1.0`, other size factors go in via `lib_sizes=` — `cpm`/`rle` were deleted as unreachable from `wade()` |
 | `diagnostics.py` | `wade_gene()` — the per-gene curves; `library_qc()` — per-library depth/complexity/concentration; `subset_drivers()` — which samples drive a gene's subset |
 | `api.py` | `wade()`, `wade_from_matrix()`, `wade_contrast()`; `WadeResult` now carries `cond` and has `gene_index()` / `gene_detail()` |
 | `io.py` | the data boundary: `as_counts` (arrays, frames, sparse), `condition`, `to_frame`, `write_results` + manifest. **No file readers, by decision** |
@@ -395,9 +395,15 @@ Reasoning is in `method.md`; this is the index.
 | The `R` curve carries a one-count pseudocount — `log(x+1)`, the user's choice over a half-count floor, measured equal-or-better | `method.md` §10.4 |
 | `wade_from_matrix` keeps the division and says so; `thin=False` exists for continuous data | `method.md` §10.3 |
 
-The detector and shape-test prototypes were deleted once their findings were
-documented; they are recoverable at commits `dcba920` and `664cfd5` if a design
-choice ever needs re-litigating with the original evidence.
+**Prototypes are deleted once their findings are documented**, and recovered
+from git if a design choice ever needs re-litigating with the original
+evidence: the detector and shape-test prototypes at commits `dcba920` and
+`664cfd5`, and `prototypes/scale_and_counts.py` — the thinning / f-hat /
+pseudocount / bootstrap study behind `method.md` §10, including the rejected
+inverse-variance weights, half-count floor and `p_profile` variants — at
+`fddf2c1`. The reproduction recipes that are still *live* stay in `tools/`
+(`bench_scaling.py`, `bootstrap_scheme_study.py`), because `scaling.md`
+cites them.
 
 ## 5. Suggested first move
 

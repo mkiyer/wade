@@ -51,7 +51,7 @@ from .io import (
     to_frame,
     write_results,
 )
-from .normalize import cpm, draw_jitter, library_sizes, rle, tpm_like
+from .normalize import draw_jitter, library_sizes, tpm_like
 from .permutation import (draw_perms, mean_diff_null, mean_diff_stat,
                           null_statistics, permutation_space, strata_indices)
 from .plotting import plot_gene, plot_stages, plot_volcano
@@ -62,6 +62,7 @@ from .subset import (
     SubsetResult,
     affected_fraction,
     bridge,
+    subset_log2_fc,
     characterization_ci,
     direction,
     log_ratio_curve,
@@ -88,7 +89,6 @@ __all__ = [
     "bridge",
     "characterization_ci",
     "condition",
-    "cpm",
     "direction",
     "draw_jitter",
     "fit_fold_change",
@@ -110,8 +110,8 @@ __all__ = [
     "probability_grid",
     "strata_indices",
     "RESULT_COLUMNS",
-    "rle",
     "subset_drivers",
+    "subset_log2_fc",
     "subset_test",
     "thin_counts",
     "to_frame",

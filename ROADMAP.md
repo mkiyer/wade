@@ -177,7 +177,6 @@ remains is below, grouped and ordered within each group by effort.
 - **Stage 2 has no exceedance or GPD-refinement diagnostics** *(small)* — docs/limits.md §5 makes a reading rule out of these: 'Treat the floor as a censoring point... A gene sitting *at* the floor has not been measured at 2e-6.' A user can apply that rule to `p_mean_shift` and cannot apply it to `p_subset` — the stage the whole….
 - **wade_from_matrix's default configuration fails on any matrix containing a zero** *(small)* — The documented entry point for an already-normalized matrix hard-crashes on first use for sparse data. The error explains what happened but not what to do; the user must find `pseudocount` (which is undocumented in this function — see the docstring gap) or….
 - **The characterization statistics are unreachable without running the permutation test, and their bootstrap intervals are emitted without them** *(medium)* — A user who wants only the descriptors — 'what fraction of my cases is this gene altered in?' — must pay for a full two-stage permutation run, or get nothing. And anyone who sets n_boot without the subset stage gets a written results table containing….
-- **cpm and rle cannot be used with wade(); only tpm_like is reachable** *(medium)* — A user who wants CPM or RLE — the two normalizations most RNA-seq practitioners expect — is silently pushed onto the degraded matrix path and loses the count-native subset stage that the README presents as the reason WADE takes raw counts. The….
 - **wade_from_matrix cannot chunk genes** *(medium)* — A user whose data is already normalized (a public TPM/CPM matrix, a Seurat/scanpy export, someone else's pipeline output) cannot run WADE on a large cohort at all — the only documented remedy for the memory wall is unavailable on their entry point, and….
 
 ### Data boundary
@@ -220,6 +219,8 @@ remains is below, grouped and ordered within each group by effort.
 - **Stage 1's scale is settled** (`method.md` §10.1): linear, measured best or
   tied for every alternative tried. Do not add a transform knob to stage 1.
 - **The (μ = 2, 1000 v 1000) cell of §10.3** was measured at 0.10 on 60 genes.
+  The harness was `prototypes/scale_and_counts.py`, deleted at `fddf2c1` —
+  recover it from git and raise `reps`.
   Re-measure with a few hundred before it is quoted anywhere outside the
   method doc.
 - **P-value resolution at scale** — [`docs/scaling.md`](docs/scaling.md) §4.

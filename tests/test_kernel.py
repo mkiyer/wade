@@ -134,38 +134,6 @@ def test_kernel_agrees_with_numpy_on_random_inputs(seed):
     d_rs = null_statistics(x, perms, backend="rust")
     assert_close(d_rs, d_np, 1e-15, f"random {seed}: null (g={g}, {n1}v{n0})", LAYER)
 
-
-def test_kernel_type7_matches_the_numpy_implementation():
-    """One quantile definition, two implementations — held to bitwise equality.
-
-    Having the kernel implement type 7 itself removes a dependency on
-    NumPy's behaviour inside the hot loop, at the cost of two definitions
-    that must agree exactly. This is the assertion that pays that cost.
-    """
-    from wade import _kernel
-
-    rng = np.random.default_rng(31)
-    for n in (1, 2, 3, 5, 8, 13, 21, 34):
-        for style in range(3):
-            if style == 0:
-                x = rng.lognormal(2, 1.5, size=(11, n))
-            elif style == 1:
-                x = rng.integers(0, 3, size=(11, n)).astype(float)
-            else:
-                x = np.full((11, n), 4.0)
-            for m in range(1, n + 1):
-                q = wade.probability_grid(m)
-                got = _kernel.type7_quantiles(np.ascontiguousarray(x), q)
-                want = wade.type7_quantiles(x, q)
-                assert np.array_equal(got, want), (
-                    f"kernel type-7 differs at n={n}, m={m}, style={style}"
-                )
-
-
-# ---------------------------------------------------------------------
-# 3. The kernel's own input validation
-# ---------------------------------------------------------------------
-
 def test_kernel_rejects_a_mismatched_permutation_matrix():
     from wade import _kernel
 

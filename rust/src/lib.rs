@@ -104,47 +104,6 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-/// Type-7 quantiles of an already-sorted ascending slice, written into `out`.
-///
-/// Mirrors R's `quantile.default(type = 7)`:
-///
-/// ```text
-/// index <- 1 + (n - 1) * p
-/// lo <- floor(index); hi <- ceiling(index)
-/// qs  <- x[lo]
-/// i   <- which(index > lo & x[hi] != qs)
-/// qs[i] <- (1 - h) * qs[i] + h * x[hi][i]
-/// ```
-///
-/// The 1-based index arithmetic is kept as-is and shifted to 0-based only
-/// at the point of indexing, so the floor/ceil see exactly the values R's
-/// do.
-#[inline]
-fn type7_sorted(sorted: &[f64], probs: &[f64], out: &mut [f64]) {
-    let n = sorted.len() as f64;
-    for (slot, &p) in out.iter_mut().zip(probs.iter()) {
-        let index = 1.0 + (n - 1.0) * p;
-        let lo = index.floor();
-        let hi = index.ceil();
-        let a = sorted[lo as usize - 1];
-        let b = sorted[hi as usize - 1];
-        let h = index - lo;
-        *slot = if h > 0.0 && b != a {
-            (1.0 - h) * a + h * b
-        } else {
-            a
-        };
-    }
-}
-
-/// Ascending sort. The inputs are normalized abundances and are finite by
-/// construction (the caller validates), so a total order exists and
-/// `partial_cmp` cannot fail.
-#[inline]
-fn sort_ascending(buf: &mut [f64]) {
-    buf.sort_unstable_by(|a, b| a.partial_cmp(b).expect("non-finite value in kernel input"));
-}
-
 /// The mean-shift statistics of one gene under every permutation.
 ///
 /// One sort per gene, not one per permutation per group: a permutation only
@@ -156,11 +115,10 @@ fn sort_ascending(buf: &mut [f64]) {
 /// know where their group sits). Ties are equal values, so the partition
 /// reads exactly what per-permutation sorts would.
 ///
-/// The quantile arithmetic is [`type7_sorted`]'s term for term (the plans
-/// store the same `lo`/`hi`/`h`), and the accumulation over the grid is
-/// sequential left to right, so the outputs are bitwise what the
-/// permutation-major kernel produced.
-#[allow(clippy::too_many_arguments)]
+/// The quantile arithmetic is [`Type7Plan`]'s term for term — the plans hold
+/// the same `lo`/`hi`/`h` R's definition produces — and the accumulation over
+/// the grid is sequential left to right, so the outputs are bitwise what a
+/// per-permutation sort produced.
 fn one_gene_mean_shift(
     row: &[f64],
     masks: &[u8],
@@ -328,43 +286,6 @@ fn null_statistics<'py>(
     Ok(arr.into_pyarray(py))
 }
 
-/// Type-7 quantiles, exposed so the kernel's own implementation can be
-/// tested directly against the NumPy one rather than only through the
-/// null matrices.
-#[pyfunction]
-fn type7_quantiles<'py>(
-    py: Python<'py>,
-    x: PyReadonlyArray2<'py, f64>,
-    probs: PyReadonlyArray1<'py, f64>,
-) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    let xv = x.as_array();
-    let probs_slice: Vec<f64> = probs.as_array().iter().copied().collect();
-    let g = xv.nrows();
-    let n = xv.ncols();
-    if n == 0 {
-        return Err(PyValueError::new_err("cannot take quantiles of an empty group"));
-    }
-    let m = probs_slice.len();
-    let mut out = vec![0.0_f64; g * m];
-    let mut buf = vec![0.0_f64; n];
-    for gene in 0..g {
-        for (slot, v) in buf.iter_mut().zip(xv.row(gene).iter()) {
-            *slot = *v;
-        }
-        sort_ascending(&mut buf);
-        type7_sorted(&buf, &probs_slice, &mut out[gene * m..(gene + 1) * m]);
-    }
-    let arr = Array2::from_shape_vec((g, m), out)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(arr.into_pyarray(py))
-}
-
-/// Number of threads rayon will use, for reporting.
-#[pyfunction]
-fn num_threads() -> usize {
-    rayon::current_num_threads()
-}
-
 // ---------------------------------------------------------------------
 // The subset test
 // ---------------------------------------------------------------------
@@ -404,10 +325,27 @@ impl Alternative {
 
 /// The type-7 bracketing for a group of fixed size, computed once.
 ///
+/// Mirrors R's `quantile.default(type = 7)`, which is the definition both
+/// kernels read through:
+///
+/// ```text
+/// index <- 1 + (n - 1) * p
+/// lo <- floor(index); hi <- ceiling(index)
+/// qs  <- x[lo]
+/// i   <- which(index > lo & x[hi] != qs)
+/// qs[i] <- (1 - h) * qs[i] + h * x[hi][i]
+/// ```
+///
+/// The 1-based index arithmetic is kept as-is and shifted to 0-based only at
+/// the point of indexing, so the floor/ceil see exactly the values R's do.
+/// The `x[hi] != x[lo]` guard is load-bearing on tied data: without it
+/// `(1-h)*a + h*a` can drift off `a` by an ulp on a run of equal values, and
+/// WADE's target regime is zero-heavy count data.
+///
 /// `lo`, `hi` and `h` depend only on the group size and the grid, both of
 /// which are constants of the run, so the floor/ceil are done once rather
 /// than once per permutation. The arithmetic is the same as
-/// [`type7_sorted`]'s (`index <- 1 + (n - 1) * p`, 1-based, shifted at the
+/// this type's own (`index <- 1 + (n - 1) * p`, 1-based, shifted at the
 /// point of indexing) and the stored `h` is the same `index - lo` it would
 /// have computed inline, so nothing changes numerically.
 ///
@@ -1073,8 +1011,6 @@ fn _kernel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(null_statistics, m)?)?;
     m.add_function(wrap_pyfunction!(subset_null, m)?)?;
     m.add_function(wrap_pyfunction!(fit_bisect, m)?)?;
-    m.add_function(wrap_pyfunction!(type7_quantiles, m)?)?;
-    m.add_function(wrap_pyfunction!(num_threads, m)?)?;
     m.add("__doc__", "Native permutation kernel for WADE.")?;
     Ok(())
 }

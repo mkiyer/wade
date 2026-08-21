@@ -402,11 +402,10 @@ def _color_arrays(res: WadeResult, color):
                       range=None, key=key)
 
 
-def _hover_columns(res: WadeResult) -> dict[str, np.ndarray]:
-    """Everything the result carries, so hovering a point answers whatever the
-    reader is actually asking. ``res.columns()`` is the single namespace for
-    the axes, the colour and the hover, which is what keeps a new statistic
-    from having to be wired into three places."""
+def _result_columns(res: WadeResult) -> dict[str, np.ndarray]:
+    """Every column the result carries, for the hover. ``res.columns()`` is the
+    single namespace for the axes, the colour and the hover, which is what
+    keeps a new statistic from having to be wired into three places."""
     return {k: v for k, v in res.columns().items() if v is not None}
 
 
@@ -535,7 +534,7 @@ def volcano_data(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
         cutoff=_bh_cutoff(p, padj, alpha), color=colors, color_spec=spec,
         labelled=_label_mask(yv, res.gene, label, tiebreak=xv),
         alternative=str(res.params.get("alternative", "two-sided")),
-        hover=_hover_columns(res), x_name=x, y_name=y,
+        hover=_result_columns(res), x_name=x, y_name=y,
     )
 
 
@@ -618,7 +617,7 @@ def stages_data(res: WadeResult, *, alpha: float = 0.05,
         cutoff_mean=_bh_cutoff(np.asarray(p_m, float), np.asarray(padj_m, float), alpha),
         cutoff_subset=_bh_cutoff(np.asarray(p_s, float), np.asarray(padj_s, float), alpha),
         color=colors, color_spec=spec, labelled=_label_mask(score, res.gene, label),
-        hover=_hover_columns(res),
+        hover=_result_columns(res),
     )
 
 

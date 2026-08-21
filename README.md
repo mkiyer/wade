@@ -260,8 +260,12 @@ normalizer and a library size that perturbation cannot be reconstructed.
 `wade_from_matrix(x, cond)` accepts an already-normalized matrix and documents
 what it costs: no tie-breaking, and no guaranteed positivity.
 
-Normalizers ship as separate functions — `tpm_like`, `cpm`, `rle` — so the
-choice is explicit and swappable.
+Normalization is `tpm_like` — counts over a per-gene normalizer over a library
+size — and it is the one the jitter is built into, which is why `wade()` takes
+raw counts. It covers the alternatives through its own arguments rather than
+through extra functions: **CPM** is `normalizer=1.0` (identical to a dedicated
+CPM up to the per-cell denominator of §8), and for **RLE** or any other size
+factors, compute them and pass `lib_sizes=`.
 
 ## Before you run it: two things to check
 

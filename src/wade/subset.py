@@ -37,6 +37,7 @@ __all__ = [
     "bridge",
     "affected_fraction",
     "direction",
+    "subset_log2_fc",
     "shift_correct",
     "SubsetResult",
     "subset_test",
@@ -162,6 +163,53 @@ def direction(r: np.ndarray) -> np.ndarray:
         return np.where(total > 0, r.sum(axis=1) / total, np.nan)
 
 
+def subset_log2_fc(r: np.ndarray) -> np.ndarray:
+    """The magnitude of the subset: log2 fold change **within the
+    affected fraction**.
+
+    The log-ratio curve already *is* per-quantile magnitude —
+    ``R(p) = log2 Q1(p) - log2 Q0(p)`` says how many folds above the
+    corresponding control quantile the cases sit at each ``p`` — so the
+    subset's magnitude is the mean of ``R`` over the affected region:
+    the top ``ceil(affected_fraction * m)`` grid nodes for an upward
+    subset (``direction >= 0``), the bottom nodes for a downward one.
+    No threshold is introduced: the region width is the data's own
+    :func:`affected_fraction`.
+
+    Reads exactly as a fold change, with one deliberate property: the
+    comparison is **quantile-matched** — the affected cases against what
+    the *controls themselves* do at those same extreme quantiles, not
+    against the control mean. A subset planted at 8× the control mean
+    of an NB(50) reads ~2 rather than ``log2 8 = 3``, because the
+    controls' own top decile sits well above their mean; a subset that
+    barely clears the controls' natural tail reads near 0 however far
+    above the control *mean* it is. That discounting of the controls'
+    spread is what makes the number a measure of how *distinctive* the
+    subset is, and it is the distinction ``p_subset`` cannot make once
+    it saturates: an 8× and a 100× subset tie on p and differ by ~3.5
+    here. Two boundary behaviours make it coherent with the
+    rest of the table: a global change has ``affected_fraction ~ 1``, so
+    this becomes the mean of the whole curve — the gene's overall log2
+    fold change — and the reported number *includes* any global shift
+    the gene also carries (``shift`` is reported separately, so the
+    subset's excess over it is one subtraction away). For a balanced
+    up-and-down mixture (``direction ~ 0``) a single signed number is
+    the wrong shape, as it is for ``direction`` itself.
+    """
+    r = np.asarray(r, dtype=np.float64)
+    g, m = r.shape
+    frac = np.nan_to_num(affected_fraction(r), nan=1.0)
+    k = np.clip(np.ceil(frac * m).astype(np.intp), 1, m)
+    cs = np.cumsum(r, axis=1)
+    rows = np.arange(g)
+    top = cs[rows, k - 1] / k
+    # sum of the last k nodes = total - sum of the first m - k
+    below = np.where(k < m, cs[rows, np.maximum(m - k - 1, 0)], 0.0)
+    bottom = (cs[:, -1] - below) / k
+    down = np.nan_to_num(direction(r), nan=0.0) < 0
+    return np.where(down, bottom, top)
+
+
 def shift_correct(x: np.ndarray, cond: np.ndarray, r: np.ndarray) -> np.ndarray:
     """Divide out the estimated global fold change, per gene.
 
@@ -215,84 +263,22 @@ class SubsetResult:
     b: np.ndarray             # (g, m) its bridge
     affected_fraction: np.ndarray  # (g,) effective fraction of samples that differ
     direction: np.ndarray          # (g,) -1 all down .. +1 all up
-    argmax_k: np.ndarray      # (g,)   width at which the scan peaked
+    argmax_k: np.ndarray      # (g,)   width at which the scan peaked (diagnostic:
+                              #        NOT a fraction estimate — it is several-fold
+                              #        low when a subset's values are replaced
+                              #        rather than scaled; affected_fraction is the
+                              #        estimator, method.md §3)
     shift: np.ndarray         # (g,)   the fitted global fold change the null was built under
     r_test: np.ndarray | None = None   # (g, m) the curve the statistic was computed on
     correction: str = "division"       # "division" or "thinning"
 
     @property
     def subset_log2_fc(self) -> np.ndarray:
-        """The magnitude of the subset: log2 fold change **within the
-        affected fraction**.
+        """The subset's magnitude — see :func:`subset_log2_fc`."""
+        return subset_log2_fc(self.r)
 
-        The log-ratio curve already *is* per-quantile magnitude —
-        ``R(p) = log2 Q1(p) - log2 Q0(p)`` says how many folds above the
-        corresponding control quantile the cases sit at each ``p`` — so the
-        subset's magnitude is the mean of ``R`` over the affected region:
-        the top ``ceil(affected_fraction * m)`` grid nodes for an upward
-        subset (``direction >= 0``), the bottom nodes for a downward one.
-        No threshold is introduced: the region width is the data's own
-        :func:`affected_fraction`.
-
-        Reads exactly as a fold change, with one deliberate property: the
-        comparison is **quantile-matched** — the affected cases against what
-        the *controls themselves* do at those same extreme quantiles, not
-        against the control mean. A subset planted at 8× the control mean
-        of an NB(50) reads ~2 rather than ``log2 8 = 3``, because the
-        controls' own top decile sits well above their mean; a subset that
-        barely clears the controls' natural tail reads near 0 however far
-        above the control *mean* it is. That discounting of the controls'
-        spread is what makes the number a measure of how *distinctive* the
-        subset is, and it is the distinction ``p_subset`` cannot make once
-        it saturates: an 8× and a 100× subset tie on p and differ by ~3.5
-        here. Two boundary behaviours make it coherent with the
-        rest of the table: a global change has ``affected_fraction ~ 1``, so
-        this becomes the mean of the whole curve — the gene's overall log2
-        fold change — and the reported number *includes* any global shift
-        the gene also carries (``shift`` is reported separately, so the
-        subset's excess over it is one subtraction away). For a balanced
-        up-and-down mixture (``direction ~ 0``) a single signed number is
-        the wrong shape, as it is for ``direction`` itself.
-        """
-        r = np.asarray(self.r, dtype=np.float64)
-        g, m = r.shape
-        frac = np.nan_to_num(self.affected_fraction, nan=1.0)
-        k = np.clip(np.ceil(frac * m).astype(np.intp), 1, m)
-        cs = np.cumsum(r, axis=1)
-        rows = np.arange(g)
-        top = cs[rows, k - 1] / k
-        # sum of the last k nodes = total - sum of the first m - k
-        below = np.where(k < m, cs[rows, np.maximum(m - k - 1, 0)], 0.0)
-        bottom = (cs[:, -1] - below) / k
-        down = np.nan_to_num(self.direction, nan=0.0) < 0
-        return np.where(down, bottom, top)
-
-    @property
-    def scan_fraction(self) -> np.ndarray:
-        """``argmax_k / m`` — the width the scan chose.
-
-        **Not a fraction estimate, because it is not robust to the shape of the
-        signal.** Where the affected samples are shifted multiplicatively it
-        happens to be accurate; where their values are replaced outright, the
-        log-ratio curve declines steeply across the affected region, the
-        cumulative departure peaks well before that region ends, and the width
-        comes out several-fold too small. :func:`affected_fraction` is accurate
-        under both. Measured at 400 v 400, absolute error against the planted
-        fraction:
-
-        ===========  ======  ============  ==========
-        signal       true    argmax / m    affected_fraction
-        ===========  ======  ============  ==========
-        multiply     0.05    0.050         0.054
-        multiply     0.25    0.299         0.283
-        replace      0.05    0.010         0.057
-        replace      0.25    0.100         0.273
-        ===========  ======  ============  ==========
-
-        Total absolute error over that grid: 0.315 for the argmax against 0.084
-        for ``affected_fraction``. Exposed for diagnostics only.
-        """
         return self.argmax_k / self.r.shape[1]
+
 
 
 def _bridge_from(x: np.ndarray, cond: np.ndarray, q: np.ndarray) -> np.ndarray:
@@ -477,7 +463,7 @@ def characterization_ci(
     ``docs/scaling.md`` §3.4. Also bit-identical, whatever the thread count:
     the indices are predrawn, every replicate's arithmetic is self-contained,
     and each writes its own rows. NumPy's sort releases the GIL, which is
-    where the time goes. ``threads=1`` runs serially.
+    where the time goes. ``threads=1`` is a serial run.
     """
     x = np.asarray(x, dtype=np.float64)
     cond = np.asarray(cond)
@@ -512,13 +498,9 @@ def characterization_ci(
                 dirn[b, ch] = direction(r)
                 lfc[b, ch] = np.log2(x_ch[:, J1[b]].mean(axis=1) / x_ch[:, J0[b]].mean(axis=1))
 
-        if threads <= 1:
-            for b in range(n_boot):
-                one_replicate(b)
-        else:
-            from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=threads) as pool:
-                list(pool.map(one_replicate, range(n_boot)))
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+            list(pool.map(one_replicate, range(n_boot)))
     lo_q, hi_q = 100 * (1 - level) / 2, 100 * (1 + level) / 2
     out = {}
     for name, arr in (("affected_fraction", aff), ("direction", dirn), ("log2_fc", lfc)):

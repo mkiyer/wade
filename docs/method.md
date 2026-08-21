@@ -446,9 +446,13 @@ are not exactly $\kappa$ (the output is TPM-*like*), and any gene that
 constitutes an entire library normalizes to exactly $\kappa$ — including every
 gene in an all-zero sample, which is an artefact rather than a sensible value.
 
-`cpm` and `rle` ship alongside and deliberately do **not** reproduce the quirk:
-they apply the jitter at count precision, which is the load-bearing part, and
-use consistent library sizes.
+`tpm_like` is the only normalizer the package ships, and the quirk is why: it
+is reproduced for parity with the reference, not because it is a design worth
+propagating. A caller who wants a consistent library size supplies one through
+`lib_sizes=`; CPM is `normalizer=1.0`. (Standalone `cpm` and `rle` functions
+existed briefly and were deleted — neither was reachable from `wade()`, whose
+whole point is that the jitter is applied at count precision, so their output
+could only enter through the degraded `wade_from_matrix` path.)
 
 ---
 
@@ -629,8 +633,8 @@ things the prototype established, in order of how much they cost to learn:
    An estimator-free alternative, $p = \max_f p_f$ over candidate fold
    changes (reject only if no $f$ explains the data), is valid by construction
    and measured too conservative to be the default (0.24 against 0.64 on the
-   80/20 gene, 0.24 against 0.76 on a 5% subset at 2 counts); it is kept in
-   the prototype as `p_profile`.
+   80/20 gene, 0.24 against 0.76 on a 5% subset at 2 counts), so it was
+   measured and set aside rather than kept.
 3. **Inverse-variance node weights do not substitute for this.** Weights from
    the permutation variance of $R(p)$ are label-free but not signal-free — a
    subset's own values inflate the null variance of the top nodes, so the

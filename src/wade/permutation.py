@@ -36,7 +36,7 @@ try:                                    # pragma: no cover - build-dependent
 except ImportError:                     # pragma: no cover
     _rust = None
 
-__all__ = ["draw_perms", "validate_perms", "null_statistics", "available_backends",
+__all__ = ["draw_perms", "validate_perms", "null_statistics",
            "subset_null_backend", "mean_diff_stat", "mean_diff_null",
            "strata_indices", "permutation_space", "HAVE_RUST_KERNEL"]
 
@@ -44,10 +44,6 @@ __all__ = ["draw_perms", "validate_perms", "null_statistics", "available_backend
 #: functional without it — the NumPy path is the correctness baseline and the
 #: kernel is validated against it — just slower.
 HAVE_RUST_KERNEL = _rust is not None
-
-
-def available_backends() -> tuple[str, ...]:
-    return ("numpy", "rust") if HAVE_RUST_KERNEL else ("numpy",)
 
 
 def strata_indices(strata, n_samples: int) -> list[np.ndarray]:

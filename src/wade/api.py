@@ -222,22 +222,11 @@ class WadeResult:
                 cols[f"{name}_hi"] = ci[1]
         return cols
 
-    def to_polars(self):
-        """The raw :meth:`columns` dict as a polars DataFrame.
-
-        :meth:`to_frame` is the *report* frame — the written column order, with
-        ``neglog10_p_*``. This one is the in-memory column set, unordered.
-        polars is not a dependency of this package.
-        """
-        import polars as pl
-
-        return pl.DataFrame(self.columns())
-
     def to_frame(self):
-        """The result as a polars DataFrame in the written column order.
-
-        The same table :func:`wade.write_results` writes; see
-        :data:`wade.io.RESULT_COLUMNS`.
+        """The result as a polars DataFrame in the written column order — the
+        same table :func:`wade.write_results` writes; see
+        :data:`wade.io.RESULT_COLUMNS`. polars is not a dependency of this
+        package and is imported here.
         """
         from .io import to_frame
 
@@ -714,6 +703,13 @@ def wade(
         Mersenne-Twister and NumPy's PCG64 cannot agree on a shared seed and a
         fixture path that bypassed production code would validate code nobody
         runs.
+    n_exc_min, n_tail
+        The GPD tail refinement (``docs/method.md`` §6). Refinement fires for
+        a gene with fewer than ``n_exc_min`` exceedances, fitting the top
+        ``n_tail`` null draws — **so together with** ``nperms`` **these set
+        the smallest p-value the run can report**, ``1/(nperms * n_tail)``.
+        That floor is an honesty constraint, not a numerical guard; raising
+        resolution means more permutations, not a smaller floor.
     subset
         Run the subset test and the characterization. Requires
         ``min(n_case, n_ctrl) >= 3``.

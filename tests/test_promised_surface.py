@@ -1,10 +1,11 @@
 """Things the README and docstrings promise that nothing exercised.
 
 Found by the package audit, 2026-08-20: pandas frame input is advertised and
-was never run (pandas was not even installed); ``cpm`` and ``rle`` are
-README-listed normalizers with no coverage; ``alternative="less"`` is
+was never run (pandas was not even installed), and ``alternative="less"`` is
 documented on both stages and tested nowhere. A promise with no test is a
-promise about code nobody runs.
+promise about code nobody runs. (``cpm`` and ``rle`` were the third case; the
+simplification audit then showed they were unreachable from ``wade()`` and
+they were deleted instead — see the git log.)
 """
 
 from __future__ import annotations
@@ -66,52 +67,6 @@ def test_condition_from_a_pandas_sheet(matrix):
                           "grp": ["t"] * (N // 2) + ["n"] * (N // 2)})
     cond = wade.condition(sheet, key="sample_id", column="grp", case="t", control="n")
     np.testing.assert_array_equal(cond.vector(SAMPLES), COND)
-
-
-# ---------------------------------------------------------------------------
-# cpm and rle: README-listed normalizers, previously untested
-
-
-def test_cpm_columns_sum_to_the_norm_factor(matrix):
-    x = wade.cpm(matrix, seed=3)
-    np.testing.assert_allclose(x.sum(axis=0), 1e6, rtol=1e-9)
-    assert np.all(x > 0)                             # the jitter makes it strict
-    with pytest.raises(ValueError, match="zero total count"):
-        wade.cpm(np.zeros((4, 3)), jitter=np.zeros((4, 3)))
-
-
-def test_cpm_is_scale_invariant_per_column(matrix):
-    """Doubling a library must not change its CPM profile."""
-    jit = np.zeros_like(matrix)
-    a = wade.cpm(matrix, jitter=jit)
-    doubled = matrix.copy(); doubled[:, 0] *= 2
-    b = wade.cpm(doubled, jitter=jit)
-    np.testing.assert_allclose(a[:, 0], b[:, 0], rtol=1e-9)
-
-
-def test_rle_recovers_planted_size_factors():
-    rng = np.random.default_rng(7)
-    base = rng.gamma(20.0, 5.0, (200, 1))
-    factors = np.array([0.5, 1.0, 2.0, 4.0])
-    counts = rng.poisson(base * factors[None, :]).astype(float)
-    x = wade.rle(counts, jitter=np.zeros(counts.shape))
-    # after RLE the columns are on one scale, so their medians agree
-    med = np.median(x, axis=0)
-    assert med.max() / med.min() < 1.25, med
-    # the documented refusal: nothing detected in every sample
-    sparse = np.zeros((5, 4)); sparse[0, 0] = 5.0
-    with pytest.raises(ValueError, match="strictly positive raw count"):
-        wade.rle(sparse, jitter=np.zeros(sparse.shape))
-
-
-def test_rle_accepts_an_explicit_reference():
-    rng = np.random.default_rng(8)
-    counts = rng.poisson(50, (40, 4)).astype(float)
-    ref = np.full(40, 50.0)
-    x = wade.rle(counts, reference=ref, jitter=np.zeros(counts.shape))
-    assert x.shape == counts.shape and np.all(np.isfinite(x))
-    with pytest.raises(ValueError, match="one value per gene"):
-        wade.rle(counts, reference=ref[:-1])
 
 
 # ---------------------------------------------------------------------------

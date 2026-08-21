@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["draw_jitter", "library_sizes", "tpm_like", "cpm", "rle"]
+__all__ = ["draw_jitter", "library_sizes", "tpm_like"]
 
 DEFAULT_NOISE = 0.01
 DEFAULT_NORM_FACTOR = 1.0e6
@@ -219,102 +219,3 @@ def tpm_like(
     y = (counts + nz) / norm
     denom = nz / norm + lib[None, :]
     return norm_factor * y / denom
-
-
-def cpm(
-    counts: np.ndarray,
-    *,
-    noise: float = DEFAULT_NOISE,
-    norm_factor: float = DEFAULT_NORM_FACTOR,
-    seed: int | None = 1,
-    jitter: np.ndarray | None = None,
-    rng: np.random.Generator | None = None,
-) -> np.ndarray:
-    """Counts per million.
-
-    New work: there is no reference implementation of this in the R, so it
-    has nothing in ``reference/`` to be tested against and is validated on
-    its own terms.
-
-    The jitter is applied at count precision, as in :func:`tpm_like` —
-    that part is the load-bearing one, since it is what breaks ties before
-    any division. But the library size here is the **consistent** one,
-    computed from the jittered counts, so columns sum to exactly
-    ``norm_factor``. That deliberately differs from :func:`tpm_like`, whose
-    per-cell denominator is a quirk of the original reproduced for parity
-    rather than a design to propagate.
-    """
-    counts = _as_counts(counts)
-    nz = _resolve_jitter(jitter, counts.shape, noise, seed, rng)
-    jittered = counts + nz
-    lib = jittered.sum(axis=0)
-    if np.any(lib == 0):
-        raise ValueError("a sample has zero total count; CPM is undefined for it")
-    return norm_factor * jittered / lib[None, :]
-
-
-def rle(
-    counts: np.ndarray,
-    *,
-    noise: float = DEFAULT_NOISE,
-    seed: int | None = 1,
-    jitter: np.ndarray | None = None,
-    rng: np.random.Generator | None = None,
-    reference: np.ndarray | None = None,
-) -> np.ndarray:
-    """Relative log expression (median-of-ratios) size-factor normalization.
-
-    New work, as :func:`cpm` is.
-
-    The usual formulation restricts the geometric-mean reference to genes
-    detected in every sample, because the reference is undefined (zero or
-    ``-inf`` in logs) for a gene with any zero. **The continuity jitter
-    interacts with that restriction and the interaction is not inherited
-    from anywhere**, so it is stated rather than defaulted
-    (``ROADMAP.md`` S3):
-
-    Jitter is added at count precision first, which makes every entry
-    strictly positive, so the reference would technically be defined for
-    every gene. That is not used. A gene whose "detection" is a jitter
-    draw of order 0.01 carries no information, and admitting it would let
-    the noise term set the size factors. The reference is therefore taken
-    over genes whose **raw** counts are strictly positive in every sample,
-    exactly as it would be without jitter; the jitter then only perturbs
-    the ratios of those genes.
-
-    On sparse data that set can be small or empty, which is a real
-    limitation of RLE on this kind of input rather than a bug here, and it
-    raises rather than silently falling back.
-    """
-    counts = _as_counts(counts)
-    nz = _resolve_jitter(jitter, counts.shape, noise, seed, rng)
-    jittered = counts + nz
-
-    if reference is None:
-        detected = np.all(counts > 0, axis=1)
-        n_detected = int(detected.sum())
-        if n_detected == 0:
-            raise ValueError(
-                "RLE needs at least one gene with a strictly positive raw count in "
-                "every sample to build the geometric-mean reference, and this matrix "
-                "has none. On zero-heavy data use tpm_like() or cpm(), or supply an "
-                "explicit `reference`."
-            )
-        log_ref = np.log(jittered[detected]).mean(axis=1)
-        ratios = np.log(jittered[detected]) - log_ref[:, None]
-    else:
-        reference = np.asarray(reference, dtype=np.float64)
-        if reference.shape != (counts.shape[0],):
-            raise ValueError(
-                f"reference must have one value per gene: expected shape "
-                f"({counts.shape[0]},), got {reference.shape}"
-            )
-        usable = reference > 0
-        if not np.any(usable):
-            raise ValueError("reference has no strictly positive entries")
-        ratios = np.log(jittered[usable]) - np.log(reference[usable])[:, None]
-
-    size_factors = np.exp(np.median(ratios, axis=0))
-    if np.any(size_factors <= 0) or not np.all(np.isfinite(size_factors)):
-        raise ValueError("RLE produced a non-positive or non-finite size factor")
-    return jittered / size_factors[None, :]
