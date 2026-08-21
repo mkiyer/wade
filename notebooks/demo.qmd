@@ -45,6 +45,26 @@ Decisions this file encodes, so they are not re-litigated:
 * **§7 is a signpost.** The head-to-head against COPA / OS / ORT / MOST /
   LSOSS, t-test, Wilcoxon and waddR is `notebooks/benchmark.qmd`'s job. This
   notebook is a **user guide**.
+* **THIS NOTEBOOK IS THE MASTER SOURCE.** Decided 2026-08-21: the dataset, the
+  figures and the quoted numbers originate here, and `README.md` embeds what
+  this notebook writes. The README is a reader, not an author.
+
+  Consequences, to be carried out as §5 and §6 are filled in:
+
+  1. The generator is **inlined below** (§5.2), not imported. It is the
+     definition of the demo dataset, so it should be visible and editable in
+     the document that owns it.
+  2. §6.3 **writes `../docs/figures/*.png`** — the three the README embeds
+     (`gene`, `volcano`, `stages`) plus any it gains. Regenerating README
+     figures becomes `quarto render notebooks/demo.qmd`.
+  3. `tools/make_readme_figures.py` is then **redundant and gets deleted**, and
+     the places that cite it — `docs/HANDOFF.md`, `ROADMAP.md`,
+     `docs/plotting.md` — get repointed here. Do this only once §6 actually
+     produces the figures; deleting it earlier leaves the README with none.
+  4. §6 must **print every number the README quotes**, beside the figure that
+     shows it. This is not cosmetic: the README's figures went stale for three
+     commits because the tool printed only per-class medians while the prose
+     quoted individual genes, so nothing flagged the drift.
 -->
 
 ::: {.callout-note appearance="simple"}
@@ -79,7 +99,8 @@ Two paragraphs and one figure's worth of motivation:
 
 `TODO` — one small figure here, before any API is introduced: two genes with
 the same fold change and different shape. Reuses the `plot_gene` panel from §6
-but with no code shown (`echo: false`), purely as motivation.
+but with no code shown (`echo: false`), purely as motivation. It is also the
+figure the README leads with, and §6.3 is what writes it.
 
 ::: {.callout-tip appearance="simple"}
 ## The one-sentence version
@@ -247,14 +268,17 @@ slope (`docs/limits.md`, `docs/HANDOFF.md` §3).
 
 ```{python}
 #| label: simulate
-# TODO — the generator. Deliberately in the notebook rather than imported, so a
-# reader can see and change exactly what is planted.
+# TODO — the generator, INLINE. This notebook is the master source for the
+# demo dataset (see the header), so the definition of what is planted belongs
+# here where a reader can see and change it, not behind an import.
 #
-# tools/make_readme_figures.py already generates the first four classes and the
-# README quotes its numbers; the two new classes extend it. Decide while
-# writing whether to import from there (numbers cross-check against the README
-# for free) or to inline it (the notebook stays self-contained). Leaning
-# inline, with a comment naming the tool as the origin.
+# Port it from tools/make_readme_figures.py, which currently owns the first
+# four classes, and add the two new ones. That tool gets deleted once §6.3
+# writes the README's figures from here.
+#
+# Keep: NB via Poisson-Gamma at dispersion 0.1, per-gene mean log-uniform over
+# 1..1000 counts, unit normalizer, seed fixed. Print the realized signal share
+# of library mass and the null genes' median log2_fc (see the callout above).
 ```
 
 ```{python}
@@ -323,6 +347,15 @@ Each answers one question. Overview figures are **plotly** — the hover carries
 the gene name and every statistic, and that survives into this page with no
 kernel. Per-gene panels are **matplotlib**, which is the publication path:
 vector PDF/SVG with nothing but the library.
+
+::: {.callout-note appearance="simple"}
+## These figures are the README's figures
+`TODO` — the cells below also write `../docs/figures/{gene,volcano,stages}.png`
+with the matplotlib backend, and `README.md` embeds them. This notebook is
+where they come from, so regenerating them is `quarto render
+notebooks/demo.qmd` and there is no second dataset to drift from this one.
+Every number the README quotes must be **printed here, beside its figure**.
+:::
 
 #### Which genes? — `plot_volcano`
 

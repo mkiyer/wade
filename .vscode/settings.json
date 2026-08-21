@@ -1,0 +1,25 @@
+{
+  // Why this file exists: the `python3` Jupyter kernelspec lives INSIDE the
+  // conda env (envs/wade/share/jupyter/kernels/python3), so it is only
+  // discoverable when that env is active. VS Code launched from the Dock has no
+  // conda env, so Quarto fell back to /usr/bin/python3 and Preview died with
+  // "Jupyter is not available in this Python installation."
+  //
+  // The Quarto extension reads this interpreter and passes it to the Quarto CLI
+  // as QUARTO_PYTHON, which is what makes Preview work. Edit the path if the
+  // conda prefix or env name ever changes.
+  "python.defaultInterpreterPath": "/Users/mkiyer/sw/miniforge3/envs/wade/bin/python",
+  "python.terminal.activateEnvironment": true,
+
+  // Belt and braces: integrated terminals get it too, so `quarto render` and
+  // `quarto preview` typed by hand behave the same as the Preview button.
+  "terminal.integrated.env.osx": {
+    "QUARTO_PYTHON": "/Users/mkiyer/sw/miniforge3/envs/wade/bin/python"
+  },
+
+  // Render artifacts are gitignored; keep them out of search and the tree too.
+  "files.exclude": {
+    "**/.quarto": true,
+    "notebooks/*_files": true
+  }
+}
