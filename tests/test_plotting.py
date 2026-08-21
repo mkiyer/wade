@@ -214,14 +214,33 @@ def test_volcano_colour_options(res, res_nosubset):
     assert P.volcano_data(res, color=None).color is None
     # Without the characterization there is nothing to colour by: single hue, no error.
     assert P.volcano_data(res_nosubset, color="affected_fraction").color is None
-    with pytest.raises(ValueError, match="color must be"):
-        P.volcano_data(res, color="w1")
+    # Any other column works too, autoscaled, and picks its scale by whether
+    # it spans zero — so a new statistic is colourable the day it exists.
+    v = P.volcano_data(res, color="w1")
+    np.testing.assert_array_equal(v.color, res.w1)
+    assert v.color_spec["range"] is None and v.color_spec["scale"] == P._SEQUENTIAL
+    assert P.volcano_data(res, color="log2_fc").color_spec["scale"] == P._DIVERGING
+    # ... and a supplied per-gene array, for anything WADE cannot know about
+    own = np.arange(float(G))
+    np.testing.assert_array_equal(P.volcano_data(res, color=own).color, own)
+    with pytest.raises(ValueError, match="one value per gene"):
+        P.volcano_data(res, color=own[:-1])
+    with pytest.raises(ValueError, match="not a column"):
+        P.volcano_data(res, color="nope")
 
 
 def test_volcano_labels_are_selective(res):
+    """Top-n by y, **broken by |x|** — because on a saturated cohort thousands
+    of genes share the floor and ranking by y alone names an arbitrary few."""
     v = P.volcano_data(res, label=5)
     assert v.labelled.sum() == 5
-    assert set(np.flatnonzero(v.labelled)) == set(np.argsort(-v.y)[:5])
+    lab, unl = v.labelled, ~v.labelled
+    assert v.y[lab].min() >= v.y[unl].max() - 1e-12          # y-optimal up to ties
+    cut = v.y[lab].min()
+    tied_lab = np.abs(v.x[lab & (v.y == cut)])
+    tied_unl = np.abs(v.x[unl & (v.y == cut)])
+    if tied_lab.size and tied_unl.size:                       # ties broken by effect
+        assert tied_lab.min() >= tied_unl.max()
     v = P.volcano_data(res, label=["g0", "g6", "absent"])
     assert set(res.gene[v.labelled]) == {"g0", "g6"}
     assert P.volcano_data(res).labelled.sum() == 0
@@ -407,3 +426,40 @@ def test_wade_result_carries_cond_and_resolves_genes(res):
     np.testing.assert_array_equal(d.r, wade.wade_gene(res.tpm[5], COND, pseudocount=res.pseudocount[5]).r)
     # The result's curve is the pseudocounted one the statistics were read from.
     assert not np.array_equal(d.r, wade.wade_gene(res.tpm[5], COND).r)
+
+
+def test_volcano_axes_can_be_any_column(res):
+    """The README tells users to rank by magnitude and by z once p-values
+    saturate; those columns must therefore be plottable."""
+    v = P.volcano_data(res, "subset", x="subset_log2_fc", y="z_subset")
+    np.testing.assert_array_equal(v.x, res.subset_log2_fc)
+    np.testing.assert_array_equal(v.y, res.z_subset)
+    assert v.x_name == "subset_log2_fc" and v.y_name == "z_subset"
+    assert "subset log₂ fold change" in v.xlabel
+    assert v.ylabel == P._AXIS_LABELS["z_subset"]
+    # off the p axis the BH line has no meaning and is not drawn
+    assert np.isnan(v.cutoff_y)
+    # the table names what it actually holds
+    t = v.table()
+    assert "subset_log2_fc" in t and "z_subset" in t
+    # the default is unchanged
+    d = P.volcano_data(res)
+    assert d.x_name == "log2_fc" and d.y_name is None
+    assert np.isfinite(d.cutoff_y) or np.isnan(d.cutoff)
+    assert "log₂ fold change" in d.xlabel and "−log₁₀ p" in d.ylabel
+    with pytest.raises(ValueError, match="not a column"):
+        P.volcano_data(res, x="nope")
+
+
+def test_volcano_hover_carries_every_column(res):
+    v = P.volcano_data(res)
+    assert set(v.hover) == {k for k, val in res.columns().items() if val is not None}
+    for name in ("subset_log2_fc", "z_subset", "z_mean_shift", "w1"):
+        assert name in v.hover, name
+
+
+@pytest.mark.parametrize("backend", P.available_backends())
+def test_both_backends_render_a_custom_axis_volcano(res, backend):
+    fig = P.plot_volcano(res, stage="subset", x="subset_log2_fc", y="z_subset",
+                         backend=backend, label=3)
+    assert fig is not None

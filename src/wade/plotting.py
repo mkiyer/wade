@@ -95,6 +95,40 @@ _COLOR_SPECS = {
 
 _STAGE_LABELS = {"mean_shift": "mean shift", "subset": "subset"}
 
+#: Axis labels for the columns worth plotting. Anything else falls back to its
+#: own name, so a new statistic is plottable the day it exists.
+_AXIS_LABELS = {
+    "log2_fc": "log₂ fold change (case / control)",
+    "subset_log2_fc": "subset log₂ fold change (within the affected fraction)",
+    "mean_shift": "mean shift (TPM-like units)",
+    "affected_fraction": "affected fraction",
+    "direction": "direction",
+    "z_mean_shift": "z, mean shift vs its permutation null",
+    "z_subset": "z, subset vs its permutation null",
+    "subset_stat": "subset statistic",
+    "w1": "1-Wasserstein distance",
+    "case_mean": "case mean", "ctrl_mean": "control mean",
+}
+
+
+def _axis_label(name: str) -> str:
+    return _AXIS_LABELS.get(name, name)
+
+
+def _column_array(res: WadeResult, name: str) -> np.ndarray:
+    """One of the result's own columns, by name, as float — the namespace for
+    every plottable quantity is exactly ``res.columns()``."""
+    cols = res.columns()
+    if name not in cols:
+        raise ValueError(
+            f"{name!r} is not a column of this result; available: "
+            f"{sorted(k for k in cols if k != 'gene')}"
+        )
+    vals = cols[name]
+    if vals is None:
+        raise ValueError(f"column {name!r} was not computed for this result")
+    return np.asarray(vals, dtype=np.float64)
+
 
 # ---------------------------------------------------------------------------
 # Backend resolution
@@ -333,44 +367,70 @@ def _stage_arrays(res: WadeResult, stage: str):
 
 
 def _color_arrays(res: WadeResult, color):
-    """Resolve ``color`` to ``(values, spec)`` or ``(None, None)``."""
+    """Resolve ``color`` to ``(values, spec)`` or ``(None, None)``.
+
+    Accepts any column of :meth:`WadeResult.columns` by name, or an array of
+    per-gene values (a gene-set membership, a cluster id, a QC score — WADE
+    has no way to know what you want to colour by, so it does not guess).
+    ``affected_fraction`` and ``direction`` keep their pinned scales and
+    ranges; anything else gets a diverging scale if it spans zero and a
+    sequential one otherwise, autoscaled.
+    """
     if color is None:
         return None, None
-    if color not in _COLOR_SPECS:
-        raise ValueError(f"color must be 'affected_fraction', 'direction' or None; got {color!r}")
-    vals = getattr(res, color)
-    if vals is None:
-        # The characterization was not computed; fall back to a single hue
-        # rather than fail, and say so through the returned spec.
-        return None, None
-    return np.asarray(vals, dtype=np.float64), dict(_COLOR_SPECS[color], key=color)
+    if isinstance(color, str):
+        if color in _COLOR_SPECS:
+            vals = getattr(res, color, None)
+            if vals is None:
+                # The characterization was not computed; fall back to a single
+                # hue rather than fail.
+                return None, None
+            return np.asarray(vals, dtype=np.float64), dict(_COLOR_SPECS[color], key=color)
+        vals = _column_array(res, color)
+        key = color
+    else:
+        vals = np.asarray(color, dtype=np.float64)
+        if vals.shape != (res.gene.shape[0],):
+            raise ValueError(
+                f"a colour array needs one value per gene: expected "
+                f"{res.gene.shape[0]}, got {vals.shape}")
+        key = "colour"
+    finite = vals[np.isfinite(vals)]
+    spans_zero = finite.size > 0 and finite.min() < 0.0 < finite.max()
+    return vals, dict(label=_axis_label(key),
+                      scale=_DIVERGING if spans_zero else _SEQUENTIAL,
+                      range=None, key=key)
 
 
 def _hover_columns(res: WadeResult) -> dict[str, np.ndarray]:
-    cols = {
-        "gene": res.gene,
-        "log2_fc": res.log2_fc,
-        "mean_shift": res.mean_shift,
-        "p_mean_shift": res.p_mean_shift,
-        "padj_mean_shift": res.padj_mean_shift,
-    }
-    if res.p_subset is not None:
-        cols.update(
-            p_subset=res.p_subset, padj_subset=res.padj_subset,
-            affected_fraction=res.affected_fraction, direction=res.direction,
-        )
-    return cols
+    """Everything the result carries, so hovering a point answers whatever the
+    reader is actually asking. ``res.columns()`` is the single namespace for
+    the axes, the colour and the hover, which is what keeps a new statistic
+    from having to be wired into three places."""
+    return {k: v for k, v in res.columns().items() if v is not None}
 
 
-def _label_mask(y: np.ndarray, gene: np.ndarray, label) -> np.ndarray:
-    """Which points get a direct text label: none, the top-``n`` by ``y``, or named genes."""
+def _label_mask(y: np.ndarray, gene: np.ndarray, label, tiebreak=None) -> np.ndarray:
+    """Which points get a direct text label: none, the top-``n``, or named genes.
+
+    Ranked by ``y``, **broken by ``|tiebreak|``**. The tie-break is not a
+    nicety: on a large cohort thousands of genes share the p-value floor, so
+    ranking by ``y`` alone names an arbitrary handful of them. The volcano
+    passes its x axis, so the labels fall on the largest effects among the
+    equally-significant.
+    """
     mask = np.zeros(gene.shape[0], dtype=bool)
     if label is None or label is False:
         return mask
     if isinstance(label, (int, np.integer)) and not isinstance(label, bool):
         n = int(label)
         if n > 0:
-            order = np.argsort(-np.nan_to_num(y, nan=-np.inf))
+            primary = -np.nan_to_num(y, nan=-np.inf)
+            if tiebreak is None:
+                order = np.argsort(primary)
+            else:
+                secondary = -np.abs(np.nan_to_num(tiebreak, nan=0.0))
+                order = np.lexsort((secondary, primary))
             mask[order[:n]] = True
         return mask
     wanted = set(np.asarray(label, dtype=object).tolist())
@@ -395,39 +455,68 @@ class VolcanoData:
     labelled: np.ndarray          # bool, which points get a text label
     alternative: str
     hover: dict = field(default_factory=dict)
+    #: Which result columns the axes hold. ``y_name = None`` means the y axis
+    #: is −log₁₀ p of ``stage``, which is the default and the only case where
+    #: the BH cutoff line is meaningful.
+    x_name: str = "log2_fc"
+    y_name: str | None = None
 
     @property
     def xlabel(self) -> str:
-        return "log₂ fold change (case / control)"
+        return _axis_label(self.x_name)
 
     @property
     def ylabel(self) -> str:
-        return f"−log₁₀ p ({_STAGE_LABELS[self.stage]})"
+        if self.y_name is None:
+            return f"−log₁₀ p ({_STAGE_LABELS[self.stage]})"
+        return _axis_label(self.y_name)
 
     @property
     def cutoff_y(self) -> float:
-        return float(_neglog10(np.array([self.cutoff]))[0]) if np.isfinite(self.cutoff) else np.nan
+        """Where BH rejects, on the y axis — ``nan`` (so the renderers draw no
+        line) whenever y is not the p-value axis."""
+        if self.y_name is not None or not np.isfinite(self.cutoff):
+            return np.nan
+        return float(_neglog10(np.array([self.cutoff]))[0])
 
     @property
     def n_significant(self) -> int:
         return int(self.significant.sum())
 
     def table(self) -> dict[str, np.ndarray]:
-        cols = {"gene": self.gene, "log2_fc": self.x, f"p_{self.stage}": self.p,
+        cols = {"gene": self.gene, self.x_name: self.x, f"p_{self.stage}": self.p,
                 f"padj_{self.stage}": self.padj, "significant": self.significant}
+        if self.y_name is not None:
+            cols[self.y_name] = self.y
         if self.color is not None:
             cols[self.color_spec["key"]] = self.color
         return cols
 
 
 def volcano_data(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0.05,
-                 color: str | None = "affected_fraction", label=None) -> VolcanoData:
+                 color="affected_fraction", label=None,
+                 x: str = "log2_fc", y: str | None = None) -> VolcanoData:
     """The arrays behind one volcano panel.
 
-    The x axis is ``log2_fc``, and only that. ``mean_shift`` is in TPM-like
-    units and spans thousands across a transcriptome, so plotted as an effect
-    size it collapses the cloud onto a vertical line; the fold change is the
-    comparable scale.
+    ``x`` and ``y`` name any columns of :meth:`WadeResult.columns`. The
+    defaults are the classic volcano — ``log2_fc`` against −log₁₀ p of
+    ``stage`` — and the two most useful alternatives are:
+
+    * ``x="subset_log2_fc"`` on a subset volcano: the subset's magnitude
+      rather than the whole gene's fold change, which is what a concentrated
+      finding should be read on.
+    * ``y="z_subset"`` (or ``"z_mean_shift"``): on a large cohort the
+      p-values saturate at the resolution floor and the y axis becomes a flat
+      line of ties; the permutation z keeps separating genes. The BH cutoff
+      line is then suppressed, because it has no meaning off the p axis.
+
+    ``mean_shift`` is available as an axis but is a poor default: it is in
+    TPM-like units and spans thousands across a transcriptome, so plotted as
+    an effect size it collapses the cloud onto a vertical line.
+
+    ``color`` takes a column name or a per-gene array; ``label=n`` names the
+    top ``n`` by y, **broken by |x|**, so ties at the p-value floor do not
+    produce an arbitrary selection.
 
     ``alternative`` is read from the result: under a one-sided alternative the
     untested half of the fold-change axis cannot produce a small p-value, and
@@ -437,16 +526,16 @@ def volcano_data(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
     p, padj = _stage_arrays(res, stage)
     p = np.asarray(p, dtype=np.float64)
     padj = np.asarray(padj, dtype=np.float64)
-    x = np.asarray(res.log2_fc, dtype=np.float64)
-    y = _neglog10(p)
+    xv = _column_array(res, x)
+    yv = _neglog10(p) if y is None else _column_array(res, y)
     colors, spec = _color_arrays(res, color)
     return VolcanoData(
-        stage=stage, gene=res.gene, x=x, y=y, p=p, padj=padj,
+        stage=stage, gene=res.gene, x=xv, y=yv, p=p, padj=padj,
         significant=np.nan_to_num(padj, nan=np.inf) <= alpha, alpha=alpha,
         cutoff=_bh_cutoff(p, padj, alpha), color=colors, color_spec=spec,
-        labelled=_label_mask(y, res.gene, label),
+        labelled=_label_mask(yv, res.gene, label, tiebreak=xv),
         alternative=str(res.params.get("alternative", "two-sided")),
-        hover=_hover_columns(res),
+        hover=_hover_columns(res), x_name=x, y_name=y,
     )
 
 
@@ -506,7 +595,7 @@ class StagesData:
 
 
 def stages_data(res: WadeResult, *, alpha: float = 0.05,
-                color: str | None = "affected_fraction", label=None) -> StagesData:
+                color="affected_fraction", label=None) -> StagesData:
     """The arrays behind :func:`plot_stages`.
 
     Both axes are ``-log10`` of the *raw* p-value and the quadrant lines sit at
@@ -581,7 +670,8 @@ def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
 
 
 def plot_volcano(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0.05,
-                 color: str | None = "affected_fraction", label=None,
+                 color="affected_fraction", label=None,
+                 x: str = "log2_fc", y: str | None = None,
                  backend: str | None = None, title: str | None = None,
                  width: float | None = None, height: float | None = None):
     """Effect size against significance, coloured by the shape of the difference.
@@ -598,19 +688,28 @@ def plot_volcano(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
         table means ``padj <= alpha``.
     color
         ``"affected_fraction"`` (default, viridis: dark is a subset, light is a
-        global change), ``"direction"`` (blue down, red up), or ``None``.
+        global change), ``"direction"`` (blue down, red up), ``None``, any
+        other result column by name, or your own per-gene array.
+    x, y
+        Which result columns the axes hold (see :func:`volcano_data`).
+        Defaults are the classic volcano, ``log2_fc`` against −log₁₀ p. On a
+        saturated cohort the two worth reaching for are
+        ``x="subset_log2_fc"`` (the subset's own magnitude) and
+        ``y="z_subset"`` (which does not tie at the p-value floor); off the p
+        axis the BH line is suppressed because it means nothing there.
     label
         Genes to annotate directly: an integer ``n`` labels the ``n`` most
         significant, a list of names labels those. Labels are selective by
         design; the hover carries the rest.
 
-    The x axis is ``log2_fc``. ``mean_shift`` is deliberately not offered as
-    an x axis: it is in TPM-like units and spans thousands, so it collapses a
-    transcriptome onto a vertical line. Under a one-sided ``alternative`` the
-    untested half of the axis is shaded.
+    ``mean_shift`` is available as an axis but is a poor choice: it is in
+    TPM-like units and spans thousands, so it collapses a transcriptome onto a
+    vertical line. Under a one-sided ``alternative`` the untested half of the
+    fold-change axis is shaded.
     """
     stages = ("mean_shift", "subset") if stage == "both" else (stage,)
-    data = [volcano_data(res, s, alpha=alpha, color=color, label=label) for s in stages]
+    data = [volcano_data(res, s, alpha=alpha, color=color, label=label, x=x, y=y)
+            for s in stages]
     be = _resolve_backend(backend)
     if be == "plotly":
         return _volcano_plotly(data, title=title, width=width, height=height)
@@ -618,7 +717,7 @@ def plot_volcano(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
 
 
 def plot_stages(res: WadeResult, *, alpha: float = 0.05,
-                color: str | None = "affected_fraction", label=None,
+                color="affected_fraction", label=None,
                 backend: str | None = None, title: str | None = None,
                 width: float | None = None, height: float | None = None):
     """``p_mean_shift`` against ``p_subset``: the README's four quadrants, drawn.

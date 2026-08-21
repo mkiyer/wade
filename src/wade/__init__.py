@@ -40,7 +40,7 @@ from .api import (
     wade_contrast,
     wade_from_matrix,
 )
-from .diagnostics import GeneDetail, wade_gene
+from .diagnostics import GeneDetail, library_qc, subset_drivers, wade_gene
 from .io import (
     RESULT_COLUMNS,
     Condition,
@@ -94,6 +94,7 @@ __all__ = [
     "fit_fold_change",
     "draw_perms",
     "gpd_tail_p",
+    "library_qc",
     "library_sizes",
     "log_ratio_curve",
     "manifest",
@@ -110,6 +111,7 @@ __all__ = [
     "strata_indices",
     "RESULT_COLUMNS",
     "rle",
+    "subset_drivers",
     "subset_test",
     "thin_counts",
     "to_frame",

@@ -185,6 +185,10 @@ from wade import plot_gene, plot_volcano, plot_stages
 plot_gene(res, gene=[300, 320])             # what does this gene's difference look like?
 plot_volcano(res, stage="both", label=5)    # which genes?
 plot_stages(res)                            # what kind of difference?
+
+# Either axis takes any result column. On a large cohort, where the p-values
+# saturate, this is the view that still separates genes:
+plot_volcano(res, stage="subset", x="subset_log2_fc", y="z_subset", label=8)
 ```
 
 (`gene` takes names or indices; 300 and 320 are the first global and the

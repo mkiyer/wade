@@ -1,4 +1,4 @@
-"""Single-gene diagnostic: the quantile pair and the cumulative signed area.
+"""Diagnostics: the single-gene curves, per-library QC, and subset attribution.
 
 R's ``wade_gene()``. The downstream reading of this panel is what makes
 the statistic legible — on the log-ratio curve ``r`` a global fold change
@@ -17,7 +17,7 @@ import numpy as np
 
 from .stats import wade_stats
 
-__all__ = ["GeneDetail", "wade_gene"]
+__all__ = ["GeneDetail", "wade_gene", "library_qc", "subset_drivers"]
 
 
 @dataclass(frozen=True)
@@ -100,3 +100,107 @@ def wade_gene(
         r=r,
         nprobs=st.nprobs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-library QC, and who drives a subset
+
+
+def library_qc(counts: np.ndarray, *, top_n: int = 10, normalizer=None) -> dict:
+    """Per-library depth, complexity and concentration.
+
+    Three numbers per sample, and they have the same status as the
+    combinatorial floor in ``docs/limits.md``: properties of the **data** to
+    look at *before* trusting a run, not knobs.
+
+    ``depth``
+        Column total. Library size on the count scale.
+    ``n_detected`` / ``detected_fraction``
+        How many genes are non-zero. **Complexity.**
+    ``top_share``
+        The fraction of the library held by its ``top_n`` largest genes.
+        **Concentration.**
+
+    Why they matter to *this* test: a library that detects half as many genes
+    as its peers, and holds a third of its mass in ten of them, is an extreme
+    outlier in every gene it does detect — and a distributional test will
+    faithfully report a subset in each of those genes. Measured on real plasma
+    cfRNA, a handful of such libraries topped the subset ranking of thousands
+    of genes at once and produced a thoroughly convincing false story
+    (``notebooks/rna100k.qmd``, "Who drives a subset?"). Complexity was what
+    separated them from a genuine finding; cross-gene recurrence was not.
+
+    ``normalizer`` (a per-gene vector or genes x samples matrix) computes the
+    shares on the rate scale ``counts / normalizer`` instead of on raw counts,
+    matching what the statistic actually sees.
+    """
+    counts = np.asarray(counts, dtype=np.float64)
+    if counts.ndim != 2:
+        raise ValueError(f"expected a 2-D genes x samples array, got shape {counts.shape}")
+    g, n = counts.shape
+    if normalizer is None:
+        rate = counts
+    else:
+        from .normalize import _broadcast_normalizer
+        rate = counts / _broadcast_normalizer(normalizer, counts.shape)
+    total = rate.sum(axis=0)
+    k = min(max(int(top_n), 1), g)
+    # Selection, not a full sort: only the top k matter.
+    top = np.partition(rate, g - k, axis=0)[g - k:].sum(axis=0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        top_share = np.where(total > 0, top / total, np.nan)
+    detected = (counts > 0).sum(axis=0)
+    return {
+        "depth": counts.sum(axis=0),
+        "n_detected": detected,
+        "detected_fraction": detected / g,
+        "top_share": top_share,
+    }
+
+
+def subset_drivers(res, gene, *, k: int | None = None) -> dict:
+    """Which samples drive one gene's subset call.
+
+    The affected region is the gene's own ``affected_fraction`` — the top
+    ``ceil(affected_fraction * nprobs)`` case samples by normalized value, or
+    the bottom ones when ``direction`` is negative — so no threshold is
+    introduced here either. ``k`` overrides that width for exploration.
+
+    Returns ``columns`` (positions in ``res.tpm``), ``samples`` (their names),
+    ``values`` (their normalized values, descending in magnitude for an upward
+    subset), and ``share`` — each driver's value as a fraction of that
+    library's total. **``share`` is the discriminating number**: a gene taking
+    12% of a driver's library is telling you about the library, while one
+    taking a fraction of a percent is telling you about the gene.
+
+    Pair it with :func:`library_qc` on the same columns: drivers that are
+    ordinary libraries which happen to share a diagnosis are the finding;
+    drivers that are low-complexity outliers are the artefact.
+    """
+    if res.subset is None:
+        raise ValueError("this result has no subset stage, so there are no drivers "
+                         "(nperms=0, subset=False, or min(n_case, n_ctrl) < 3)")
+    if res.cond is None:
+        raise ValueError("this result does not carry its condition vector")
+    i = res.gene_index(gene)
+    cond = np.asarray(res.cond)
+    case_cols = np.flatnonzero(cond == 1)
+    row = np.asarray(res.tpm)[i, case_cols]
+    frac = res.subset.affected_fraction[i]
+    if k is None:
+        frac = 1.0 if not np.isfinite(frac) else float(frac)
+        k = int(np.clip(np.ceil(frac * res.nprobs), 1, case_cols.size))
+    else:
+        k = int(np.clip(k, 1, case_cols.size))
+    down = np.nan_to_num(res.subset.direction[i]) < 0
+    order = np.argsort(row if down else -row)[:k]
+    cols = case_cols[order]
+    lib_total = np.asarray(res.tpm)[:, cols].sum(axis=0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        share = np.where(lib_total > 0, row[order] / lib_total, np.nan)
+    names = (None if res.sample_names is None
+             else np.asarray(res.sample_names)[cols])
+    return {"gene": res.gene[i], "columns": cols, "samples": names,
+            "values": row[order], "share": share,
+            "direction": float(np.nan_to_num(res.subset.direction[i])),
+            "affected_fraction": float(res.subset.affected_fraction[i])}
