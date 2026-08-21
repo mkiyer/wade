@@ -3,10 +3,10 @@ title: "Wasserstein Area Differential Expression"
 subtitle: "Demo and user guide"
 format:
   html:
-    number-sections: true
+    html-math-method: mathml
+    include-in-header: _mathjax-quiet.html
     toc: true
     toc-depth: 3
-    number-depth: 3
     toc-expand: 2
     embed-resources: true
     fig-dpi: 150
@@ -32,6 +32,18 @@ bundled Typst, so no LaTeX install is required. `jupyter: python3` resolves to
 the conda env named `wade`; do not pin a named kernel.
 
 Section 7 is a signpost. The head-to-head belongs to notebooks/benchmark.qmd.
+
+MATH: html-math-method is `mathml`, not the default MathJax. Under
+`embed-resources: true` Quarto's inlined MathJax v2 cannot fetch its runtime
+extensions, so it fails to typeset and every equation renders as literal
+\\(...\\) in the page (measured: 78 of them). KaTeX was no better. MathML is
+converted at build time by pandoc, needs no JavaScript, no CDN and no network,
+and is supported by every current browser. Typst renders math natively, so the
+PDF was never affected.
+
+Sections are numbered BY HAND and `number-sections` must stay off in BOTH
+formats, or the numbers double up ("1 1. Introduction"). See the numbering note
+below for why automatic numbering was abandoned.
 
 RENDER TRAP, measured on Quarto 1.10.18: a STALE demo.html makes Quarto skip
 rewriting the figure files while still referencing them, so images silently

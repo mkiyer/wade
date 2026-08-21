@@ -229,6 +229,8 @@ src/wade/*.so
 
 # rendered notebooks carry data-derived values; the .qmd source is the artifact
 notebooks/*.html
+# ... but a leading underscore marks a Quarto partial, which is source.
+!notebooks/_*.html
 notebooks/*.pdf
 notebooks/*_files/
 notebooks/.quarto/

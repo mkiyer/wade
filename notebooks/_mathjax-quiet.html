@@ -1,0 +1,29 @@
+<!--
+plotly.js bundles MathJax v2 and configures it on load. Because the bundle is
+inlined it has no script src to derive a root path from, so MathJax auto-loads
+its cosmetic extensions from "/extensions/MathMenu.js" and
+"/extensions/MathZoom.js", which 404 against the page's origin.
+
+This document's own math is MathML, rendered at build time
+(html-math-method: mathml), and uses MathJax not at all - so those requests are
+noise. Turning the menu and zoom off is the documented v2 way to stop them being
+requested.
+
+Quarto's ordering of this include relative to its inlined dependencies is not
+stable between renders, so both cases are handled: mutate an existing Hub if
+MathJax has already loaded, and otherwise pre-set the config it will read when
+it does. Assigning window.MathJax over a LOADED MathJax would destroy it, which
+is why the two cases are distinguished rather than one being assumed.
+-->
+<script>
+  (function () {
+    var hub = window.MathJax && window.MathJax.Hub;
+    var off = { showMathMenu: false, showMathMenuMSIE: false,
+                menuSettings: { zoom: "None" } };
+    if (hub && typeof hub.Config === "function") {
+      hub.Config(off);
+    } else if (!window.MathJax) {
+      window.MathJax = off;
+    }
+  })();
+</script>
