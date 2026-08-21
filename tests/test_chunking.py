@@ -166,66 +166,37 @@ def test_chunked_fit_and_thin_are_chunk_invariant():
     counts = np.round(_counts(6))
     norm = np.ones(G)
     lib = _normalize.library_sizes(counts, norm)
-    nf = lambda c, rows=slice(None): _normalize.tpm_like(  # noqa: E731
-        c, norm[rows], lib, jitter=np.broadcast_to(np.zeros(1), c.shape))
-    ref_f = fit_fold_change(counts, COND, nf, seed=9)
+    ref_f = fit_fold_change(counts, COND, alpha=lambda rows=slice(None):
+                            np.ones((norm[rows].shape[0], lib.shape[0])), seed=9)
     ref_t = thin_counts(counts, COND, ref_f, np.random.default_rng(9))
     for chunk in (2, 4, 10, 23, 99):
-        f = fit_fold_change(counts, COND, nf, seed=9, gene_chunk=chunk)
-        np.testing.assert_array_equal(ref_f, f, err_msg=f"fit at chunk {chunk}")
         t = thin_counts(counts, COND, ref_f, np.random.default_rng(9), gene_chunk=chunk)
         np.testing.assert_array_equal(ref_t, t, err_msg=f"thin at chunk {chunk}")
 
-    # ... and the alpha fast path (what wade() uses) is chunk-invariant too.
+    # ... and the same holds for the fit, which is the only fit there is.
     alpha = lambda rows=slice(None): np.broadcast_to(  # noqa: E731
         1.0 / lib[None, :], (norm[rows].shape[0], lib.shape[0])).copy()
     ref_a = fit_fold_change(counts, COND, alpha=alpha, seed=9)
     for chunk in (2, 4, 10, 23, 99):
         f = fit_fold_change(counts, COND, alpha=alpha, seed=9, gene_chunk=chunk)
-        np.testing.assert_array_equal(ref_a, f, err_msg=f"alpha fit at chunk {chunk}")
+        np.testing.assert_array_equal(ref_a, f, err_msg=f"fit at chunk {chunk}")
 
 
-def test_middle_mean_is_independent_of_row_grouping():
+def test_midmean_is_independent_of_row_grouping():
     """The alpha fit reduces per-side row *subsets*, whose sizes depend on the
     chunk boundaries — so its interquartile mean must give a row the same
     value whatever rows share the array, singletons included. This pins the
     NumPy behaviour the fit relies on (fresh C-contiguous reductions are
     layout-independent; F-ordered ones are not, which is why _middle_mean
     forces contiguity)."""
-    from wade.thinning import _middle_mean, midmean
+    from wade.thinning import midmean
 
     rng = np.random.default_rng(0)
     x = rng.gamma(2.0, 50.0, size=(23, 81))          # awkward width, skewed values
-    ref = _middle_mean(x)
+    ref = midmean(x)
     for idx in ([3], [0, 7], list(range(5, 17)), [1, 4, 9, 16, 22]):
-        np.testing.assert_array_equal(_middle_mean(x[idx]), ref[idx],
+        np.testing.assert_array_equal(midmean(x[idx]), ref[idx],
                                       err_msg=f"rows {idx}")
-    # and it selects exactly midmean's middle set (same values, ulp-level sum)
-    np.testing.assert_allclose(_middle_mean(x), midmean(x), rtol=1e-14)
 
 
-def test_alpha_fit_agrees_with_the_normalize_fit():
-    """Two layouts of the same objective: the draws differ, so per-gene f-hat
-    differs by bisection noise, but both are unbiased for the same target."""
-    from wade import normalize as _normalize
-    from wade.thinning import fit_fold_change
 
-    rng = np.random.default_rng(11)
-    g = 80
-    case = rng.poisson(rng.gamma(10, 2 * 2.0, (g, 300)))
-    ctrl = rng.poisson(rng.gamma(10, 2.0, (g, 300)))
-    counts = np.c_[case, ctrl].astype(float)
-    cond = np.r_[np.ones(300, int), np.zeros(300, int)]
-    lib = np.ones(600)
-    nf = lambda c: _normalize.tpm_like(  # noqa: E731
-        c, np.ones(g), lib, jitter=np.zeros(c.shape), norm_factor=1.0)
-    alpha = lambda rows=slice(None): np.ones((np.ones(g)[rows].shape[0], 600))  # noqa: E731
-    f_n = fit_fold_change(counts, cond, nf, seed=0)
-    f_a = fit_fold_change(counts, cond, alpha=alpha, seed=0)
-    assert abs(np.median(f_a) - 2.0) < 0.1
-    assert abs(np.median(f_a) - np.median(f_n)) < 0.05
-    np.testing.assert_allclose(f_a, f_n, rtol=0.15)
-    with pytest.raises(ValueError, match="exactly one"):
-        fit_fold_change(counts, cond, nf, alpha=alpha)
-    with pytest.raises(ValueError, match="exactly one"):
-        fit_fold_change(counts, cond)

@@ -427,37 +427,21 @@ def _neglog10(p):
 def result_columns(res) -> dict:
     """The result as a plain dict of arrays, in :data:`RESULT_COLUMNS` order.
 
-    Stage-2 columns are omitted when the subset stage did not run; bootstrap
-    interval columns are appended when ``n_boot`` produced them.
+    The *report view* of :meth:`wade.WadeResult.columns` — that one method is
+    the single place the column set is assembled, so a new statistic appears
+    here, in the written table and in the plotting layer's namespace at once
+    rather than needing three edits. All this adds is the written order and
+    the ``neglog10_p_*`` pair a volcano plots; the bootstrap intervals stay
+    at the end because they are per-statistic pairs, not statistics.
     """
-    cols = {
-        "gene": res.gene,
-        "case_mean": res.case_mean,
-        "ctrl_mean": res.ctrl_mean,
-        "mean_shift": res.mean_shift,
-        "log2_fc": res.log2_fc,
-        "p_mean_shift": res.p_mean_shift,
-        "padj_mean_shift": res.padj_mean_shift,
-        "neglog10_p_mean_shift": _neglog10(res.p_mean_shift),
-    }
-    if getattr(res, "z_mean_shift", None) is not None:
-        cols["z_mean_shift"] = res.z_mean_shift
-    if res.subset is not None:
-        cols.update({
-            "subset_stat": res.subset.statistic,
-            "p_subset": res.p_subset,
-            "padj_subset": res.padj_subset,
-            "neglog10_p_subset": _neglog10(res.p_subset),
-            "affected_fraction": res.affected_fraction,
-            "subset_log2_fc": res.subset.subset_log2_fc,
-            "direction": res.direction,
-        })
-        if getattr(res, "z_subset", None) is not None:
-            cols["z_subset"] = res.z_subset
-    cols["w1"] = res.w1
-    ordered = {k: cols[k] for k in RESULT_COLUMNS if k in cols}
-    for name, ci in (("affected_fraction", res.ci_affected_fraction),
-                     ("direction", res.ci_direction), ("log2_fc", res.ci_log2_fc)):
+    cols = dict(res.columns())
+    for stage in ("mean_shift", "subset"):
+        p_col = f"p_{stage}"
+        if cols.get(p_col) is not None:
+            cols[f"neglog10_{p_col}"] = _neglog10(cols[p_col])
+    ordered = {k: cols[k] for k in RESULT_COLUMNS if cols.get(k) is not None}
+    for name in ("affected_fraction", "direction", "log2_fc"):
+        ci = getattr(res, f"ci_{name}")
         if ci is not None:
             ordered[f"{name}_lo"] = ci[0]
             ordered[f"{name}_hi"] = ci[1]

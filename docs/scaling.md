@@ -168,8 +168,10 @@ The one trap is the jitter: it is drawn once for the whole matrix and must be
 **Payoff.** Removes the 19.2 GB matrix copies from the peak entirely — at
 2,000 genes per chunk each working matrix is 1.28 GB.
 
-**Landed 2026-08-20** (`wade(..., gene_chunk=N)`). Bit-identical to the
-unchunked run by construction — `assert_array_equal`, not tolerance, in
+**Landed 2026-08-20** (`wade(..., gene_chunk=N)`), and as of 2026-08-21 it
+is the *only* counts driver — `gene_chunk=None` is one chunk over the whole
+matrix, so there is no second pipeline to keep in step. Bit-identical by
+construction — `assert_array_equal`, not tolerance, in
 `tests/test_chunking.py` — because every coupling was made structural:
 
 * the jitter is drawn once and indexed per chunk, as planned;

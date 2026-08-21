@@ -443,10 +443,18 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
 
 def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
          alternative, allow_single_sample_group, keep_null, gene_names,
-         backend, subset, jitter, tpm, pseudocount=None, corrected=None,
-         shift=None, n_boot=0, boot_rng=None, sample_names=None,
-         condition_meta=None, max_probs=None, stage1="grid",
-         fit_backend="numpy", strata=None) -> WadeResult:
+         backend, subset, jitter, tpm, pseudocount=None, n_boot=0,
+         boot_rng=None, sample_names=None, condition_meta=None,
+         max_probs=None, stage1="grid", strata=None) -> WadeResult:
+    """The single-pass driver, for :func:`wade_from_matrix` only.
+
+    :func:`wade` goes through :func:`_wade_chunked` unconditionally — with
+    ``gene_chunk=None`` that is one chunk over the whole matrix, which the
+    equality tests pin as bit-identical — so there is one counts pipeline,
+    not two. This path exists because a pre-normalized matrix skips that
+    pipeline entirely: nothing to normalize, no jitter to index, no counts to
+    thin.
+    """
     cond = np.asarray(cond)
     obs = wade_stats(x, cond, allow_single_sample_group=allow_single_sample_group,
                      max_probs=max_probs)
@@ -465,8 +473,7 @@ def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
     sub = None
     if nperms > 0 and subset and obs.nprobs >= 3:
         sub = subset_test(x, cond, perms, alternative=alternative, backend=backend,
-                          pseudocount=pseudocount, corrected=corrected, shift=shift,
-                          max_probs=max_probs)
+                          pseudocount=pseudocount, max_probs=max_probs)
 
     ci = {}
     # Gated on the subset stage, not merely on n_boot: an interval for a
@@ -482,7 +489,7 @@ def _run(x, cond, *, nperms, perms, seed, perm_rng, n_exc_min, n_tail,
         tpm=tpm, jitter=jitter, pseudocount=pseudocount, n_boot=n_boot,
         sample_names=sample_names, condition_meta=condition_meta,
         max_probs=max_probs, stage1_stat=stage1_stat, stage1=stage1,
-        fit_backend=fit_backend, strata=strata,
+        strata=strata,
     )
 
 
@@ -740,10 +747,11 @@ def wade(
     gene_chunk
         Process the genes in blocks of this many, so peak memory stops
         depending on the number of genes (``docs/scaling.md`` §2.2). **Not a
-        numerical choice**: the chunked run is bit-identical to the unchunked
-        one — the jitter is indexed, never redrawn, and every random stream
-        is consumed in gene order across chunks. A few thousand is a good
-        block; ``None`` (default) processes the whole matrix at once.
+        numerical choice**: the jitter is indexed rather than redrawn and
+        every random stream is consumed in gene order, so the block size
+        cannot change a number — ``None`` (the default) is simply one block
+        over the whole matrix, and it is the *same* code path. A few thousand
+        genes is a good block on a large cohort.
     stage1
         How the stage-1 statistic and its null are computed. ``"grid"`` (the
         default) is the quantile-grid quadrature, parity-pinned against the R
@@ -833,58 +841,18 @@ def wade(
            else np.asarray(lib_sizes, dtype=np.float64))
     _check_libraries(lib, sample_names, allow_empty_samples)
 
-    if gene_chunk is not None:
-        return _wade_chunked(
-            counts=counts, normalizer=normalizer, cond=cond, lib=lib,
-            jitter=jitter, noise=noise, norm_factor=norm_factor,
-            nperms=nperms, perms=perms, seed=seed, perm_rng=perm_rng,
-            thin_rng=thin_rng, boot_rng=boot_rng, n_exc_min=n_exc_min,
-            n_tail=n_tail, alternative=alternative,
-            allow_single_sample_group=allow_single_sample_group,
-            keep_null=keep_null, gene_names=gene_names, backend=backend,
-            subset=subset, thin=thin, pseudocount=pseudocount, n_boot=n_boot,
-            sample_names=sample_names, condition_meta=cond_meta,
-            max_probs=max_probs, gene_chunk=gene_chunk, stage1=stage1,
-            fit_backend=fit_backend, strata=strata)
-
-    normalize = lambda c: _normalize.tpm_like(  # noqa: E731
-        c, normalizer, lib, noise=noise, norm_factor=norm_factor, jitter=jitter)
-    tpm = normalize(counts)
-
-    pc = one_count(normalizer, lib, counts.shape, norm_factor=norm_factor) * pseudocount \
-        if pseudocount > 0 else None
-
-    corrected = shift = None
-    if thin and nperms > 0 and subset and min(np.sum(cond == 1), np.sum(cond == 0)) >= 3:
-        # Thinning draws reads, so it works on integers. Estimated counts
-        # (salmon, kallisto) are not integers; they are rounded for the
-        # thinning only — the observed matrix and the characterization use
-        # the values as given.
-        # The fit compares the groups' middles on the normalized scale
-        # *without* the jitter (a hundredth of a count has no business in a
-        # fold-change estimate, and on an all-zero gene it would decide which
-        # group is "higher" at every bisection step) — and jitter-free
-        # normalization is per-cell affine, so the fit takes the scale
-        # directly (docs/scaling.md §3.3).
-        c_int = np.round(counts)
-        shift = fit_fold_change(c_int, cond,
-                                alpha=_fit_alpha(normalizer, lib, norm_factor,
-                                                 counts.shape[1]),
-                                seed=int(thin_rng.integers(2**31)),
-                                backend=fit_backend)
-        corrected = normalize(thin_counts(c_int, cond, shift, thin_rng))
-
-    return _run(
-        tpm, cond, nperms=nperms, perms=perms, seed=seed, perm_rng=perm_rng,
-        n_exc_min=n_exc_min, n_tail=n_tail, alternative=alternative,
-        allow_single_sample_group=allow_single_sample_group, keep_null=keep_null,
-        gene_names=gene_names, backend=backend, subset=subset,
-        jitter=jitter, tpm=tpm, pseudocount=pc, corrected=corrected, shift=shift,
-        n_boot=n_boot, boot_rng=boot_rng, sample_names=sample_names,
-        condition_meta=cond_meta, max_probs=max_probs, stage1=stage1,
-        fit_backend=fit_backend, strata=strata,
-    )
-
+    return _wade_chunked(
+        counts=counts, normalizer=normalizer, cond=cond, lib=lib,
+        jitter=jitter, noise=noise, norm_factor=norm_factor,
+        nperms=nperms, perms=perms, seed=seed, perm_rng=perm_rng,
+        thin_rng=thin_rng, boot_rng=boot_rng, n_exc_min=n_exc_min,
+        n_tail=n_tail, alternative=alternative,
+        allow_single_sample_group=allow_single_sample_group,
+        keep_null=keep_null, gene_names=gene_names, backend=backend,
+        subset=subset, thin=thin, pseudocount=pseudocount, n_boot=n_boot,
+        sample_names=sample_names, condition_meta=cond_meta,
+        max_probs=max_probs, gene_chunk=gene_chunk, stage1=stage1,
+        fit_backend=fit_backend, strata=strata)
 
 def wade_from_matrix(
     x: np.ndarray,

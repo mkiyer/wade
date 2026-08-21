@@ -309,8 +309,9 @@ def test_the_shift_correction_is_what_delivers_specificity():
     none = rate(x, b_obs)
     division = rate(wade.subset.shift_correct(x, COND, r_obs), b_obs)
 
-    normalize = lambda c: c + 0.0                      # counts already are the scale
-    fold = fit_fold_change(counts, COND, normalize, seed=0)
+    # counts already are the scale, so the fit's per-cell alpha is all ones
+    unit_alpha = lambda rows=slice(None): np.ones(counts[rows].shape)   # noqa: E731
+    fold = fit_fold_change(counts, COND, alpha=unit_alpha, seed=0)
     thinned = thin_counts(counts, COND, fold, np.random.default_rng(1)) + PSEUDO
     thinning = rate(thinned, bridge_of(thinned))
 

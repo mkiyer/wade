@@ -146,13 +146,13 @@ def test_worked_example_reproduces_algorithm_md_section_2_7():
 
 
 def test_gene_detail_cum_ends_at_mean_shift():
-    """``GeneDetail.cum[-1] == mean_shift`` — the invariant
+    """``GeneDetail.cumulative_area[-1] == mean_shift`` — the invariant
     :class:`wade.GeneDetail` declares and its docstring calls "the cheapest
     correctness test the implementation has", which was asserted nowhere
     (package audit, 2026-08-20).
 
     A *tolerance* assertion, deliberately: ``mean_shift`` sums the difference
-    curve forwards while ``cum`` accumulates it backwards, and the two differ
+    curve forwards while ``cumulative_area`` accumulates it backwards, and the two differ
     bitwise on about two thirds of genes at a worst relative difference of
     ~3.5e-14 (measured in the R over 2,000 rows). An exact assertion here
     would be wrong about floating point, not strict about correctness.
@@ -167,7 +167,7 @@ def test_gene_detail_cum_ends_at_mean_shift():
     worst = 0.0
     for i in range(x.shape[0]):
         d = wade.wade_gene(x[i], cond)
-        assert d.cum.shape == (st.nprobs,)
-        worst = max(worst, abs(d.cum[-1] - st.mean_shift[i])
+        assert d.cumulative_area.shape == (st.nprobs,)
+        worst = max(worst, abs(d.cumulative_area[-1] - st.mean_shift[i])
                     / max(abs(st.mean_shift[i]), 1e-300))
     assert worst < 1e-12, f"worst relative deviation {worst:.2e}"

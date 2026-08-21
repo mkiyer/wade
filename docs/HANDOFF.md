@@ -35,7 +35,7 @@ reproduces them.
 The new `wade()` surface, all documented in the docstring: `max_probs`
 (grid cap, default 2,000 — **the one deliberate answer change**, stated in
 `method.md` §1, realized `m` in the result and manifest), `gene_chunk`
-(bounded-memory driver, **bit-identical** to one-pass), `stage1="gemm"`
+(block size for the one counts driver; `None` is a single block), `stage1="gemm"`
 (balanced designs, the exact mean difference as one matrix product, opt-in),
 `fit_backend="rust"` (the fold-change fit's bisection in the kernel, opt-in
 because it is *not* bitwise against NumPy — see §3 below).

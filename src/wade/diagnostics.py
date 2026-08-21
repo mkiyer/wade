@@ -27,7 +27,7 @@ class GeneDetail:
     p: np.ndarray      # (m,) ascending, 0 -> 1
     y1: np.ndarray     # (m,) case quantiles, reordered to match p
     y0: np.ndarray     # (m,) control quantiles
-    cum: np.ndarray    # (m,) cumulative signed area; cum[-1] == mean_shift
+    cumulative_area: np.ndarray   # (m,) running signed area; its last entry is mean_shift
     r: np.ndarray      # (m,) the log-ratio curve, ascending
     nprobs: int
 
@@ -60,7 +60,7 @@ def wade_gene(
     curve consistent with the numbers the test produced.
 
     Second, reversing changes the summation order. The curve is built so
-    that ``cum[-1] == mean_shift``, and in exact arithmetic that is
+    that ``cumulative_area[-1] == mean_shift``, and in exact arithmetic that is
     trivially true — but ``mean_shift`` sums ``D`` forwards while the
     endpoint accumulates it backwards. Measured in the R over 2,000 random
     rows, the two differ bitwise in about two thirds of genes, at a worst
@@ -96,7 +96,7 @@ def wade_gene(
         p=st.q[::-1].copy(),
         y1=y1.copy(),
         y0=y0.copy(),
-        cum=np.cumsum(y1 - y0) / st.nprobs,
+        cumulative_area=np.cumsum(y1 - y0) / st.nprobs,
         r=r,
         nprobs=st.nprobs,
     )

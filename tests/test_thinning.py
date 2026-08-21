@@ -26,11 +26,12 @@ def _nb(rng, mu, size):
     return rng.poisson(rng.gamma(1 / PHI, PHI * mu, size=size)).astype(float)
 
 
-def _unit_normalizer(counts):
-    """Unit library sizes, no jitter: one count is one unit, nothing couples
-    genes, and the fit sees counts (which is what wade() hands it too)."""
+def _unit_alpha(counts):
+    """The fit's per-cell scale for unit normalizer and unit library sizes:
+    one count is one unit, nothing couples genes, and the fit sees counts —
+    which is what wade() hands it too (norm_factor / (normalizer * lib) = 1)."""
     g, n = counts.shape
-    return lambda c: N.tpm_like(c, np.ones(g), np.ones(n), jitter=np.zeros(counts.shape), norm_factor=1.0)
+    return lambda rows=slice(None): np.ones((np.empty(g)[rows].shape[0], n))
 
 
 # ---------------------------------------------------------------------------
@@ -58,11 +59,11 @@ def test_fitted_fold_change_is_unbiased_for_an_nb_global_shift_at_low_and_modera
     rng = np.random.default_rng(1)
     for mu in (2.0, 20.0):
         counts = np.c_[_nb(rng, 2 * mu, (100, N1)), _nb(rng, mu, (100, N0))]
-        f = fit_fold_change(counts, COND, _unit_normalizer(counts), seed=0)
+        f = fit_fold_change(counts, COND, alpha=_unit_alpha(counts), seed=0)
         assert abs(np.median(f) - 2.0) < 0.1, f"mu={mu}: median f {np.median(f):.3f}"
         # and the plain interquartile-mean ratio is visibly biased at low counts
         if mu == 2.0:
-            x = _unit_normalizer(counts)(counts)
+            x = counts * _unit_alpha(counts)()
             ratio = midmean(x[:, :N1]) / midmean(x[:, N1:])
             assert np.median(ratio) > 2.04
 
@@ -74,7 +75,7 @@ def test_fitted_fold_change_is_blind_to_a_subset_below_a_quarter():
     for i in range(100):
         case[i, rng.choice(N1, 10, replace=False)] = _nb(rng, 160.0, 10)
     counts = np.c_[case, ctrl]
-    f = fit_fold_change(counts, COND, _unit_normalizer(counts), seed=0)
+    f = fit_fold_change(counts, COND, alpha=_unit_alpha(counts), seed=0)
     assert np.median(f) < 1.12
     assert np.median(case.mean(1) / ctrl.mean(1)) > 1.25
 
@@ -82,20 +83,20 @@ def test_fitted_fold_change_is_blind_to_a_subset_below_a_quarter():
 def test_fitted_fold_change_thins_whichever_group_is_higher():
     rng = np.random.default_rng(3)
     counts = np.c_[_nb(rng, 10.0, (50, N1)), _nb(rng, 20.0, (50, N0))]     # controls higher
-    f = fit_fold_change(counts, COND, _unit_normalizer(counts), seed=0)
+    f = fit_fold_change(counts, COND, alpha=_unit_alpha(counts), seed=0)
     assert np.median(f) == pytest.approx(0.5, abs=0.05)
 
 
 def test_fitted_fold_change_is_one_where_there_is_nothing_to_fit():
     counts = np.zeros((3, N1 + N0))
-    f = fit_fold_change(counts, COND, _unit_normalizer(counts), seed=0)
+    f = fit_fold_change(counts, COND, alpha=_unit_alpha(counts), seed=0)
     np.testing.assert_array_equal(f, 1.0)
 
 
 def test_fit_and_thin_refuse_non_integer_counts():
     x = np.random.default_rng(0).lognormal(3, 0.5, (4, N1 + N0))
     with pytest.raises(ValueError, match="integer counts"):
-        fit_fold_change(x, COND, _unit_normalizer(x))
+        fit_fold_change(x, COND, alpha=_unit_alpha(x))
     with pytest.raises(ValueError, match="integer counts"):
         thin_counts(x, COND, np.ones(4), np.random.default_rng(0))
 

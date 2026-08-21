@@ -87,10 +87,8 @@ def test_kernel_fit_is_blind_to_a_subset_and_direction_aware():
     np.testing.assert_array_equal(f, 1.0)
 
 
-def test_kernel_fit_refuses_the_normalize_path_and_bad_backends():
+def test_kernel_fit_refuses_a_bad_backend():
     counts = np.zeros((3, N1 + N0))
-    with pytest.raises(ValueError, match="alpha"):
-        fit_fold_change(counts, COND, lambda c: c, backend="rust")
     with pytest.raises(ValueError, match="'numpy' or 'rust'"):
         fit_fold_change(counts, COND, alpha=_unit_alpha(3, N1 + N0), backend="fast")
 

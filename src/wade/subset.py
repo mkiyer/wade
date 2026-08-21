@@ -406,9 +406,8 @@ def subset_test(
         # exactly shift-invariant; only the null moves. With a pseudocount the
         # invariance is not exact (x/f + c is not a constant log shift), so
         # the observed curve is then re-read off the corrected matrix too.
+        xs = shift_correct(x, cond, r_obs)
         shift = 2.0 ** np.median(r_obs, axis=1)
-        xs = x.copy()
-        xs[:, i1] /= shift[:, None]
         if pc is None:
             r_test, b_test = r_obs, b_obs
         else:
