@@ -183,17 +183,16 @@ def _cloud_trace(data, go, theme, *, name="genes"):
 
 
 def _labels_plotly(data, go, fig, theme, row=None, col=None):
-    idx, above = _label_positions(data)
+    idx, dx, dy = _label_positions(data)
     if idx.size == 0:
         return
-    for sel, pos in ((above, "top center"), (~above, "bottom center")):
-        if not sel.any():
-            continue
-        fig.add_trace(go.Scatter(
-            x=data.x[idx[sel]], y=data.y[idx[sel]], mode="text", text=data.display[idx[sel]],
-            textposition=pos, textfont=dict(size=11, color=theme.ink),
-            hoverinfo="skip", showlegend=False,
-        ), row=row, col=col)
+    # The offsets already carry the placement, so the text is centred on its
+    # resolved position rather than anchored to a side of the point.
+    fig.add_trace(go.Scatter(
+        x=data.x[idx] + dx, y=data.y[idx] + dy, mode="text", text=data.display[idx],
+        textposition="middle center", textfont=dict(size=11, color=theme.ink),
+        hoverinfo="skip", showlegend=False,
+    ), row=row, col=col)
 
 
 def _intervals_plotly(data, go, fig, theme, row=None, col=None):

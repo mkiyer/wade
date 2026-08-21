@@ -226,6 +226,35 @@ too, so `label=["MYC"]` finds MYC. You name what you see.
 * **Anything the statistic depends on.** If a change here would alter a
   reported number, it belongs in the core, not here.
 
+### Labels are placed, not just offset
+
+`label=n` names the top *n* genes, and on a real cohort those *n* land in a
+tight cluster — thousands of genes tie at the p-value floor, so the most
+significant ones share a position and their text stacks into a smear. Drawing
+the bootstrap intervals made it worse, by putting error bars through it.
+
+Labels are now placed by a greedy slot assignment: most significant first, each
+taking the first candidate position that clears every label already placed.
+It runs in normalized axis units in the data layer, so **both backends place
+text identically** and neither needs font metrics, and displacement is capped at
+a couple of label-heights — there are no leader lines, so a label has to stay
+next to its point.
+
+Overlapping label pairs on the README's dataset, alternate-above-and-below
+against the slot assignment:
+
+| figure | labels | before | after |
+|---|---|---|---|
+| volcano, mean-shift stage | 8 | 24 | **1** |
+| volcano, subset stage | 8 | 28 | **0** |
+| two-stage plot | 8 | 24 | **0** |
+| subset magnitude vs affected fraction | 12 | 25 | **3** |
+
+The last row is the honest limit: twelve labels on a cluster of near-coincident
+points need more width than the cluster has, and no placement rule invents
+space. Label fewer, or read the rest off the hover — `adjustText` was not
+brought in for it, and would not have fixed that row either.
+
 ## Themes
 
 Every figure takes `theme=`, and three are built in:

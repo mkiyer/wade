@@ -781,7 +781,7 @@ def test_both_backends_label_by_the_metadata_column(res_meta, backend):
         assert any(t.startswith("SYM") for t in texts)
         assert not any(t.startswith("ENSG") for t in texts)
     else:
-        labels = [t for tr in fig.data if tr.mode == "text" for t in (tr.text or [])]
+        labels = [str(t) for tr in fig.data if tr.mode == "text" for t in np.asarray(tr.text)]
         assert labels and all(str(t).startswith("SYM") for t in labels)
         # The hover carries the requested columns as text, ahead of the numbers.
         cloud = fig.data[0]
@@ -791,6 +791,85 @@ def test_both_backends_label_by_the_metadata_column(res_meta, backend):
     assert wade.plot_gene(res_meta, gene=["ENSG00006"], meta="gene_name",
                           backend=backend) is not None
     assert wade.plot_stages(res_meta, label=2, meta="gene_name", backend=backend) is not None
+
+
+# ---------------------------------------------------------------------------
+# Label de-collision
+
+
+def _overlapping_label_pairs(data):
+    """How many pairs of drawn labels overlap, in the normalized units the
+    placement reasons in. The figure's actual defect, counted."""
+    import itertools
+
+    from wade.plotting.data import _LABEL_H, _LABEL_W, _axis_span, _label_positions
+
+    idx, dx, dy = _label_positions(data)
+    x = np.asarray(data.x, dtype=np.float64)
+    y = np.asarray(data.y, dtype=np.float64)
+    x0, xw = _axis_span(x)
+    y0, yw = _axis_span(y)
+    u = (x[idx] + dx - x0) / xw
+    v = (y[idx] + dy - y0) / yw
+    return sum(1 for a, b in itertools.combinations(range(idx.size), 2)
+               if abs(u[a] - u[b]) < _LABEL_W and abs(v[a] - v[b]) < _LABEL_H)
+
+
+def test_labels_are_placed_without_colliding(res):
+    """The alternate-above-and-below scheme this replaced left 24 overlapping
+    pairs out of 8 labels on this data; the slot assignment leaves 0–1. Numbers
+    and method are in ``docs/plotting.md``."""
+    for d in (P.volcano_data(res, "mean_shift", label=8),
+              P.volcano_data(res, "subset", label=8),
+              P.stages_data(res, label=8)):
+        assert _overlapping_label_pairs(d) <= 1
+
+    # Displacement is bounded, because there are no leader lines to reconnect a
+    # label that wandered: at most the furthest slot, on each axis.
+    from wade.plotting.data import _LABEL_H, _LABEL_SLOTS, _LABEL_W, _axis_span, _label_positions
+    d = P.volcano_data(res, "subset", label=12)
+    idx, dx, dy = _label_positions(d)
+    _, xw = _axis_span(np.asarray(d.x, dtype=np.float64))
+    _, yw = _axis_span(np.asarray(d.y, dtype=np.float64))
+    assert np.abs(dx).max() <= max(abs(sx) for sx, _ in _LABEL_SLOTS) * _LABEL_W * xw + 1e-12
+    assert np.abs(dy).max() <= max(abs(sy) for _, sy in _LABEL_SLOTS) * _LABEL_H * yw + 1e-12
+
+
+def test_label_placement_is_deterministic_and_prioritises_the_top_gene(res):
+    from wade.plotting.data import _LABEL_H, _axis_span, _label_positions
+
+    d = P.volcano_data(res, "subset", label=6)
+    a, b = _label_positions(d), _label_positions(d)
+    for first, second in zip(a, b):
+        np.testing.assert_array_equal(first, second)
+    # The most significant labelled gene keeps the best slot: straight above.
+    idx, dx, dy = a
+    k = int(np.argmax(np.nan_to_num(d.y[idx], nan=-np.inf)))
+    _, yw = _axis_span(np.asarray(d.y, dtype=np.float64))
+    assert dx[k] == pytest.approx(0.0)
+    assert dy[k] == pytest.approx(_LABEL_H * yw)
+
+
+@pytest.mark.parametrize("backend", P.available_backends())
+def test_both_backends_place_labels_at_the_same_resolved_positions(res, backend):
+    """The layer's promise is that a figure says the same thing in either
+    backend; the placement is computed once, in the data layer, for that reason."""
+    from wade.plotting.data import _label_positions
+
+    d = P.volcano_data(res, "subset", label=5)
+    idx, dx, dy = _label_positions(d)
+    want = sorted(zip(np.round(d.x[idx] + dx, 9), np.round(d.y[idx] + dy, 9)))
+    fig = wade.plot_volcano(res, "subset", label=5, backend=backend)
+    if backend == "matplotlib":
+        # The FDR annotation is an ax.text too; only the gene labels count.
+        wanted = set(map(str, d.display[idx]))
+        got = sorted((round(a.get_position()[0], 9), round(a.get_position()[1], 9))
+                     for a in fig.axes[0].texts if a.get_text() in wanted)
+    else:
+        [tr] = [t for t in fig.data if t.mode == "text"]
+        got = sorted(zip(np.round(np.asarray(tr.x, float), 9),
+                         np.round(np.asarray(tr.y, float), 9)))
+    assert got == want
 
 
 # ---------------------------------------------------------------------------

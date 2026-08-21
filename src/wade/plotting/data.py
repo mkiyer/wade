@@ -517,17 +517,83 @@ def _label_mask(y: np.ndarray, gene: np.ndarray, label, tiebreak=None) -> np.nda
     return np.isin(gene, list(wanted))
 
 
-def _label_positions(data) -> tuple[np.ndarray, np.ndarray]:
-    """Labelled indices and, for each, whether the text goes above or below.
+#: A label's assumed extent as a fraction of the axis range — roughly ten
+#: characters wide and one line tall at the sizes these figures default to. The
+#: data layer has no font metrics and no pixel size, so this is a calibration
+#: rather than a measurement, and it is deliberately a little generous:
+#: overlapping labels read worse than slightly over-spread ones.
+_LABEL_W, _LABEL_H = 0.070, 0.036
 
-    Genes at a p-value floor share a y, so consecutive labels along x
-    alternate sides. Cheap, deterministic, and enough for the *selective*
-    labelling this layer does; dense labelling belongs to the hover.
+#: Where a label may sit, in units of its own extent from the point, best
+#: first: directly above, directly below, the four diagonals, then a ring
+#: further out. Capped at a couple of label-heights so a label stays visibly
+#: next to its point — there are no leader lines to reconnect it.
+_LABEL_SLOTS = (
+    (0.0, 1.0), (0.0, -1.0),
+    (1.0, 0.6), (-1.0, 0.6), (1.0, -0.6), (-1.0, -0.6),
+    (0.0, 2.1), (0.0, -2.1),
+    (1.5, 1.6), (-1.5, 1.6), (1.5, -1.6), (-1.5, -1.6),
+)
+
+
+def _axis_span(v: np.ndarray) -> tuple[float, float]:
+    """An axis's finite origin and width, never zero — the normalizer that lets
+    label geometry be reasoned about in units of the plot rather than of the
+    data."""
+    finite = v[np.isfinite(v)]
+    if finite.size == 0:
+        return 0.0, 1.0
+    lo, hi = float(finite.min()), float(finite.max())
+    return lo, (hi - lo) or 1.0
+
+
+def _label_positions(data) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Labelled indices and each label's offset, in **data coordinates**.
+
+    Selective labelling still collides. On a real cohort thousands of genes tie
+    at the p-value floor, so the labelled ones land in a tight cluster and their
+    text stacks into an unreadable smear; drawing the bootstrap intervals (C2)
+    made it worse by putting bars through it. Alternating above and below — what
+    this did before — only ever separates two.
+
+    A greedy slot assignment instead: labels are placed **most significant
+    first**, each taking the first candidate in :data:`_LABEL_SLOTS` whose box
+    clears every box already placed, and falling back to the last slot when
+    nothing is free, because a displaced overlap still reads better than a
+    centred one. Priority matches :func:`_label_mask`'s own ranking, so the gene
+    a reader most wants named gets the best position.
+
+    The arithmetic is in normalized axis units and is converted back on the way
+    out, so **both backends place text identically** and neither needs font
+    metrics. Both clouds' axes are linear, which is what makes a data-coordinate
+    offset the right currency.
     """
     idx = np.flatnonzero(data.labelled)
-    idx = idx[np.argsort(data.x[idx], kind="stable")]
-    above = (np.arange(idx.size) % 2) == 0
-    return idx, above
+    if idx.size == 0:
+        return idx, np.zeros(0), np.zeros(0)
+    x = np.asarray(data.x, dtype=np.float64)
+    y = np.asarray(data.y, dtype=np.float64)
+    x0, xw = _axis_span(x)
+    y0, yw = _axis_span(y)
+    u = (x[idx] - x0) / xw
+    v = (y[idx] - y0) / yw
+    # Most significant first: highest y, ties broken by the larger |x|.
+    order = np.lexsort((-np.abs(np.nan_to_num(x[idx], nan=0.0)),
+                        -np.nan_to_num(v, nan=-np.inf)))
+    du = np.zeros(idx.size)
+    dv = np.zeros(idx.size)
+    placed: list[tuple[float, float]] = []
+    for k in order:
+        cu = cv = np.nan
+        for sx, sy in _LABEL_SLOTS:
+            cu = u[k] + sx * _LABEL_W
+            cv = v[k] + sy * _LABEL_H
+            if not any(abs(cu - pu) < _LABEL_W and abs(cv - pv) < _LABEL_H
+                       for pu, pv in placed):
+                break
+        placed.append((cu, cv))
+        du[k], dv[k] = cu - u[k], cv - v[k]
+    return idx, du * xw, dv * yw
 
 
 @dataclass(frozen=True)
