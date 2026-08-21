@@ -65,6 +65,8 @@ def _run_backend(name: str, backend: str):
         jitter=fx["jitter"], perms=fx["perms"],
         gene_names=fx["gene_names"], keep_null=True, backend=backend,
         alternative="greater", subset=False,
+        # The zerolib fixture is deliberate; see tests/portrun.py.
+        allow_empty_samples=True,
     )
 
 

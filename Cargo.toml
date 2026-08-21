@@ -3,7 +3,7 @@ name = "wade-kernel"
 version = "0.1.0"
 edition = "2021"
 description = "Permutation-loop kernel for WADE (Wasserstein Area Differential Expression)"
-license = "MIT"
+license = "GPL-3.0-only"   # matches LICENSE and the README; was wrongly MIT
 
 [lib]
 name = "_kernel"
@@ -11,7 +11,9 @@ path = "rust/src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.27", features = ["extension-module"] }
+# abi3-py310 matches requires-python: one wheel per platform works on
+# every supported Python, instead of one per platform per minor version.
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py310"] }
 numpy = "0.27"
 rayon = "1"
 rand = "0.9"

@@ -260,6 +260,39 @@ def _fit_alpha(normalizer, lib, norm_factor, n_samples):
     return alpha
 
 
+def _check_libraries(lib: np.ndarray, sample_names, allow: bool) -> None:
+    """Refuse a library with nothing in it, by name.
+
+    An all-zero column — a failed sample left in the matrix, which is routine
+    — has no count scale, so ``tpm_like``'s numerator and denominator are both
+    the jitter and **every gene in it normalizes to exactly** ``norm_factor``
+    (``docs/method.md`` §8 names the artefact). Those values are not small or
+    noisy, they are a constant, and they take part in every quantile the
+    contrast reads. Left undetected this is the silent-wrong-answer shape of
+    error, so it raises and says which samples: dropping a sample is the
+    caller's decision to make, not a default to be applied quietly.
+    """
+    lib = np.asarray(lib, dtype=np.float64)
+    if allow or lib.size == 0 or np.all(lib == 0.0):
+        # All-zero across the board means there are no genes at all (a
+        # degenerate but well-defined empty matrix), not a failed sample.
+        return
+    empty = np.flatnonzero(~(lib > 0))
+    if empty.size == 0:
+        return
+    names = (empty.tolist() if sample_names is None
+             else np.asarray(sample_names)[empty].tolist())
+    raise ValueError(
+        f"{empty.size} sample(s) have a zero library size, so every gene in them "
+        f"normalizes to the norm_factor constant rather than to an abundance: "
+        f"{names[:8]}"
+        + (f" and {len(names) - 8} more. " if len(names) > 8 else ". ")
+        + "Drop them from the matrix and the condition, or pass "
+          "allow_empty_samples=True to run anyway. wade.library_qc() reports "
+          "depth, complexity and concentration for every library."
+    )
+
+
 def _validate_stage1(stage1: str, cond, fit_backend: str = "numpy") -> None:
     if fit_backend not in ("numpy", "rust"):
         raise ValueError(f"fit_backend must be 'numpy' or 'rust'; got {fit_backend!r}")
@@ -632,6 +665,7 @@ def wade(
     stage1: str = "grid",
     fit_backend: str = "numpy",
     strata=None,
+    allow_empty_samples: bool = False,
 ) -> WadeResult:
     """Run WADE on a raw count matrix. The primary entry point.
 
@@ -730,6 +764,11 @@ def wade(
         (:func:`wade.permutation_space`, and the manifest's
         ``design.permutation_space``). Supplying your own ``perms`` alongside
         ``strata`` validates them against the stratum counts.
+    allow_empty_samples
+        Run even though some library has a zero size. Refused by default:
+        every gene in such a sample normalizes to the ``norm_factor``
+        constant, which then takes part in every quantile the contrast reads
+        (:func:`wade.library_qc` reports per-library depth and complexity).
     """
     data, normalizer, cond, cond_meta = _resolve_input(
         counts, normalizer, cond, gene_names, sample_names)
@@ -774,6 +813,7 @@ def wade(
     # it would move every normalized value by an ulp.
     lib = (_normalize.library_sizes(counts, normalizer) if lib_sizes is None
            else np.asarray(lib_sizes, dtype=np.float64))
+    _check_libraries(lib, sample_names, allow_empty_samples)
 
     if gene_chunk is not None:
         return _wade_chunked(
@@ -940,6 +980,7 @@ def wade_contrast(
         normalizer = np.full(data.values.shape[0], float(normalizer), dtype=np.float64)
     normalizer = np.asarray(normalizer, dtype=np.float64)
     sub_norm = normalizer[:, cols] if normalizer.ndim == 2 else normalizer
+    kwargs = _reindex_sample_kwargs(kwargs, cols, data.values.shape[1])
 
     result = wade(data.values[:, cols], sub_norm, cond, nperms=nperms,
                   gene_names=data.gene_names,
@@ -947,6 +988,41 @@ def wade_contrast(
     result.params.update(n_case=int(case_idx.size),
                          n_ctrl=int(ctrl_idx.size), columns=cols)
     return result
+
+
+#: Arguments of :func:`wade` whose values are indexed by **sample**, and which
+#: axis of the value the samples run along. :func:`wade_contrast` reorders the
+#: matrix into ``[cases..., controls...]``, so each of these has to be carried
+#: through the same reordering — passing them positionally onto the reordered
+#: columns applies them to the wrong samples, and when the lengths happen to
+#: match it does so *silently*.
+_SAMPLE_AXIS_KWARGS = {"strata": -1, "lib_sizes": -1, "jitter": 1, "perms": 1}
+
+
+def _reindex_sample_kwargs(kwargs: dict, cols: np.ndarray, n_samples: int) -> dict:
+    """Reorder every per-sample argument onto ``cols``.
+
+    Refuses an argument whose sample axis does not match the *full* matrix:
+    a pre-subset array cannot be reindexed and guessing would be the silent
+    error this function exists to prevent.
+    """
+    out = dict(kwargs)
+    for name, axis in _SAMPLE_AXIS_KWARGS.items():
+        val = out.get(name)
+        if val is None:
+            continue
+        arr = np.asarray(val)
+        got = arr.shape[axis] if arr.ndim > (axis if axis >= 0 else 0) else arr.shape[-1]
+        if got != n_samples:
+            raise ValueError(
+                f"{name}= must cover every sample of the matrix handed to "
+                f"wade_contrast ({n_samples}), because the contrast reorders the "
+                f"columns and {name} has to be reordered with them; got {got}. "
+                f"Pass the full-length {name}, not one already subset to the "
+                f"contrast."
+            )
+        out[name] = arr[..., cols] if axis != -1 or arr.ndim > 1 else arr[cols]
+    return out
 
 
 def _resolve_samples(selection, sample_names, what: str) -> np.ndarray:

@@ -126,3 +126,46 @@ def test_restricted_permutation_controls_a_planted_batch_effect():
     rate_held = float((held.padj_mean_shift <= 0.05).mean())
     assert rate_free > 0.5, f"the confound should fool the unrestricted null; got {rate_free:.2f}"
     assert rate_held <= 0.15, f"restricted permutation should control it; got {rate_held:.2f}"
+
+
+def test_wade_contrast_carries_per_sample_arguments_onto_its_reordering():
+    """wade_contrast reorders the matrix into [cases..., controls...]. Every
+    per-sample argument has to be reordered with it — applying one positionally
+    to the reordered columns lands it on the wrong samples, and when the
+    lengths happen to match it does so *silently* (found by the package audit,
+    2026-08-20).
+
+    A paired design is the case that matters: with subject strata and
+    alternating case/control columns, the un-reindexed version destroyed every
+    pair and made each stratum condition-pure, so within-stratum shuffling
+    became a no-op and the null collapsed to nothing — with no error.
+    """
+    rng = np.random.default_rng(3)
+    n = 20
+    counts = rng.poisson(60, (25, n)).astype(float)
+    names = np.array([f"s{j}" for j in range(n)], dtype=object)
+    subject = np.array([f"subj{j // 2}" for j in range(n)])
+    case = [names[j] for j in range(1, n, 2)]
+    ctrl = [names[j] for j in range(0, n, 2)]
+
+    res = wade.wade_contrast(counts, 2.0, case, ctrl, sample_names=names,
+                             nperms=30, subset=False, strata=subject)
+    lookup = dict(zip(names.tolist(), subject.tolist()))
+    got = res.params["strata"]
+    assert [lookup[s] for s in res.sample_names.tolist()] == list(got)
+    # every stratum keeps one case and one control, so the shuffle is real
+    for idx in strata_indices(got, n):
+        assert int((np.asarray(res.cond)[idx] == 1).sum()) == 1
+
+    # lib_sizes and jitter travel the same way
+    lib = np.arange(1.0, n + 1.0)
+    jit = np.tile(np.arange(n, dtype=float), (25, 1))
+    res2 = wade.wade_contrast(counts, 2.0, case, ctrl, sample_names=names,
+                              nperms=0, subset=False, lib_sizes=lib, jitter=jit)
+    order = [int(s[1:]) for s in res2.sample_names.tolist()]
+    np.testing.assert_array_equal(res2.jitter[0], np.asarray(order, dtype=float))
+
+    # an already-subset argument cannot be reindexed, so it is refused
+    with pytest.raises(ValueError, match="must cover every sample"):
+        wade.wade_contrast(counts, 2.0, case, ctrl, sample_names=names,
+                           nperms=0, subset=False, strata=subject[:10])

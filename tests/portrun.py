@@ -54,5 +54,12 @@ def run_port(name: str):
         # would have two candidate causes again. The kernel is held to the
         # same fixtures separately, in test_kernel.py.
         backend="numpy",
+        # The fixture set deliberately includes `zerolib`, a matrix with an
+        # all-zero library, because the R original produced values for it and
+        # parity is about reproducing the reference exactly — artefact
+        # included. Production refuses that input by default (it normalizes
+        # every gene in the column to the norm_factor constant); here the
+        # refusal is opted out of on purpose.
+        allow_empty_samples=True,
     )
     return fx, result

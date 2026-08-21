@@ -368,3 +368,32 @@ def test_manifest_records_the_condition_labels_when_there_were_any(matrix, sheet
 def test_write_results_refuses_an_unknown_extension(result, tmp_path):
     with pytest.raises(ValueError, match="unknown result format"):
         wade.write_results(result, tmp_path / "r.xlsx")
+
+
+def test_manifest_path_keeps_one_manifest_per_table(result, tmp_path):
+    """``with_suffix("").with_suffix(...)`` strips every dotted component, so
+    ``plasma.v1.tsv`` and ``plasma.v2.tsv`` both wrote ``plasma.manifest.json``
+    — the second run silently overwrote the first run's provenance and the
+    survivor described the wrong table (package audit, 2026-08-20)."""
+    for name in ("plasma.v1.tsv", "plasma.v2.tsv", "run.2026-08-20.csv", "plain.tsv"):
+        wade.write_results(result, tmp_path / name)
+    manifests = sorted(p.name for p in tmp_path.iterdir() if p.suffix == ".json")
+    assert manifests == ["plain.manifest.json", "plasma.v1.manifest.json",
+                         "plasma.v2.manifest.json", "run.2026-08-20.manifest.json"]
+
+
+def test_zero_library_samples_are_refused_by_name(matrix):
+    """Every gene in an all-zero library normalizes to the norm_factor
+    constant and then takes part in every quantile — the silent-wrong-answer
+    shape, so it raises and names the samples."""
+    counts = matrix.copy()
+    counts[:, 2] = 0.0
+    cond = np.r_[np.ones(N // 2, int), np.zeros(N // 2, int)]
+    names = np.asarray(SAMPLES, dtype=object)
+    with pytest.raises(ValueError, match=r"zero library size.*S2"):
+        wade.wade(counts, np.ones(G), cond, nperms=10, sample_names=names)
+    res = wade.wade(counts, np.ones(G), cond, nperms=10, sample_names=names,
+                    allow_empty_samples=True)
+    assert np.all(np.isfinite(res.mean_shift))
+    qc = wade.library_qc(counts)
+    assert qc["depth"][2] == 0.0

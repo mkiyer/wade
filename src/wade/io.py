@@ -542,6 +542,17 @@ _WRITERS = {
 }
 
 
+def _manifest_path(path: Path) -> Path:
+    """``<name minus its extension>.manifest.json``, beside the table.
+
+    ``Path.with_suffix("").with_suffix(...)`` strips *every* dotted component
+    of the stem, so ``plasma.v1.tsv`` and ``plasma.v2.tsv`` both mapped to
+    ``plasma.manifest.json`` — the second run silently overwrote the first
+    run's provenance and the surviving manifest described the wrong table.
+    """
+    return path.with_name(path.stem + ".manifest.json")
+
+
 def write_results(res, path, *, manifest: bool = True, alpha: float = 0.05) -> Path:
     """Write the result table, and beside it a JSON manifest of the run.
 
@@ -562,6 +573,6 @@ def write_results(res, path, *, manifest: bool = True, alpha: float = 0.05) -> P
     writer(frame, path)
     if manifest:
         man = _manifest(res, alpha=alpha)
-        path.with_suffix("").with_suffix(".manifest.json").write_text(
+        _manifest_path(path).write_text(
             json.dumps(man, indent=2, sort_keys=False) + "\n")
     return path

@@ -13,7 +13,7 @@ kernels, the subset stage is count-native, the plotting layer exists — and
 as of 2026-08-20 **the performance queue is done**: the 30,000 × 80,000
 target that needed ~163 GB and did not run completes, measured, in **29.7
 minutes at a 55.6 GB peak** (B = 2,000, all fast paths; `scaling.md` §1).
-**656 tests pass in about 12 seconds.**
+**694 tests pass in about 15 seconds.**
 
 ```bash
 export PATH="/usr/local/bin:$PATH"          # only if you need R
@@ -46,6 +46,7 @@ The package is `src/wade/`. Twelve modules, all small:
 |---|---|
 | `quantiles.py` | the probability grid, type-7 quantiles, `capped_nprobs` |
 | `stats.py` | `wade_stats()` — the grids, `mean_shift`, `w1`, `fc` |
+| `diagnostics.py` (also) | `library_qc()` — per-library depth/complexity/concentration; `subset_drivers()` — which samples drive a gene's subset |
 | `subset.py` | the bridge, the subset test, `affected_fraction`, `direction`, `subset_log2_fc` (the subset's magnitude), the bootstrap (threaded, chunkable) |
 | `thinning.py` | the count-native shift correction: `fit_fold_change` (normalize path + affine `alpha=` path + kernel backend), `thin_counts`, `one_count`, `gene_chunks` (§10.3–10.4) |
 | `permutation.py` | the nulls; dispatches to the Rust kernel; `mean_diff_stat` / `mean_diff_null` (the GEMM stage 1) |
@@ -405,7 +406,7 @@ can now open with a real analysis.
 The rules that governed the performance work stay in force for whatever
 touches it next: measure before and after with `tools/bench_scaling.py` and
 put the numbers in `scaling.md`, not a commit message; and nothing changes an
-answer — `pytest -q` (656 tests) is the check.
+answer — `pytest -q` (694 tests) is the check.
 
 To see the current state in one command:
 

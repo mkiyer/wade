@@ -34,9 +34,14 @@ pip install -e . --no-build-isolation
 pytest                       # ~6 s
 ```
 
-The Rust kernels are optional. Without a toolchain the package installs and
-runs on the NumPy path, which is the correctness baseline the kernels are
-validated against — just slower (about 80× on the subset test).
+**Building from source needs a Rust toolchain** (`conda install rust`, or
+rustup) — the build backend is maturin, so even metadata generation calls
+cargo. Once built, the kernels themselves are *optional at run time*: WADE
+falls back to the NumPy path, which is the correctness baseline the kernels
+are validated against, just slower (about 80× on the subset test). Run
+`pytest -m "not kernel"` if you built without them. Wheels (one per platform,
+abi3 so a single wheel covers Python 3.10+) are built in CI; when they are
+published, `pip install wade` will need no toolchain at all.
 
 Plotting is optional too: `pip install 'wade[plot]'` (or `conda install plotly
 matplotlib-base`) adds both backends; either one alone is enough. `wade[io]`
@@ -301,7 +306,7 @@ Implemented and tested: the statistic, both stages, the characterization, the
 normalizers, permutation inference with GPD refinement and BH, Rust kernels
 for both permutation loops, the count-native subset stage (binomial thinning,
 the one-count pseudocount, bootstrap intervals), the plotting layer, and the
-data-in/results-out boundary. **656 tests, about 12 s.**
+data-in/results-out boundary. **694 tests, about 15 s.**
 
 At 20,000 genes, 100 v 100 and 2,000 permutations a full run takes about 17 s
 on a 16-core laptop (9.7 s with `thin=False`); the permutation loops, which

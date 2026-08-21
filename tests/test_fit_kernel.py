@@ -115,7 +115,8 @@ def test_kernel_fit_tolerates_a_zero_library_size_like_the_numpy_fit():
     assert np.all(np.isfinite(f_np)) and np.all(np.isfinite(f_rs))
     assert abs(np.median(f_rs) - np.median(f_np)) < 0.05
     # and through the entry point, both backends complete
-    res = wade.wade(counts, lens, COND, nperms=20, seed=1, fit_backend="rust")
+    res = wade.wade(counts, lens, COND, nperms=20, seed=1, fit_backend="rust",
+                    allow_empty_samples=True)      # the dead sample is the point
     assert np.all(np.isfinite(res.fitted_fold_change))
 
 
