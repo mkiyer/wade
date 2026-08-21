@@ -131,6 +131,46 @@ and one of symbols is biology.
 * **Anything the statistic depends on.** If a change here would alter a
   reported number, it belongs in the core, not here.
 
+## Themes
+
+Every figure takes `theme=`, and three are built in:
+
+| | `"light"` | `"dark"` | `"high-contrast"` |
+|---|---|---|---|
+| ground / ink | white / near-black | near-black / off-white | white / pure black |
+| case, control | blue, orange | brightened blue, orange | strong blue, strong red-orange |
+| sequential ramp | `viridis` | `viridis` | `cividis` |
+| plotly template | `plotly_white` | `plotly_dark` | `plotly_white` |
+
+```python
+plot_volcano(res, theme="dark")
+
+import wade.plotting
+wade.plotting.DEFAULT_THEME = "dark"     # ... or for the whole session
+
+from dataclasses import replace          # ... or your lab's palette
+house = replace(wade.plotting.THEMES["light"], case="#7b3fa0", ctrl="#3fa07b")
+plot_stages(res, theme=house)
+```
+
+`"light"` is the default and is what the figures above were drawn with;
+switching to it renders **pixel-identically** to the palette that preceded
+themes, which is how the token set was checked. `"high-contrast"` is for a
+projector or a reader with colour-vision deficiency: `cividis` is built for
+CVD where `viridis` is only safe for it.
+
+Two rules keep this honest, and both are pinned by tests:
+
+* **No colour literal lives outside `theme.py`.** A hex string written into a
+  renderer is one no other theme can follow — which is exactly how a dark
+  figure becomes a light slab with dark points. That includes plotly's
+  template and the boxes behind in-plot labels.
+* **The data layer names a colour *role*, never a colormap.** `volcano_data`
+  says `affected_fraction` is sequential and `direction` is diverging; the
+  theme says what sequential and diverging look like. So the meaning of a
+  colour is fixed across themes — dark at 0 (a subset), light at 1
+  (everything); blue down, red up — while its palette is not.
+
 ## Backends
 
 | | plotly | matplotlib |

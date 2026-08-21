@@ -208,19 +208,20 @@ def test_volcano_subset_stage_uses_the_subset_pvalues_and_refuses_without_them(r
 def test_volcano_colour_options(res, res_nosubset):
     v = P.volcano_data(res, color="affected_fraction")
     np.testing.assert_array_equal(v.color, res.affected_fraction)
-    assert v.color_spec["range"] == (0.0, 1.0)
+    assert v.color_spec["range"] == (0.0, 1.0) and v.color_spec["role"] == "sequential"
     v = P.volcano_data(res, color="direction")
     np.testing.assert_array_equal(v.color, res.direction)
-    assert v.color_spec["range"] == (-1.0, 1.0)
+    assert v.color_spec["range"] == (-1.0, 1.0) and v.color_spec["role"] == "diverging"
     assert P.volcano_data(res, color=None).color is None
     # Without the characterization there is nothing to colour by: single hue, no error.
     assert P.volcano_data(res_nosubset, color="affected_fraction").color is None
-    # Any other column works too, autoscaled, and picks its scale by whether
-    # it spans zero — so a new statistic is colourable the day it exists.
+    # Any other column works too, autoscaled, and picks its role by whether it
+    # spans zero — so a new statistic is colourable the day it exists. The role
+    # is as far as the data layer goes; the theme resolves it to a colormap.
     v = P.volcano_data(res, color="w1")
     np.testing.assert_array_equal(v.color, res.w1)
-    assert v.color_spec["range"] is None and v.color_spec["scale"] == PT._SEQUENTIAL
-    assert P.volcano_data(res, color="log2_fc").color_spec["scale"] == PT._DIVERGING
+    assert v.color_spec["range"] is None and v.color_spec["role"] == "sequential"
+    assert P.volcano_data(res, color="log2_fc").color_spec["role"] == "diverging"
     # ... and a supplied per-gene array, for anything WADE cannot know about
     own = np.arange(float(G))
     np.testing.assert_array_equal(P.volcano_data(res, color=own).color, own)
@@ -504,3 +505,71 @@ def test_both_backends_render_a_custom_axis_volcano(res, backend):
     fig = P.plot_volcano(res, stage="subset", x="subset_log2_fc", y="z_subset",
                          backend=backend, label=3)
     assert fig is not None
+
+
+# ---------------------------------------------------------------------------
+# Themes
+
+
+@pytest.mark.parametrize("backend", P.available_backends())
+@pytest.mark.parametrize("name", sorted(P.THEMES))
+def test_every_built_in_theme_renders_every_figure_on_every_backend(res, backend, name):
+    """The whole point of a token set: three figures x two backends x three
+    themes all draw, and none of them reaches for a colour of its own."""
+    assert wade.plot_gene(res, gene=["g0", "g6"], backend=backend, theme=name) is not None
+    assert wade.plot_volcano(res, stage="both", label=3, backend=backend, theme=name) is not None
+    assert wade.plot_stages(res, label=2, backend=backend, theme=name) is not None
+    # ... including uncoloured, which takes the single-hue path.
+    assert wade.plot_volcano(res, color=None, backend=backend, theme=name) is not None
+
+
+def test_a_theme_can_be_a_name_an_instance_or_the_session_default(res, monkeypatch):
+    from dataclasses import replace
+
+    assert P._resolve_theme(None) is P.THEMES["light"]
+    assert P._resolve_theme("dark") is P.THEMES["dark"]
+    monkeypatch.setattr(P, "DEFAULT_THEME", "high-contrast")
+    assert P._resolve_theme(None) is P.THEMES["high-contrast"]
+    # An instance passes through, so a house style is one replace() away.
+    house = replace(P.THEMES["light"], case="#7b3fa0")
+    assert P._resolve_theme(house) is house
+    assert wade.plot_stages(res, theme=house, backend=P.available_backends()[0]) is not None
+    with pytest.raises(ValueError, match="theme must be a Theme or one of"):
+        P._resolve_theme("solarized")
+
+
+def test_the_theme_resolves_colour_roles_and_the_label_box(res):
+    light, dark = P.THEMES["light"], P.THEMES["dark"]
+    assert light.scale("sequential") == "viridis"
+    assert light.scale("diverging") == "RdBu_r"
+    assert P.THEMES["high-contrast"].scale("sequential") == "cividis"
+    with pytest.raises(ValueError, match="colour role must be"):
+        light.scale("categorical")
+    # The box behind in-plot text is the surface, so it follows the theme
+    # instead of being a white slab on a dark figure.
+    assert light.box() == "rgba(255,255,255,0.8)"
+    assert dark.box(0.5) == "rgba(20,20,16,0.5)"
+    # plotly's template has to follow too, or the ground stays light.
+    assert light.plotly_template == "plotly_white" and dark.plotly_template == "plotly_dark"
+
+
+def test_no_colour_literal_lives_outside_theme_py():
+    """Every colour in the package is a theme token.
+
+    A hex or ``rgb()`` string written into a renderer is one the other themes
+    cannot follow — which is exactly how a dark figure ends up a light slab
+    with dark points. ``theme.py`` is the only file allowed to spell one.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(wade.__file__).parent
+    pattern = re.compile(r"#[0-9a-fA-F]{6}\b|\brgba?\(")
+    offenders = {}
+    for path in sorted(root.rglob("*.py")):
+        if path.name == "theme.py":
+            continue
+        hits = pattern.findall(path.read_text())
+        if hits:
+            offenders[str(path.relative_to(root))] = hits
+    assert not offenders, f"colour literals outside theme.py: {offenders}"

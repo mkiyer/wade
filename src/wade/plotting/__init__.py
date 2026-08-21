@@ -34,16 +34,23 @@ the functions below, so ``import wade`` and the whole test stay at their one
 NumPy dependency, and the data layer can be used with any other tool — it is
 also the table-view twin of every chart.
 
-Conventions shared by both backends: case in blue, control in orange (a pair
-that survives colour-vision deficiency); ``affected_fraction`` on the viridis
-ramp, dark at 0 (a subset) and light at 1 (everything); ``direction`` on a
-blue–grey–red diverging ramp, blue down and red up; thin marks, hairline grid,
-no chart junk.
+Conventions shared by both backends and every theme: case in blue, control in
+orange (a pair that survives colour-vision deficiency); ``affected_fraction``
+on a sequential ramp, dark at 0 (a subset) and light at 1 (everything);
+``direction`` on a diverging ramp, blue down and red up; thin marks, hairline
+grid, no chart junk.
 
-Where the code lives: ``theme`` is the palette and every label and imports
+``theme=`` restyles any of the three figures — :data:`THEMES` holds
+``"light"`` (the default, and the one the README's figures were drawn with),
+``"dark"`` and ``"high-contrast"``, and :data:`DEFAULT_THEME` sets one for a
+whole session. The data layer names a colour *role*; the theme says what that
+role looks like, so a figure carries no colour of its own.
+
+Where the code lives: ``theme`` is the tokens and every label and imports
 nothing at all; ``data`` is the dataclasses and imports no backend; ``_plotly``
 and ``_matplotlib`` are the two renderers, each importing its library inside
-its functions; this module resolves the backend and holds the three ``plot_*``.
+its functions; this module resolves the backend and the theme and holds the
+three ``plot_*``.
 """
 
 from __future__ import annotations
@@ -57,11 +64,14 @@ from .data import (
     stages_data,
     volcano_data,
 )
-from .theme import QUADRANTS
+from .theme import QUADRANTS, THEMES, Theme
 
 __all__ = [
     "BACKENDS",
     "DEFAULT_BACKEND",
+    "DEFAULT_THEME",
+    "THEMES",
+    "Theme",
     "GenePanel",
     "VolcanoData",
     "StagesData",
@@ -79,6 +89,13 @@ BACKENDS = ("plotly", "matplotlib")
 #: Which backend ``backend=None`` resolves to. ``"auto"`` takes the first of
 #: :data:`BACKENDS` that imports. Set it to a name to pin one for a session.
 DEFAULT_BACKEND = "auto"
+
+#: Which theme ``theme=None`` resolves to — a key of :data:`THEMES` or a
+#: :class:`Theme`. Set it once to restyle a whole session::
+#:
+#:     import wade.plotting
+#:     wade.plotting.DEFAULT_THEME = "dark"
+DEFAULT_THEME = "light"
 
 # ---------------------------------------------------------------------------
 # Backend resolution
@@ -122,12 +139,26 @@ def _resolve_backend(backend: str | None) -> str:
     return backend
 
 
+def _resolve_theme(theme) -> Theme:
+    if theme is None:
+        theme = DEFAULT_THEME
+    if isinstance(theme, Theme):
+        return theme
+    if theme in THEMES:
+        return THEMES[theme]
+    raise ValueError(
+        f"theme must be a Theme or one of {tuple(THEMES)}; got {theme!r}. "
+        f"Build a variant with dataclasses.replace(THEMES['light'], case=...)."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 
 
 def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
-              backend: str | None = None, share_y: bool = True, title: str | None = None,
+              backend: str | None = None, theme=None, share_y: bool = True,
+              title: str | None = None,
               width: float | None = None, height: float | None = None):
     """The single-gene panel: ``R(p)`` over quantile, quantile functions beneath.
 
@@ -140,6 +171,10 @@ def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
         normalized row, and ``plot_gene(wade_gene(row, cond))``.
     backend
         ``"plotly"``, ``"matplotlib"``, or ``None`` for :data:`DEFAULT_BACKEND`.
+    theme
+        A key of :data:`THEMES` — ``"light"``, ``"dark"``,
+        ``"high-contrast"`` — or a :class:`~wade.plotting.theme.Theme`, or
+        ``None`` for :data:`DEFAULT_THEME`. Every figure takes it.
     share_y
         Put every gene's log-ratio panel on the same y axis, so magnitudes are
         comparable across columns. Quantile panels are always per-gene.
@@ -164,17 +199,18 @@ def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
     """
     panels = gene_panels(source, cond, gene=gene, names=names, pseudocount=pseudocount)
     be = _resolve_backend(backend)
+    th = _resolve_theme(theme)
     if be == "plotly":
         from ._plotly import _gene_plotly
-        return _gene_plotly(panels, share_y=share_y, title=title, width=width, height=height)
+        return _gene_plotly(panels, th, share_y=share_y, title=title, width=width, height=height)
     from ._matplotlib import _gene_mpl
-    return _gene_mpl(panels, share_y=share_y, title=title, width=width, height=height)
+    return _gene_mpl(panels, th, share_y=share_y, title=title, width=width, height=height)
 
 
 def plot_volcano(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0.05,
                  color="affected_fraction", label=None,
                  x: str = "log2_fc", y: str | None = None,
-                 backend: str | None = None, title: str | None = None,
+                 backend: str | None = None, theme=None, title: str | None = None,
                  width: float | None = None, height: float | None = None):
     """Effect size against significance, coloured by the shape of the difference.
 
@@ -213,16 +249,17 @@ def plot_volcano(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
     data = [volcano_data(res, s, alpha=alpha, color=color, label=label, x=x, y=y)
             for s in stages]
     be = _resolve_backend(backend)
+    th = _resolve_theme(theme)
     if be == "plotly":
         from ._plotly import _volcano_plotly
-        return _volcano_plotly(data, title=title, width=width, height=height)
+        return _volcano_plotly(data, th, title=title, width=width, height=height)
     from ._matplotlib import _volcano_mpl
-    return _volcano_mpl(data, title=title, width=width, height=height)
+    return _volcano_mpl(data, th, title=title, width=width, height=height)
 
 
 def plot_stages(res: WadeResult, *, alpha: float = 0.05,
                 color="affected_fraction", label=None,
-                backend: str | None = None, title: str | None = None,
+                backend: str | None = None, theme=None, title: str | None = None,
                 width: float | None = None, height: float | None = None):
     """``p_mean_shift`` against ``p_subset``: the README's four quadrants, drawn.
 
@@ -239,8 +276,9 @@ def plot_stages(res: WadeResult, *, alpha: float = 0.05,
     """
     data = stages_data(res, alpha=alpha, color=color, label=label)
     be = _resolve_backend(backend)
+    th = _resolve_theme(theme)
     if be == "plotly":
         from ._plotly import _stages_plotly
-        return _stages_plotly(data, title=title, width=width, height=height)
+        return _stages_plotly(data, th, title=title, width=width, height=height)
     from ._matplotlib import _stages_mpl
-    return _stages_mpl(data, title=title, width=width, height=height)
+    return _stages_mpl(data, th, title=title, width=width, height=height)

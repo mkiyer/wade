@@ -19,7 +19,7 @@ import numpy as np
 from ..api import WadeResult
 from ..diagnostics import GeneDetail, wade_gene
 from ..subset import affected_fraction as _affected_fraction, direction as _direction
-from .theme import QUADRANTS, _COLOR_SPECS, _DIVERGING, _SEQUENTIAL, _STAGE_LABELS, _axis_label
+from .theme import QUADRANTS, _COLOR_SPECS, _STAGE_LABELS, _axis_label
 
 
 def _column_array(res: WadeResult, name: str) -> np.ndarray:
@@ -252,9 +252,10 @@ def _color_arrays(res: WadeResult, color):
     Accepts any column of :meth:`WadeResult.columns` by name, or an array of
     per-gene values (a gene-set membership, a cluster id, a QC score — WADE
     has no way to know what you want to colour by, so it does not guess).
-    ``affected_fraction`` and ``direction`` keep their pinned scales and
-    ranges; anything else gets a diverging scale if it spans zero and a
-    sequential one otherwise, autoscaled.
+    ``affected_fraction`` and ``direction`` keep their pinned roles and
+    ranges; anything else gets the diverging role if it spans zero and the
+    sequential one otherwise, autoscaled. The *role* is as far as the data
+    layer goes — which colormap draws it is the theme's business.
     """
     if color is None:
         return None, None
@@ -278,7 +279,7 @@ def _color_arrays(res: WadeResult, color):
     finite = vals[np.isfinite(vals)]
     spans_zero = finite.size > 0 and finite.min() < 0.0 < finite.max()
     return vals, dict(label=_axis_label(key),
-                      scale=_DIVERGING if spans_zero else _SEQUENTIAL,
+                      role="diverging" if spans_zero else "sequential",
                       range=None, key=key)
 
 

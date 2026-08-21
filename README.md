@@ -200,6 +200,13 @@ plot_stages(res)                            # what kind of difference?
 plot_volcano(res, stage="subset", x="subset_log2_fc", y="z_subset", label=8)
 ```
 
+Every figure takes `theme=` — `"light"` (default), `"dark"` or
+`"high-contrast"` — or a palette of your own:
+
+```python
+plot_stages(res, theme="dark")
+```
+
 **`plot_gene`** is the figure that makes the method legible. The top row is the
 log-ratio curve `R(p) = log2 Q_case(p) − log2 Q_ctrl(p)`; the bottom row is the
 two quantile functions it is the ratio of. A **flat** curve is a global fold

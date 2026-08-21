@@ -10,30 +10,30 @@ from __future__ import annotations
 import numpy as np
 
 from .data import _label_positions
-from .theme import QUADRANTS, _AXIS, _CASE, _CTRL, _FONT, _GRID, _INK, _MUTED, _STAGE_LABELS, _SURFACE
+from .theme import QUADRANTS, _STAGE_LABELS
 
 
-def _plotly_layout(fig, *, title, width, height, legend_below=False):
+def _plotly_layout(fig, theme, *, title, width, height, legend_below=False):
     fig.update_layout(
-        template="plotly_white", title=title, width=width, height=height,
-        font=dict(family=_FONT, size=12, color=_INK),
-        paper_bgcolor=_SURFACE, plot_bgcolor=_SURFACE,
+        template=theme.plotly_template, title=title, width=width, height=height,
+        font=dict(family=theme.font, size=12, color=theme.ink),
+        paper_bgcolor=theme.surface, plot_bgcolor=theme.surface,
         margin=dict(l=70, r=30, t=70 if title else 50, b=60),
-        hoverlabel=dict(font=dict(family=_FONT)),
+        hoverlabel=dict(font=dict(family=theme.font)),
     )
-    fig.update_xaxes(showgrid=True, gridcolor=_GRID, gridwidth=1, zeroline=False,
-                     linecolor=_AXIS, ticks="outside", tickcolor=_AXIS, title_font=dict(color=_INK),
-                     tickfont=dict(color=_MUTED))
-    fig.update_yaxes(showgrid=True, gridcolor=_GRID, gridwidth=1, zeroline=False,
-                     linecolor=_AXIS, ticks="outside", tickcolor=_AXIS, title_font=dict(color=_INK),
-                     tickfont=dict(color=_MUTED))
+    fig.update_xaxes(showgrid=True, gridcolor=theme.grid, gridwidth=1, zeroline=False,
+                     linecolor=theme.axis, ticks="outside", tickcolor=theme.axis, title_font=dict(color=theme.ink),
+                     tickfont=dict(color=theme.muted))
+    fig.update_yaxes(showgrid=True, gridcolor=theme.grid, gridwidth=1, zeroline=False,
+                     linecolor=theme.axis, ticks="outside", tickcolor=theme.axis, title_font=dict(color=theme.ink),
+                     tickfont=dict(color=theme.muted))
     if legend_below:
         fig.update_layout(legend=dict(orientation="h", yanchor="top", y=-0.12, x=0,
-                                      font=dict(color=_INK)))
+                                      font=dict(color=theme.ink)))
     return fig
 
 
-def _gene_plotly(panels, *, share_y, title, width, height):
+def _gene_plotly(panels, theme, *, share_y, title, width, height):
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -41,7 +41,7 @@ def _gene_plotly(panels, *, share_y, title, width, height):
     titles = []
     for p in panels:
         sub = "<br>".join(p.subtitle_lines)
-        titles.append(f"<b>{p.name}</b><br><span style='font-size:10px;color:{_MUTED}'>{sub}</span>")
+        titles.append(f"<b>{p.name}</b><br><span style='font-size:10px;color:{theme.muted}'>{sub}</span>")
     fig = make_subplots(rows=2, cols=k, shared_xaxes=True, shared_yaxes=False,
                         subplot_titles=titles, row_heights=[0.55, 0.45],
                         vertical_spacing=0.12, horizontal_spacing=0.06 if k > 1 else 0.05)
@@ -53,22 +53,22 @@ def _gene_plotly(panels, *, share_y, title, width, height):
     for j, p in enumerate(panels, start=1):
         d = p.detail
         fig.add_trace(go.Scatter(
-            x=d.p, y=d.r, mode="lines", line=dict(color=_INK, width=1.8),
+            x=d.p, y=d.r, mode="lines", line=dict(color=theme.ink, width=1.8),
             name="log₂ ratio", legendgroup="r", showlegend=(j == 1),
             customdata=np.c_[d.y1, d.y0],
             hovertemplate=("p = %{x:.3f}<br>log₂ ratio = %{y:.2f}<br>"
                            "Q<sub>case</sub> = %{customdata[0]:.3g}<br>Q<sub>ctrl</sub> = %{customdata[1]:.3g}"
                            "<extra></extra>"),
         ), row=1, col=j)
-        fig.add_hline(y=0.0, line=dict(color=_AXIS, width=1), row=1, col=j)
-        fig.add_hline(y=p.reference, line=dict(color=_MUTED, width=1, dash="dash"), row=1, col=j)
+        fig.add_hline(y=0.0, line=dict(color=theme.axis, width=1), row=1, col=j)
+        fig.add_hline(y=p.reference, line=dict(color=theme.muted, width=1, dash="dash"), row=1, col=j)
         fig.add_trace(go.Scatter(
-            x=d.p, y=d.y1, mode="lines", line=dict(color=_CASE, width=1.8),
+            x=d.p, y=d.y1, mode="lines", line=dict(color=theme.case, width=1.8),
             name="case", legendgroup="case", showlegend=(j == 1),
             hovertemplate="p = %{x:.3f}<br>case Q = %{y:.3g}<extra></extra>",
         ), row=2, col=j)
         fig.add_trace(go.Scatter(
-            x=d.p, y=d.y0, mode="lines", line=dict(color=_CTRL, width=1.8),
+            x=d.p, y=d.y0, mode="lines", line=dict(color=theme.ctrl, width=1.8),
             name="control", legendgroup="ctrl", showlegend=(j == 1),
             hovertemplate="p = %{x:.3f}<br>control Q = %{y:.3g}<extra></extra>",
         ), row=2, col=j)
@@ -81,32 +81,32 @@ def _gene_plotly(panels, *, share_y, title, width, height):
     label = ("fitted global shift" if any(p.log2_fitted_shift is not None for p in panels)
              else "median(R): fitted global shift")
     fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
-                             line=dict(color=_MUTED, width=1, dash="dash"),
+                             line=dict(color=theme.muted, width=1, dash="dash"),
                              name=label), row=1, col=1)
     fig.update_yaxes(title_text="log₂(Q<sub>case</sub> / Q<sub>ctrl</sub>)", row=1, col=1)
     fig.update_yaxes(title_text="expression", row=2, col=1)
     for ann in fig.layout.annotations:
         ann.font.size = 13
         ann.yshift = 8
-    _plotly_layout(fig, title=title, width=width or (min(1700, 200 + 330 * k)),
+    _plotly_layout(fig, theme, title=title, width=width or (min(1700, 200 + 330 * k)),
                    height=height or 600, legend_below=True)
     fig.update_layout(margin=dict(t=110 if title else 90))
     fig.update_layout(hovermode="x unified")
     return fig
 
 
-def _marker_plotly(data, go):
+def _marker_plotly(data, go, theme):
     """Marker spec for a point cloud: colour ramp when a colour column exists,
     a single hue otherwise; a thin white ring so overlapping points stay
     separable."""
-    base = dict(size=6, line=dict(width=0.5, color=_SURFACE), opacity=0.85)
+    base = dict(size=6, line=dict(width=0.5, color=theme.surface), opacity=0.85)
     if data.color is None:
-        return dict(base, color=_CASE)
+        return dict(base, color=theme.case)
     spec = data.color_spec
-    return dict(base, color=data.color, colorscale=spec["scale"],
+    return dict(base, color=data.color, colorscale=theme.scale(spec["role"]),
                 cmin=spec["range"][0], cmax=spec["range"][1],
                 colorbar=dict(title=dict(text=spec["label"]), thickness=12, len=0.6,
-                              outlinewidth=0, tickfont=dict(color=_MUTED)))
+                              outlinewidth=0, tickfont=dict(color=theme.muted)))
 
 
 def _hover_plotly(data):
@@ -121,18 +121,18 @@ def _hover_plotly(data):
     return cd, "<br>".join(lines) + "<extra></extra>"
 
 
-def _cloud_trace(data, go, *, name="genes"):
+def _cloud_trace(data, go, theme, *, name="genes"):
     """One scatter trace; WebGL past a few thousand points so a transcriptome
     stays responsive."""
     n = data.gene.shape[0]
     cls = go.Scattergl if n > 2000 else go.Scatter
     cd, template = _hover_plotly(data)
     return cls(x=data.x, y=data.y, mode="markers", text=data.gene, customdata=cd,
-               hovertemplate=template, marker=_marker_plotly(data, go), name=name,
+               hovertemplate=template, marker=_marker_plotly(data, go, theme), name=name,
                showlegend=False)
 
 
-def _labels_plotly(data, go, fig, row=None, col=None):
+def _labels_plotly(data, go, fig, theme, row=None, col=None):
     idx, above = _label_positions(data)
     if idx.size == 0:
         return
@@ -141,12 +141,12 @@ def _labels_plotly(data, go, fig, row=None, col=None):
             continue
         fig.add_trace(go.Scatter(
             x=data.x[idx[sel]], y=data.y[idx[sel]], mode="text", text=data.gene[idx[sel]],
-            textposition=pos, textfont=dict(size=11, color=_INK),
+            textposition=pos, textfont=dict(size=11, color=theme.ink),
             hoverinfo="skip", showlegend=False,
         ), row=row, col=col)
 
 
-def _volcano_plotly(data, *, title, width, height):
+def _volcano_plotly(data, theme, *, title, width, height):
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -158,7 +158,7 @@ def _volcano_plotly(data, *, title, width, height):
                         horizontal_spacing=0.08)
     cloud_idx = []
     for j, d in enumerate(data, start=1):
-        fig.add_trace(_cloud_trace(d, go), row=1, col=j)
+        fig.add_trace(_cloud_trace(d, go, theme), row=1, col=j)
         cloud_idx.append(len(fig.data) - 1)
         # One-sided alternative: shade the half of the fold-change axis the test
         # cannot find anything on, so emptiness there reads as untested. Added
@@ -166,19 +166,19 @@ def _volcano_plotly(data, *, title, width, height):
         if d.alternative != "two-sided":
             x_lim = float(np.nanmax(np.abs(d.x))) * 1.08 if np.isfinite(d.x).any() else 1.0
             x0, x1 = (0.0, x_lim) if d.alternative == "less" else (-x_lim, 0.0)
-            fig.add_vrect(x0=x0, x1=x1, fillcolor=_GRID, opacity=0.45, line_width=0,
+            fig.add_vrect(x0=x0, x1=x1, fillcolor=theme.grid, opacity=0.45, line_width=0,
                           layer="below", row=1, col=j,
                           annotation_text=f"untested (alternative = {d.alternative})",
                           annotation_position="bottom left" if d.alternative == "greater" else "bottom right",
-                          annotation_font=dict(size=10, color=_MUTED),
-                          annotation_bgcolor="rgba(255,255,255,0.8)")
-        fig.add_vline(x=0.0, line=dict(color=_AXIS, width=1), row=1, col=j)
+                          annotation_font=dict(size=10, color=theme.muted),
+                          annotation_bgcolor=theme.box())
+        fig.add_vline(x=0.0, line=dict(color=theme.axis, width=1), row=1, col=j)
         if np.isfinite(d.cutoff_y):
-            fig.add_hline(y=d.cutoff_y, line=dict(color=_MUTED, width=1, dash="dash"), row=1, col=j,
+            fig.add_hline(y=d.cutoff_y, line=dict(color=theme.muted, width=1, dash="dash"), row=1, col=j,
                           annotation_text=f"FDR {d.alpha:g}: {d.n_significant} genes",
                           annotation_position="bottom right" if d.alternative == "less" else "bottom left",
-                          annotation_font=dict(size=10, color=_MUTED))
-        _labels_plotly(d, go, fig, row=1, col=j)
+                          annotation_font=dict(size=10, color=theme.muted))
+        _labels_plotly(d, go, fig, theme, row=1, col=j)
         fig.update_xaxes(title_text=d.xlabel, row=1, col=j)
         # The promised shared x: pan/zoom one panel and the other follows, so a
         # gene's position is comparable across the two stages by eye.
@@ -189,17 +189,17 @@ def _volcano_plotly(data, *, title, width, height):
         # One colour bar for both panels: the same column, the same scale.
         for idx in cloud_idx[:-1]:
             fig.data[idx].marker.showscale = False
-    _plotly_layout(fig, title=title, width=width or (520 * k + 120), height=height or 520)
+    _plotly_layout(fig, theme, title=title, width=width or (520 * k + 120), height=height or 520)
     return fig
 
 
-def _stages_plotly(data, *, title, width, height):
+def _stages_plotly(data, theme, *, title, width, height):
     import plotly.graph_objects as go
 
     fig = go.Figure()
-    fig.add_trace(_cloud_trace(data, go))
-    fig.add_vline(x=data.cutoff_x, line=dict(color=_MUTED, width=1, dash="dash"))
-    fig.add_hline(y=data.cutoff_y, line=dict(color=_MUTED, width=1, dash="dash"))
+    fig.add_trace(_cloud_trace(data, go, theme))
+    fig.add_vline(x=data.cutoff_x, line=dict(color=theme.muted, width=1, dash="dash"))
+    fig.add_hline(y=data.cutoff_y, line=dict(color=theme.muted, width=1, dash="dash"))
     # Headroom, so the upper quadrant labels do not sit on the genes they count.
     finite = data.y[np.isfinite(data.y)]
     if finite.size:
@@ -217,11 +217,11 @@ def _stages_plotly(data, *, title, width, height):
         n = counts[text.replace("\n", " ")]
         fig.add_annotation(xref="x domain", yref="y domain", showarrow=False,
                            text=f"<b>{text.replace(chr(10), '<br>')}</b><br>{n} genes",
-                           font=dict(size=11, color=_MUTED), align="left" if pos["xanchor"] == "left" else "right",
-                           bgcolor="rgba(255,255,255,0.8)", borderpad=3, **pos)
-    _labels_plotly(data, go, fig)
+                           font=dict(size=11, color=theme.muted), align="left" if pos["xanchor"] == "left" else "right",
+                           bgcolor=theme.box(), borderpad=3, **pos)
+    _labels_plotly(data, go, fig, theme)
     fig.update_xaxes(title_text=data.xlabel)
     fig.update_yaxes(title_text=data.ylabel)
-    _plotly_layout(fig, title=title or f"the two stages (FDR {data.alpha:g})",
+    _plotly_layout(fig, theme, title=title or f"the two stages (FDR {data.alpha:g})",
                    width=width or 700, height=height or 600)
     return fig
