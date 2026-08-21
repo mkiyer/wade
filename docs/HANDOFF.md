@@ -62,16 +62,14 @@ The package is `src/wade/`. Twelve modules, all small:
 See [`../ROADMAP.md`](../ROADMAP.md) for the queue.
 
 1. **The real dataset — first contact made** (`notebooks/rna100k.qmd`,
-   2026-08-20; renders end to end with quarto, needs `fastexcel`/`pyyaml`/
-   `ipykernel` which are now in the env). 30,976 × 83,047 splice-junction
-   counts, `gene_num_introns` as the normalizer, harmonized metadata joined
-   by `library` (228 CPTAC_MEL libraries not yet harmonized). The smoke
-   contrast (plasma malignant v non-malignant, 126 s) surfaced the next
-   agenda, written into ROADMAP §2: group-associated depth (1.7× — the
-   depth-imbalance experiment), the §4 p-value pile-up observed at 18.8% of
-   genes, restricted (within-study) permutation as a missing feature, and
-   47% sparsity. The full-cohort run is gated in the notebook (~60 GB).
-   Rendered HTML is gitignored: the `.qmd` is the artifact, nothing
+   2026-08-20; renders end to end with quarto, which needs
+   `fastexcel`/`pyyaml`/`ipykernel`, now declared in `mamba_env.yaml`).
+   **Everything it measured is `scaling.md` §7** — the saturation of
+   significance and the two controls that explain it, the artefact libraries
+   and the diagnostic that was measured and refuted, group-associated depth,
+   the observed p-value pile-up, and the sparsity. Read that section rather
+   than this paragraph. The full-cohort run is gated in the notebook (~60 GB);
+   rendered HTML is gitignored, so the `.qmd` is the artifact and nothing
    patient-derived enters the repo.
 2. **Demo notebook** — nothing exists. `tools/make_readme_figures.py` already
    builds the dataset and the three figures it should open with. Deferred so
@@ -179,7 +177,8 @@ contract that `import wade` imports neither library.
 | [`../README.md`](../README.md) | the user-facing contract |
 | [`method.md`](method.md) | what WADE computes and why — §10 is the scale/counts derivation |
 | [`limits.md`](limits.md) | what it cannot do; read before running |
-| [`scaling.md`](scaling.md) | **the research agenda for large data** — measurements, hypotheses, risks, single cell |
+| [`scaling.md`](scaling.md) | **the research agenda for large data** — measurements, hypotheses, risks, single cell, and what the real cohort measured |
+| [`plotting.md`](plotting.md) | the plotting **extension** — the data layer, plotting elsewhere, and what it is not for |
 | [`implementation-notes.md`](implementation-notes.md) | R parity, cross-language traps, the kernels |
 | [`../ROADMAP.md`](../ROADMAP.md) | the work queue |
 | this file | what is not obvious from any of the above |

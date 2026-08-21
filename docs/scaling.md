@@ -6,6 +6,7 @@ scratchpad scripts whose recipes are `tools/bench_scaling.py` now, and each
 section's **"Landed 2026-08-20"** block records what shipped from it, how it
 was validated, and the before/after. §§2.1–2.2 and 3.1–3.4 are implemented;
 §2.3 (residents), §4 (p-value resolution) and §5 (single cell) are still
+agenda. **§7 is what the real cohort measured**, and it is what reordered the
 agenda.
 
 The method is in [`method.md`](method.md); what WADE cannot do is in
@@ -665,3 +666,104 @@ started until §2 and §3 land, but it is the reason to do them well.
 - **Is `w1` worth carrying at this scale?** It is reported, tested, and
   consumed by nothing (`ROADMAP.md` open questions). It costs a full `(g x m)`
   reduction.
+
+---
+
+## 7. What the real cohort measured
+
+`notebooks/rna100k.qmd`, first run 2026-08-20: 30,976 genes × 83,047 libraries
+of splice-junction counts, `gene_num_introns` as the normalizer, harmonized
+metadata joined by `library` (228 CPTAC_MEL libraries not yet harmonized). The
+full-cohort run is gated in the notebook; the smoke contrast is plasma
+malignant v non-malignant, 1,343 v 1,662, **126 s** end to end. Five findings,
+each of which changed a priority.
+
+### 7.1 Significance saturates, and it is not a bug
+
+The contrast called **29,206 of 30,976 genes** subset-significant at BH 0.05.
+Two controls settle what that is:
+
+* **Permuted labels** — the same matrix, same depth spread, same study
+  mixture, labels shuffled once: **0 mean-shift and 53 subset genes** at BH
+  0.05, raw `p_subset < 0.05` for **3.9%** of genes against a nominal 5%. The
+  machinery is calibrated on this data.
+* **One study only** (`pw_pdac_bloodev`, 283 v 117): still **~70%** of genes
+  called, with its own depth imbalance *reversed*. Holding study fixed does
+  not deflate it.
+
+So at *n* in the hundreds-to-thousands, stage 2's null — *one* global fold
+change explains the whole distribution — is a **point null**, and every real
+deviation from it, however small and whether biological or technical, rejects.
+**Significance has saturated as an instrument.** The operative outputs are the
+rankings and the descriptors, which is what `subset_log2_fc` and the
+permutation z-scores were added for (§4.0).
+
+### 7.2 A few anomalous libraries drive many genes' subsets
+
+Chasing the magnitude ranking's top found FLI1, EWSR1, TRGC2 and LYVE1 sharing
+**23–24 of their top 25 driver libraries** — and FLI1 with the *unrelated*
+TRGC2 sharing 24, *more* than the FLI1/EWSR1 "fusion pair" shared. That is what
+falsified a tempting Ewing-sarcoma reading.
+
+The mechanism is library composition, not normalization: those libraries detect
+**5,563 genes against 11,114** elsewhere and hold **36% of their mass in ten
+genes** (cohort median 15%), with raw FLI1 junction counts of ~297,000 against
+~1,600. Blood-cell transcripts dominating a plasma prep. At cohort scale the
+skew is severe: **some libraries sit in the top 25 of a third of all genes**
+(10,229 of 30,976; 258 expected if uniform).
+
+**`ETV4` is the counter-example** and survives every control: zero overlap with
+those libraries, ordinary complexity (10,483 genes detected, 13.9% top-10
+share), *below*-median depth (2.1M), median **0 TPM** across all 3,005 plasma
+libraries, and its top 25 are **25 distinct patients, all PDAC, replicated
+across two independent studies**.
+
+**The obvious diagnostic was measured and refuted.** "How often do this gene's
+drivers drive everything else?" does *not* flag the artefact: FLI1's and
+TRGC2's drivers appear in 375 of 6,769 up-gene subsets against a cohort median
+of 1,769 — far *below* average — because a low-complexity library is zero in
+~25,000 genes and therefore ranks at the **bottom** of most genes' orderings.
+What discriminates is the drivers' **own library complexity**, which is why
+`library_qc()` and `subset_drivers()` exist and why a recurrence score does not.
+
+### 7.3 Group-associated depth
+
+Median depth 8.1M (malignant) against 4.8M (non-malignant) in the plasma
+contrast — 1.7× — and *reversed* (6.8M v 8.9M) in the single-study one. Cohort
+depth spans 0.8M–89M, 17× between the 5th and 95th percentiles.
+
+Library-size normalization removes depth's first moment. What nothing removes
+is the **second**: after normalization a shallow library's values are noisier
+than a deep one's, so group-associated depth is a genuine distributional
+difference between the groups — technical, but real, and a distributional test
+will see it. Binomial thinning does run here, but it is stage 2's per-gene
+*fold-change* correction and does not equalize depth. The candidate guard is
+**depth-equalizing thinning as preprocessing** — thin every library to a common
+depth, exact for counts, at the price of discarded reads — and the experiment
+that would justify it is a planted depth imbalance with false-positive rates
+per stage. ETV4's drivers sitting *below* median depth says depth is not a
+simple monotone confound, so this needs measuring rather than assuming.
+
+### 7.4 The p-value floor, observed
+
+**18.8% of genes** sat at the mean-shift resolution floor. That is §4.1's
+predicted pile-up, on real data. It is also why §4 is *demoted* rather than
+urgent: the ordering it would buy is already supplied by magnitude and the
+z-scores.
+
+### 7.5 47% zeros
+
+Real sparsity, but not single cell's >90%. §5.1's zero-run walk would roughly
+**halve** the subset stage here, not decimate it — worth having, not urgent.
+
+### 7.6 What this demands, in order
+
+1. **A rank-recovery benchmark on real background** — plant known subset and
+   global signals into real non-malignant plasma libraries (so the background
+   keeps every technical wart) and measure whether the ranking recovers them
+   and where the technical tail begins. The direct test of "are the top-ranked
+   genes the true ones".
+2. **The depth experiment** of §7.3.
+3. **Restricted permutation** — landed 2026-08-21 as `strata=`; the defensible
+   contrasts on this cohort hold study fixed.
+4. **P-value resolution** (§4), demoted as above.
