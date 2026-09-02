@@ -864,12 +864,10 @@ that each already know which way they are looking.
 `wade(..., alternative="less")` closes it — and is exactly the sort of prior
 knowledge this notebook is otherwise careful not to grant anybody.
 
-**And a place where WADE is no better than the competition it is measured
-against.** `2% at 8x` is below the combinatorial floor — six affected cases of
-300 gives a smallest supportable p-value of
-`wade.detectability_floor(300, 300, 6)`. A permutation p-value cannot go below
-that; a *refined* one can, because the generalized-Pareto tail is an
-extrapolation and does not know the floor exists.
+**And the scenario at the edge of what the design can resolve.** `2% at 8x`
+is six affected cases of 300, for which `wade.detectability_floor(300, 300, 6)`
+puts the scale of the smallest supportable p-value at 1.5e-2. Methods differ a
+great deal in how far past that their raw p-values reach.
 
 ```{python}
 #| label: tbl-floor-violation
@@ -883,12 +881,14 @@ md_table([[NAME[f], f"{np.median(BEST2[f][1][IS['2% at 8x']]):.2e}",
          ["method", "median raw p", "raw p below the floor", "power at BH 0.05"])
 print()
 print(f": On the {N_EACH} genes with {k6} affected cases of {N1}, whose "
-      f"combinatorial floor is {floor:.2e} (`docs/limits.md` 4). WADE's two "
-      "stages are among the worst offenders, not the best. BH absorbs almost "
-      "all of it — the last column is near zero for everyone — which is the "
-      "reason to read the adjusted p-value and not the raw one, and the "
-      "reason `docs/limits.md` 5 calls the floor a censoring point rather "
-      "than a small number.")
+      f"combinatorial floor is {floor:.2e} (`docs/limits.md` 4.1). That floor "
+      "is a **scale, not a bound** — measured, 21% of planted 3-sample genes "
+      "and 42% of planted 6-sample genes fall under it with no refinement "
+      "involved at all — so this column is not an error rate. It measures how "
+      "far each method's tail reaches past the design's nominal resolution, "
+      "and the spread from 0% to 40% is a property of the statistics rather "
+      "than of anyone's arithmetic. What matters is the last column: BH "
+      "removes essentially all of it for everyone.")
 ```
 
 Four limits of this comparison, none of them fixable by running it longer:
@@ -898,9 +898,9 @@ Four limits of this comparison, none of them fixable by running it longer:
   A method is expected to win where the data matches its assumptions, and the
   measurement that would test the other direction — real cohorts with known
   subset structure — is not here.
-* **`2% at 8x` is below the combinatorial floor**, so no method in this family
-  can find it, and the table above shows every one of them — WADE included —
-  reporting raw p-values the permutation null cannot support.
+* **`2% at 8x` is at the design's resolution limit**, so no method in this
+  family finds it reliably, and the scenario is here to show that rather than
+  to separate the methods. Read the BH column, not the raw one.
 * **One geometry.** 300 against 300, balanced. `docs/limits.md` §4.2 shows the
   floor is driven by imbalance, and an unbalanced cohort would reorder some of
   this.

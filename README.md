@@ -281,7 +281,7 @@ per-gene memory stops growing with the design; keep it at or above
 
 **The combinatorial floor.** If `k` samples carry a signal, shuffling puts all
 of them in one group with probability `C(n1,k)/C(n1+n0,k)` — and **no
-permutation test can return a p-value below that.** At 77 cases vs 18 controls
+permutation test can resolve much below that.** At 77 cases vs 18 controls
 the floor is still 0.032 with 15 affected samples. It is driven by group
 *imbalance*: balancing the groups helps far more than adding cases.
 

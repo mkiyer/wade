@@ -382,9 +382,11 @@ resolution beyond the floor is the `scaling.md` §4 agenda.
 ### The combinatorial floor
 
 If $k$ samples carry a signal, label shuffling places all of them in the case
-group with probability $\binom{n_1}{k}/\binom{n_1+n_0}{k}$. **No
-label-permutation test can return a p-value below that**, whatever the effect
-size, the detector, or the permutation count. At 77 cases vs 18 controls it is
+group with probability $\binom{n_1}{k}/\binom{n_1+n_0}{k}$. **That is the
+scale of the smallest p-value a label-permutation test can resolve**, whatever
+the effect size, the detector, or the permutation count — exact in the
+noise-free limit, and within a factor of about two of the median gene in
+measured count data (`limits.md` §4.1). At 77 cases vs 18 controls it is
 0.173 at 10% affected — so nothing below roughly 25% is detectable at
 $\alpha = 0.05$, by any method in this family. This dominates detector choice at
 small $n$ and is the single most important thing to check before running.

@@ -110,13 +110,20 @@ def permutation_space(cond: np.ndarray, strata=None) -> dict:
 
 
 def detectability_floor(n_case: int, n_ctrl: int, k: int) -> float:
-    """The smallest p-value any label-permutation test can return for a signal
-    carried by ``k`` samples — ``docs/limits.md`` §1.
+    """The scale of the smallest p-value a label-permutation test can resolve
+    for a signal carried by ``k`` samples — ``docs/limits.md`` §1 and §4.1.
 
     Shuffling labels puts all ``k`` affected samples in one group with
-    probability ``C(n_case, k) / C(n_case + n_ctrl, k)``, and **no permutation
-    test can report a p-value below that**, whatever the effect size, the
-    statistic or the number of permutations. Where this exceeds your alpha the
+    probability ``C(n_case, k) / C(n_case + n_ctrl, k)``, whatever the effect
+    size, the statistic or the number of permutations.
+
+    **It is a scale, not a bound**, and this docstring claimed otherwise until
+    it was measured on 2026-09-02: with noise the relabellings that place all
+    ``k`` in cases scatter around the observed rather than tying it, and ``k``
+    itself is a random variable in count data. 21% of planted 3-sample genes
+    and 42% of planted 6-sample genes came in *under* this number at
+    ``B = 40,000`` (``limits.md`` §4.1 has the table). Use it to judge a
+    design; never clamp a gene's p-value to it. Where this exceeds your alpha the
     signal is undetectable by this family of methods, and that is a property of
     the *design*: it is why a study with 18 controls cannot find a 5% subtype
     however dramatic the subtype is.

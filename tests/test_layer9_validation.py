@@ -36,8 +36,10 @@ def _lchoose(n, r):
 def comb_floor(n1: int, n: int, k: int) -> float:
     """P(a random relabelling puts all k signal-carrying samples in one group).
 
-    The smallest p-value **any** label-permutation test can return for a
-    k-sample subset. A property of the design, not of the implementation.
+    The scale of the smallest p-value a label-permutation test can resolve for
+    a k-sample subset. A property of the design, not of the implementation —
+    and a scale rather than a bound: see ``docs/limits.md`` §4.1, where 21-42%
+    of planted genes came in under it.
     """
     if k < 1 or k > n1:
         return 1.0

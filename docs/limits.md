@@ -19,11 +19,12 @@ estimable, so `affected_fraction` is a quantitative estimate only above roughly
 distinguishes "global" from "concentrated" without quantifying which fraction.
 
 **Detectability.** If `k` samples carry a signal, label shuffling puts all of
-them in one group with probability `C(n1,k) / C(n1+n0,k)`. **No p-value from any
-label-permutation test can fall below that**, whatever the effect size, the
-statistic or the permutation count. Where the floor exceeds your alpha, the
-signal is undetectable by this family of methods. Check it for your design
-before you run anything.
+them in one group with probability `C(n1,k) / C(n1+n0,k)`, and **that sets the
+scale of the smallest p-value the design can support** — whatever the effect
+size, the statistic or the permutation count. It is not a hard bound on any
+individual gene (§4.1 measures how far under it a gene can land), but where it
+exceeds your alpha the signal is undetectable by this family of methods. Check
+it for your design before you run anything.
 
 `wade.detectability_floor(n_case, n_ctrl, k)` computes it, so the check is one
 call rather than a formula to transcribe:
@@ -187,9 +188,32 @@ uniform relabelling assigns all `k` of them to the case group is
 C(n1, k) / C(n1 + n0, k)
 ```
 
-That is the smallest p-value the permutation null can produce for that gene.
-It is exact, it does not depend on the statistic, and it does not depend on how
-large the effect is.
+**It is a scale, not a bound** — and this file said otherwise until
+2026-09-02, when it was measured. The floor is exactly the p-value in the
+noise-free limit: if the statistic depended *only* on how many affected samples
+land in the case group, every relabelling that puts all `k` in cases would tie
+the observed, and `p` would equal that probability exactly.
+
+Real data is not noise-free. The unaffected samples are random too, so those
+relabellings scatter above and below the observed rather than tying it, and
+roughly half fall below. Worse, **`k` itself is not well defined in count
+data**: dispersion makes some unaffected samples look extreme, so the number of
+samples carrying the signal is a random variable, not the planted constant.
+
+Measured on planted NB counts at 300 v 300, with `B = 40,000` so that every
+p-value is a raw permutation count and no refinement fires:
+
+| planted `k` | floor | `p` / floor, q10 – median – q90 | fell **below** the floor |
+|---|---|---|---|
+| 3 | 1.24e-01 | 0.48 – 1.96 – 3.23 | 21% |
+| 6 | 1.52e-02 | 0.26 – 1.10 – 1.71 | 42% |
+
+So the floor predicts the **order of magnitude** of the smallest p-value the
+design can support — the median lands within a factor of two of it — and a
+substantial minority of genes come in under it. Use it to decide whether a
+design can find a subtype at all, which is what §4.3 does with it. Do not use
+it as an assertion about any individual gene's p-value, and do not clamp a
+p-value to it.
 
 ### 4.2 It is driven by imbalance, not by subset size alone
 
@@ -254,31 +278,24 @@ the floor. If you need to resolve *below* it, the only remedy is more
 permutations — and the floor moves as `1/B`, so an order of magnitude costs an
 order of magnitude.
 
-**The refinement can go below the combinatorial floor, and does.** §4's floor
-is a property of the design: with `k` affected cases there is no relabelling
-that produces a smaller p-value, so the *empirical* p-value cannot fall below
-it. The GPD refinement is an extrapolation of a smooth tail and knows nothing
-about that constraint. Measured in
-[`../notebooks/benchmark.qmd`](../notebooks/benchmark.qmd) §9, on 45 genes with
-6 affected cases of 300 — a floor of 1.5e-2 — at `B = 2,000`:
+**The refinement was checked against brute force, and is slightly
+conservative.** The worry was that the GPD extrapolates below what the
+permutations can support. Measured on 40 planted genes at 300 v 300, comparing
+the shipped refinement at `B = 2,000` against the empirical p-value at
+`B = 50,000` — where no refinement fires and the count is the answer:
 
-| method | raw p below the floor | power at BH 0.05 |
-|---|---|---|
-| **WADE stage 2**, MOST | **40%** | 11%, 4% |
-| **WADE stage 1** | **33%** | 7% |
-| LSOSS | 24% | 7% |
-| `t`-test | 13% | 2% |
-| ORT | 11% | 2% |
-| Wilcoxon, OS | 4% | 0%, 2% |
-| COPA | 0% | 0% |
+| | refined / true |
+|---|---|
+| median | **1.19** |
+| worst under-statement | 0.53 |
+| worst over-statement | 17.2 |
 
-WADE is among the worst offenders rather than the best, and the ordering is
-roughly the order in which each method's null has a tail worth extrapolating —
-a heavier tail is a better GPD fit and a longer extrapolation.
-
-**BH absorbs nearly all of it**, which is the practical answer: read `padj_*`,
-not `p_*`, and check the floor for your design before you run anything. It is
-also why `refined_*` is reported, below.
+The refinement errs high, not low: the median refined p-value is 19% *larger*
+than the truth, and the one badly wrong gene was wrong by being 17× too
+conservative. Nothing here is evidence that the GPD tail is optimistic over
+the range it was measured on, `p` around 1e-2 to 1e-3. Its accuracy further out
+— 1e-6 and below, where it matters on a large cohort — is **not** established
+by this and is the experiment in `scaling.md` §4.5.
 
 **Which p-values were extrapolated is reported.** `refined_mean_shift` and
 `refined_subset` (both in the written table) say whether a stage's p-value was
