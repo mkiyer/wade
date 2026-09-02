@@ -15,15 +15,15 @@ you to declare in advance which you are looking for** — there is no percentile
 cutoff, no window width, no tuning parameter describing the shape of the effect.
 
 For each gene it compares the two groups' whole quantile functions on a shared
-grid of `min(n_case, n_ctrl)` probabilities. Inference is by label permutation,
-with a Generalized Pareto fit refining p-values whose empirical resolution has
-run out, then BH-FDR.
+grid of `min(n_case, n_ctrl, max_probs)` probabilities. Inference is by label
+permutation, with a Generalized Pareto fit refining p-values whose empirical
+resolution has run out, then BH-FDR.
 
 **Scope: discrete count data.** WADE takes raw counts and is built around what
 counts are — the tie-breaking jitter, and a subset stage whose null is built by
 binomial thinning of reads ([`docs/method.md`](docs/method.md) §10), neither of
-which has a meaning for continuous measurements. `thin=False` and
-`thin=False` will run on continuous data and are not tested or tuned for it.
+which has a meaning for continuous measurements. `thin=False` will run on
+continuous data and is not tested or tuned for it.
 
 ## Install
 
@@ -315,7 +315,7 @@ normalizers, permutation inference with GPD refinement and BH, Rust kernels
 for both permutation loops, the count-native subset stage (binomial thinning,
 the one-count pseudocount, bootstrap intervals), the plotting extension (four
 figures over one data layer, three themes, and a linked view), and the
-data-in/results-out boundary. **738 tests, about 12 s.**
+data-in/results-out boundary. **740 tests, about 12 s.**
 
 At 20,000 genes, 100 v 100 and 2,000 permutations a full run takes about 17 s
 on a 16-core laptop (9.7 s with `thin=False`); the permutation loops, which
@@ -332,12 +332,13 @@ fold-change fit — bring a 1,000-gene, 6,000 v 6,000, 200-permutation run from
 2,000 permutations (measured; `docs/scaling.md` §1).
 
 Ported from an R implementation that remains in `reference/` as the oracle the
-golden fixtures were generated from. Worst-case relative deviation across 325
+golden fixtures were generated from. Worst-case relative deviation across 436
 parity comparisons: **9.2e-15**, with the normalized matrix, the quantile grids
 and the permutation null bit-for-bit identical.
 
-Not yet built: the demo notebook, and format-specific reader helpers for
-featureCounts and MatrixMarket. See the roadmap.
+Not yet built: the benchmark notebook — the head-to-head against COPA / OS /
+ORT / MOST / LSOSS, t-test, Wilcoxon and waddR — and format-specific reader
+helpers for featureCounts and MatrixMarket. See the roadmap.
 
 ## Provenance
 

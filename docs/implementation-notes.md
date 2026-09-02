@@ -13,7 +13,7 @@ the oracle the golden fixtures were generated from. The port is verified
 independently of it: the fixtures are committed, so the test suite runs with no
 R present.
 
-**Worst-case relative deviation: 9.155e-15 across 325 comparisons.**
+**Worst-case relative deviation: 9.155e-15 across 436 comparisons.**
 
 | layer | comparisons | worst relative deviation |
 |---|---|---|

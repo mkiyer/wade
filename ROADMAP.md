@@ -67,11 +67,18 @@ export; twelve labels on near-coincident points is past what placement can fix).
 
 ## 1. Now
 
-**The three notebooks** (§3 below). The implementation queue above them is
-finished, and each notebook is a separate deliverable rather than a phase of
-one: the `demo` first, because it is the showcase and the README in executable
-form; then `benchmark`, which is what the real cohort's rank-recovery work is
-waiting on; then `rna100k` relabelled as manuscript material.
+**Release** (§2 below), then the **`benchmark`** notebook (§3). The `demo`
+notebook landed 2026-08-22 and is the master source for the README's figures
+and numbers; `benchmark` is what the real cohort's rank-recovery work is
+waiting on, and `rna100k` is a relabelling after that.
+
+Release comes first because on 2026-09-02 it turned out never to have been
+tried: `main` was 37 commits ahead of `origin/main`, so the CI added in one of
+those commits had never run, and **11 of its 12 jobs would have failed** —
+`--no-build-isolation` with no maturin in the runner, `--no-index` blocking
+numpy as well as PyPI, and a smoke test naming `wade.permutation` for a
+function that lives in `wade.plotting`. All three are fixed. The fourth
+failure was real and is the interesting one: see §2's Release entry.
 
 ## 2. Soon
 
@@ -106,17 +113,33 @@ benchmark notebook below. §7.2's artefact check is no longer text-only —
 ### Release
 
 CI exists — three OSes × two Pythons, the declared numpy floor, a kernel-less
-run, wheels and an sdist. What remains: publishing wheels, an API
-documentation build, and a decision on whether the validation simulations ship
-as tests, as documentation, or both.
+run, wheels and an sdist — and as of 2026-09-02 it is *correct*, which is a
+different claim: every job was reproduced in a clean venv and the four
+failures fixed.
+
+**The fourth was not a workflow bug.** `tests/test_stage1_gemm.py` asserted a
+per-element `rtol=1e-12` on `mean_shift`, a difference of two large nearly
+equal group means — so a gene whose groups almost cancel was being held to a
+relative tolerance it cannot carry. Which BLAS numpy links decides the
+summation order, and it is not ours to choose: conda-forge gives OpenBLAS,
+PyPI gives Accelerate. On OpenBLAS chunked gemm comes out exactly bitwise; on
+Accelerate it lands at 2.7e-12 of that one element, and the suite fails. In
+the units that mean something — the statistic's own scale — both read a steady
+1.2e-14 to 1.8e-14. The tests now assert that, and `scaling.md` §3.1 carries
+the measurement. **A dev machine with one BLAS cannot see this**; CI is what
+sees it, which is the argument for running it.
+
+What remains: publishing wheels, an API documentation build, and a decision on
+whether the validation simulations ship as tests, as documentation, or both.
 
 ## 3. Notebooks
 
-Three deliverables, and **the current work** (§1). Separate deliverables, in
-this order, not three phases of one.
+Three deliverables, in this order, not three phases of one. The first has
+landed; **`benchmark` is the current work** (§1).
 
-1. **`demo`** — small synthetic data with planted ground truth. The showcase
-   and gallery: a README in executable form, every claim checkable.
+1. ~~**`demo`**~~ — **done 2026-08-22**, `notebooks/demo.qmd`. Small synthetic
+   data with planted ground truth, renders to HTML and PDF, and is the master
+   source for `docs/figures/*.png` and the numbers the README quotes.
 2. **`benchmark`** — the head-to-head, on simulated counts *and* a few real
    datasets from the literature: COPA / OS / ORT / MOST / LSOSS as the
    subset-detection competitors, t-test and Wilcoxon as floors, waddR as the

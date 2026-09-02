@@ -11,11 +11,12 @@ The method itself is in [`method.md`](method.md).
 
 ## 1. The two hard constraints, stated first
 
-**Resolution.** The quantile grid has `m = min(n_case, n_ctrl)` points. Nothing
-finer than `1/m` is estimable, so `affected_fraction` is a quantitative estimate
-only above roughly 100 samples in the smaller group, degrades through about 50,
-and below that distinguishes "global" from "concentrated" without quantifying
-which fraction.
+**Resolution.** The quantile grid has `m = min(n_case, n_ctrl, max_probs)`
+points — the smaller group, or the cap of 2,000 on a very large cohort,
+whichever is less ([`method.md`](method.md) §1). Nothing finer than `1/m` is
+estimable, so `affected_fraction` is a quantitative estimate only above roughly
+100 samples in the smaller group, degrades through about 50, and below that
+distinguishes "global" from "concentrated" without quantifying which fraction.
 
 **Detectability.** If `k` samples carry a signal, label shuffling puts all of
 them in one group with probability `C(n1,k) / C(n1+n0,k)`. **No p-value from any
@@ -133,7 +134,7 @@ introduce it and cannot remove it. What you can do is be suspicious of a
 characterization read off a matrix in which a large fraction of genes carry
 strong signal.
 
-### 2.4 `mean_shift` is a grid quadrature, not a difference of means, on unequal groups
+### 2.5 `mean_shift` is a grid quadrature, not a difference of means, on unequal groups
 
 `mean_shift` is the signed area between the two quantile functions, evaluated as
 an equal-weight average over `m` nodes. When `n_case = n_ctrl` this is *exactly*
@@ -152,9 +153,12 @@ difference, when your groups are unbalanced.
 
 ## 3. The grid is a sample-size constraint, not a parameter
 
-`m = min(n_case, n_ctrl)` is not tunable. It is the largest grid on which at
-least one group is read without interpolation, and it sets everything
-downstream. Measured, planted fractions against the estimate:
+`m = min(n_case, n_ctrl)` is a ceiling you cannot raise. It is the largest grid
+on which at least one group is read without interpolation, and it sets
+everything downstream. `max_probs` is the one knob here and it only ever
+*lowers* it — a memory cap for very large cohorts, not a resolution dial
+([`scaling.md`](scaling.md) §2.1). The rows below all sit under the default cap
+of 2,000. Measured, planted fractions against the estimate:
 
 | geometry | m | 2% | 5% | 10% | 25% | global |
 |---|---|---|---|---|---|---|

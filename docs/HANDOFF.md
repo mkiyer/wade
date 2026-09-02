@@ -20,15 +20,21 @@ As of 2026-08-21 the **implementation queue is empty**: the last six core items
 landed, `plotting.py` became the `wade/plotting/` subpackage, and the whole
 visualization queue is built — themes, drawn bootstrap intervals, a driver
 figure, per-gene metadata in figures, linked views, a stage-1 row, and label
-de-collision. **738 tests pass in about 12 seconds**, parity unchanged at
-**9.155e-15** over 436 comparisons.
+de-collision. The `demo` notebook landed 2026-08-22. **740 tests pass in about
+12 seconds**, parity unchanged at **9.155e-15** over 436 comparisons.
 
-**The immediate work is the three notebooks** — `ROADMAP.md` §1 and §3. Each is
-a separate deliverable: the `demo` first (the showcase, the README in executable
-form), then `benchmark` (which the real cohort's rank-recovery work is waiting
-on), then `rna100k` relabelled as manuscript material. `plan.md` was the recipe
-for phases B and C and was deleted when C landed, as it said to; its outcome is
-in `ROADMAP.md`, `docs/plotting.md` and the code.
+**The immediate work is the release, then `benchmark`** — `ROADMAP.md` §1.
+`plan.md` was the recipe for phases B and C and was deleted when C landed, as
+it said to; its outcome is in `ROADMAP.md`, `docs/plotting.md` and the code.
+
+**Read this before touching CI.** On 2026-09-02 `main` was 37 commits ahead of
+`origin/main` — nothing since `5dcf2f7` had ever been pushed, so the CI added
+in one of those commits had never run once, and 11 of its 12 jobs would have
+failed. Three were workflow bugs (`--no-build-isolation` with no maturin in a
+`setup-python` runner; `--no-index` blocking numpy as well as PyPI's `wade`; a
+smoke test calling `wade.permutation.available_backends`, which lives in
+`wade.plotting`). The fourth is a lesson rather than a typo and is in §3
+below: **one machine has one BLAS, and five assertions were pinned to it.**
 
 ```bash
 export PATH="/usr/local/bin:$PATH"          # only if you need R
@@ -77,10 +83,12 @@ kernel:
 
 The queue is [`../ROADMAP.md`](../ROADMAP.md). In short:
 
-1. **Three notebooks**, and this is the current work: a small-synthetic `demo`
-   (the showcase), a `benchmark` head-to-head against COPA / OS / ORT / MOST /
-   LSOSS, t-test, Wilcoxon and waddR on simulated *and* literature data, and
-   `rna100k` relabelled as manuscript material rather than a demo.
+1. **The `benchmark` notebook**, and this is the current work: a head-to-head
+   against COPA / OS / ORT / MOST / LSOSS, t-test, Wilcoxon and waddR on
+   simulated *and* literature data. It is the only place WADE's claim is
+   tested against alternatives rather than against itself, and the real
+   cohort's rank-recovery work is waiting on it. (`demo` landed 2026-08-22;
+   `rna100k` is a relabelling to manuscript material after `benchmark`.)
 2. **The real dataset's own agenda** — `scaling.md` §7, which is where
    everything `notebooks/rna100k.qmd` measured now lives: the saturation of
    significance and the two controls that explain it, the artefact libraries
@@ -231,6 +239,28 @@ three measured facts, and breaking any of them breaks it silently:
   fitted fold change.
 - **A column sum's association depends on blocking**, so library sizes are
   always one full-matrix pass, never chunked.
+
+### One machine has one BLAS, and a tolerance can be pinned to it
+
+`tests/test_stage1_gemm.py` asserted `rtol=1e-12` per element on `mean_shift`
+and passed for a fortnight. It fails the moment numpy comes from PyPI instead
+of conda-forge, because the two link different BLASes — Accelerate and
+OpenBLAS — and BLAS decides the summation order of the GEMM path.
+
+The mistake was the *units*, not the number. `mean_shift` is a difference of
+two large nearly equal group means, so an element where the groups almost
+cancel carries no relative precision of its own: one gene reads −1.13 among
+values spanning ±957, and one ulp of the sums behind it is 2.7e-12 of *that
+element* while being 1.8e-14 of the statistic. Measured across both BLASes at
+all five sites, the scale-relative disagreement is a steady 1.2e-14 to
+1.8e-14 — and chunked gemm is *exactly bitwise* under OpenBLAS, which is
+precisely why the dev machine could not see the problem the docstring
+described. `assert_scaled()` in that file now states the contract in the right
+units; `scaling.md` §3.1 carries the table.
+
+**The general form**: any assertion whose tolerance is relative to a quantity
+that can approach zero is testing the cancellation, not the arithmetic. Ask
+what the natural scale is and normalize by that.
 
 ### The fit kernel is deliberately not bitwise
 
@@ -431,18 +461,22 @@ cites them.
 
 ## 5. Suggested first move
 
-**The `demo` notebook**, `ROADMAP.md` §3. It is the cleanest of the three: small
-synthetic data with planted ground truth, every claim checkable in the output,
-and nothing left to build first — the figures it needs all exist, including the
-two that did not a day ago (`plot_drivers` for "should I believe this?" and
-`plot_gene(cumulative_area=True)` for stage 1). It is **written**: `demo.qmd`
-generates the dataset, runs it, and writes `docs/figures/*.png` — it is the
-master source for the README's figures and numbers, which is why
-`tools/make_readme_figures.py` was deleted. `benchmark` is the next one.
+**Push, and watch CI go green** — see §1. Everything since `5dcf2f7` is local
+only, the workflow has never executed, and its first run is the only thing that
+can confirm the four fixes on Linux and Windows as well as here. Then tag.
+
+**Then the `benchmark` notebook**, `ROADMAP.md` §3 — the head-to-head. It is
+the only deliverable that tests WADE against alternatives rather than against
+itself, and the real cohort's rank-recovery work is waiting on it.
+
+`demo.qmd` is **done** and is the master source: it generates the dataset, runs
+it, and writes `docs/figures/*.png` — the README's figures and quoted numbers
+come from there, which is why `tools/make_readme_figures.py` was deleted. It
+renders to HTML and PDF (`quarto render notebooks/demo.qmd`).
 
 ```bash
 conda activate wade
-pytest -q                                   # 738 passing, ~12 s — the baseline
+pytest -q                                   # 740 passing, ~12 s — the baseline
 quarto render notebooks/demo.qmd            # the demo, and the README's figures
 ```
 
