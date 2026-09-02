@@ -524,7 +524,7 @@ def waddr(X, cond, *, permnum=2000, seed=1, rscript="Rscript"):
         f = lambda n: f"{d}/{n}"
         np.savetxt(f("x.tsv"), X)
         np.savetxt(f("cond.txt"), np.asarray(cond, dtype=int), fmt="%d")
-        with open(f("run.R"), "w") as fh:
+        with open(f("run.R"), "w", encoding="utf-8") as fh:
             fh.write(_WADDR_R)
         r = subprocess.run([rscript, f("run.R"), f("x.tsv"), f("cond.txt"),
                             str(permnum), str(seed), f("out.tsv")],

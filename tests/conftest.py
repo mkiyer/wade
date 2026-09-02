@@ -166,7 +166,7 @@ def load_fixture(name: str) -> dict:
                 f'RENV_PATHS_CACHE="$HOME/Library/Caches/org.R-project.R/R/renv/cache" '
                 f"Rscript ../../tools/r/generate_fixtures.R"
             )
-        with path.open() as fh:
+        with path.open(encoding="utf-8") as fh:
             _CACHE[name] = _walk(json.load(fh))
     return _CACHE[name]
 

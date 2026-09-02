@@ -1146,7 +1146,7 @@ def test_no_colour_literal_lives_outside_theme_py():
     for path in sorted(root.rglob("*.py")):
         if path.name == "theme.py":
             continue
-        hits = pattern.findall(path.read_text())
+        hits = pattern.findall(path.read_text(encoding="utf-8"))
         if hits:
             offenders[str(path.relative_to(root))] = hits
     assert not offenders, f"colour literals outside theme.py: {offenders}"

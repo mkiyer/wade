@@ -16,7 +16,7 @@ import pytest
 import wade
 
 ROOT = Path(__file__).resolve().parents[1]
-PYPROJECT = (ROOT / "pyproject.toml").read_text()
+PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
 def test_version_is_declared_once_and_agrees():
@@ -34,7 +34,7 @@ def test_version_is_declared_once_and_agrees():
     assert declared.group(1) == wade.__version__, (
         f"pyproject {declared.group(1)!r} != wade.__version__ {wade.__version__!r}")
 
-    crate = re.search(r'^version = "([^"]+)"', (ROOT / "Cargo.toml").read_text(), re.M)
+    crate = re.search(r'^version = "([^"]+)"', (ROOT / "Cargo.toml").read_text(encoding="utf-8"), re.M)
     assert crate, "Cargo.toml has no version"
     release = re.match(r"\d+\.\d+\.\d+", declared.group(1)).group(0)
     assert crate.group(1) == release, (
@@ -45,7 +45,7 @@ def test_every_declared_marker_is_used_and_every_used_marker_declared():
     declared = set(re.findall(r'^\s*"(\w+): ', PYPROJECT, re.M))
     used = set()
     for f in (ROOT / "tests").glob("test_*.py"):
-        used |= set(re.findall(r"pytest\.mark\.(\w+)", f.read_text()))
+        used |= set(re.findall(r"pytest\.mark\.(\w+)", f.read_text(encoding="utf-8")))
     used -= {"parametrize", "skipif", "xfail", "skip", "filterwarnings", "usefixtures"}
     assert used <= declared, f"markers used but not declared: {sorted(used - declared)}"
     assert declared <= used, f"markers declared but unused: {sorted(declared - used)}"

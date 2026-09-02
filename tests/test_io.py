@@ -344,7 +344,7 @@ def test_write_results_round_trips_every_format(result, tmp_path, ext):
 
 def test_write_results_writes_a_manifest_beside_the_table(result, tmp_path):
     wade.write_results(result, tmp_path / "run.tsv")
-    man = json.loads((tmp_path / "run.manifest.json").read_text())
+    man = json.loads((tmp_path / "run.manifest.json").read_text(encoding="utf-8"))
     assert man["wade_version"] == wade.__version__
     assert man["run"]["nperms"] == 100 and man["run"]["seed"] == 1
     assert man["run"]["correction"] == "thinning" and man["run"]["n_boot"] == 20

@@ -1,0 +1,14 @@
+# Line endings.
+#
+# Git's default on Windows is core.autocrlf=true, which rewrites LF to CRLF on
+# checkout. That changes the bytes on disk, and tests/test_reference_is_frozen.py
+# asserts the sha256 of five files under reference/ -- so on a Windows runner all
+# five failed with "has been MODIFIED", for a change git made rather than a
+# person. Every file in this repository is LF; keep it LF in the working tree
+# on every platform.
+* text=auto eol=lf
+
+# The parity oracle is evidence, and its bytes are not to be translated by
+# anything, for any reason. That is exactly what the checksum test asserts, so
+# say it here too rather than relying on the rule above.
+reference/** -text

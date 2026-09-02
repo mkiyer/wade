@@ -27,7 +27,7 @@ SUMS = REF_R / "sha256sums.txt"
 
 def _expected() -> dict[str, str]:
     entries = {}
-    for line in SUMS.read_text().splitlines():
+    for line in SUMS.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -69,7 +69,7 @@ def test_the_seam_does_not_edit_the_reference():
     and the file on disk is untouched. Asserted structurally so a future
     "simpler" seam that patches the source cannot land unnoticed.
     """
-    seam = (REPO / "tools" / "r" / "wade_seam.R").read_text()
+    seam = (REPO / "tools" / "r" / "wade_seam.R").read_text(encoding="utf-8")
     assert "sys.source" in seam
     for forbidden in ("writeLines(", "cat(", "file.copy", "gsub(", "sub("):
         assert f"{forbidden}wade" not in seam.replace(" ", "")

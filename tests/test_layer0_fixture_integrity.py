@@ -177,7 +177,7 @@ def test_matrix_orientation_is_carried_by_the_file(name):
     the *file* is unambiguous about orientation, not that the loader
     guessed right.
     """
-    with (FIXTURE_DIR / f"{name}.json").open() as fh:
+    with (FIXTURE_DIR / f"{name}.json").open(encoding="utf-8") as fh:
         raw = json.load(fh)
     for key in ("counts", "jitter", "tpm", "Q1", "Q0", "D"):
         node = raw[key]
