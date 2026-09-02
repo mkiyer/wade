@@ -286,8 +286,29 @@ B=500), max relative deviation 2.5e-9; exceedance counts identical to the
 grid path, so p-values move only through the GPD's smooth tail fit
 (`tests/test_stage1_gemm.py`). Two prices, both stated in the docstring: not
 bitwise (BLAS reassociates), and in gemm mode a chunked run agrees with an
-unchunked one to 1e-12 rather than exactly, because dgemm's blocking depends
-on the matrix shape. Under a §2.1 cap the GEMM statistic is arguably the
+unchunked one only approximately, because dgemm's blocking depends on the
+matrix shape.
+
+**How approximately, and in what units** — re-measured 2026-09-02 across two
+BLASes, because the answer is not the machine's to keep private. numpy from
+PyPI links Apple Accelerate; numpy from conda-forge links OpenBLAS, and the
+summation order is theirs, not ours. Against the literal mean difference, and
+chunked against unchunked, at all five sites in `tests/test_stage1_gemm.py`:
+
+| quantity | Accelerate | OpenBLAS |
+|---|---|---|
+| disagreement / statistic's scale | 1.2e-14 – 1.8e-14 | 1.2e-14 – 1.6e-14 |
+| worst **per-element** relative | 2.7e-12 | 0 – 5.7e-13 |
+
+The two rows are the same arithmetic read two ways. `mean_shift` is a
+difference of two large nearly equal group means, so an element where the
+groups almost cancel — one gene reads −1.13 among values spanning ±957 —
+carries no relative precision of its own: one ulp of the sums behind it is
+2.7e-12 of *that element* and 1.8e-14 of the statistic. **The scale row is the
+contract; the element row is the cancellation.** The tests assert the first,
+and had asserted the second, which is why they passed for a fortnight on
+OpenBLAS — where chunked gemm happens to come out exactly bitwise — and would
+have failed on the first CI run under Accelerate. Under a §2.1 cap the GEMM statistic is arguably the
 better number — it stays the exact mean difference where the capped
 quadrature drifts.
 

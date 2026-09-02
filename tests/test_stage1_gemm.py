@@ -29,11 +29,32 @@ def _counts(seed=0):
     return c
 
 
+def assert_scaled(actual, desired, tol=1e-12):
+    """``mean_shift`` to ``tol`` of **its own scale**, not of each element.
+
+    It is a difference of two large, nearly equal group means, so a gene whose
+    groups almost cancel carries no relative precision: in ``_counts(6)`` one
+    reads -1.13 among values spanning +-957, and one ulp of the sums behind it
+    is 2.7e-12 of *that element* while being 1.8e-14 of the statistic. A
+    per-element ``rtol`` therefore tests the cancellation, not the arithmetic.
+
+    Which BLAS is present is not ours to choose -- Accelerate under a PyPI
+    numpy, OpenBLAS under a conda one -- and it decides the summation order.
+    Measured across both, at all five sites below: 1.2e-14 to 1.8e-14 of the
+    scale, steady; per-element it ranges from exactly 0 to 2.7e-12, which is
+    how this file passed for a fortnight on one machine and would have failed
+    on the first CI run (``docs/scaling.md`` 3.1).
+    """
+    desired = np.asarray(desired, dtype=float)
+    np.testing.assert_allclose(actual, desired, rtol=tol,
+                               atol=tol * np.abs(desired).max())
+
+
 def test_gemm_statistic_is_the_exact_mean_difference():
     x = _counts() + np.random.default_rng(1).uniform(0, 0.01, (G, 2 * N))
     stat = mean_diff_stat(x, COND)
     literal = x[:, :N].mean(axis=1) - x[:, N:].mean(axis=1)
-    np.testing.assert_allclose(stat, literal, rtol=1e-12)
+    assert_scaled(stat, literal)
     # ... and the grid quadrature is the same number on a balanced, uncapped design
     grid = wade.wade_stats(x, COND).mean_shift
     np.testing.assert_allclose(stat, grid, rtol=1e-9)
@@ -53,7 +74,7 @@ def test_gemm_run_reports_the_statistic_it_tested():
     b = wade.wade(counts, np.ones(G), COND, nperms=100, seed=1, stage1="gemm")
     # One statistic end to end: the reported column is the GEMM value...
     lit = b.tpm[:, :N].mean(axis=1) - b.tpm[:, N:].mean(axis=1)
-    np.testing.assert_allclose(b.mean_shift, lit, rtol=1e-12)
+    assert_scaled(b.mean_shift, lit)
     # ... the grid quadrature stays available and essentially equal here ...
     np.testing.assert_allclose(b.stats.mean_shift, b.mean_shift, rtol=1e-9)
     # ... and inference agrees with the grid path: same exceedance counts
@@ -82,18 +103,20 @@ def test_gemm_is_exact_under_the_grid_cap():
     res = wade.wade(counts, np.ones(G), COND, nperms=50, seed=1,
                     max_probs=40, stage1="gemm")
     lit = res.tpm[:, :N].mean(axis=1) - res.tpm[:, N:].mean(axis=1)
-    np.testing.assert_allclose(res.mean_shift, lit, rtol=1e-12)
+    assert_scaled(res.mean_shift, lit)
     assert res.nprobs == 40
 
 
 def test_gemm_chunked_agrees_with_unchunked():
     """BLAS blocking depends on the matrix shape, so gemm mode is the one
-    place chunking is allclose rather than bitwise — documented in §3.1."""
+    place chunking is allclose rather than bitwise — documented in §3.1.
+    How far from bitwise is the BLAS's call: exactly 0 under OpenBLAS here,
+    1.8e-14 of the statistic's scale under Accelerate."""
     counts = _counts(6)
     a = wade.wade(counts, np.ones(G), COND, nperms=50, seed=2, stage1="gemm")
     b = wade.wade(counts, np.ones(G), COND, nperms=50, seed=2, stage1="gemm",
                   gene_chunk=7)
-    np.testing.assert_allclose(a.mean_shift, b.mean_shift, rtol=1e-12)
+    assert_scaled(a.mean_shift, b.mean_shift)
     np.testing.assert_array_equal(a.nexc_mean_shift, b.nexc_mean_shift)
     np.testing.assert_allclose(a.p_mean_shift, b.p_mean_shift, rtol=0.02)
     np.testing.assert_array_equal(a.p_subset, b.p_subset)
@@ -106,7 +129,7 @@ def test_gemm_without_the_subset_stage():
     a = wade.wade(counts, np.ones(G), COND, nperms=50, seed=1,
                   stage1="gemm", subset=False)
     lit = a.tpm[:, :N].mean(axis=1) - a.tpm[:, N:].mean(axis=1)
-    np.testing.assert_allclose(a.mean_shift, lit, rtol=1e-12)
+    assert_scaled(a.mean_shift, lit)
     assert a.subset is None
 
 
