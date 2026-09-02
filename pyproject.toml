@@ -5,10 +5,12 @@ build-backend = "maturin"
 [project]
 name = "wade"
 # Keep in step with src/wade/__init__.py's __version__ — the manifest reports
-# that one, so a drift between the two mislabels every written result.
-# tests/test_packaging.py fails if they diverge. (Not `dynamic`: maturin would
-# read Cargo.toml, whose semver cannot express a PEP 440 ".dev0".)
-version = "0.2.0.dev0"
+# that one, so a drift between the two mislabels every written result — and
+# with Cargo.toml's, which drifted to 0.1.0 unnoticed because nothing checked.
+# tests/test_packaging.py now fails if any of the three diverge. (Not
+# `dynamic`: maturin would read Cargo.toml, whose semver cannot express a
+# PEP 440 ".dev0", which is why the test compares release segments.)
+version = "0.1.0"
 description = "Wasserstein Area Differential Expression — a quantile-area differential-distribution test built for subset detection"
 readme = "README.md"
 requires-python = ">=3.10"

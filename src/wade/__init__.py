@@ -71,7 +71,7 @@ from .subset import (
 )
 from .thinning import fit_fold_change, one_count, thin_counts
 
-__version__ = "0.2.0.dev0"
+__version__ = "0.1.0"
 
 __all__ = [
     "ALTERNATIVES",

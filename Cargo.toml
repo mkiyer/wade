@@ -1,6 +1,6 @@
 [package]
 name = "wade-kernel"
-version = "0.1.0"
+version = "0.1.0"        # pinned to pyproject by tests/test_packaging.py
 edition = "2021"
 description = "Permutation-loop kernel for WADE (Wasserstein Area Differential Expression)"
 license = "GPL-3.0-only"   # matches LICENSE and the README; was wrongly MIT

@@ -20,12 +20,25 @@ PYPROJECT = (ROOT / "pyproject.toml").read_text()
 
 
 def test_version_is_declared_once_and_agrees():
-    """``wade.__version__`` is what the manifest records, and pyproject is
-    what pip reports. A drift mislabels every written result."""
+    """``wade.__version__`` is what the manifest records, pyproject is what pip
+    reports, and Cargo.toml is what the crate calls itself. A drift mislabels
+    every written result.
+
+    Cargo's was found at 0.1.0 against pyproject's 0.2.0.dev0 on 2026-09-02,
+    because nothing compared them. It is compared on the **release segment**
+    only: Cargo takes semver, which cannot spell a PEP 440 ``.dev0``, so a
+    pre-release suffix on the Python side is allowed to have no counterpart.
+    """
     declared = re.search(r'^version = "([^"]+)"', PYPROJECT, re.M)
     assert declared, "pyproject.toml has no static version"
     assert declared.group(1) == wade.__version__, (
         f"pyproject {declared.group(1)!r} != wade.__version__ {wade.__version__!r}")
+
+    crate = re.search(r'^version = "([^"]+)"', (ROOT / "Cargo.toml").read_text(), re.M)
+    assert crate, "Cargo.toml has no version"
+    release = re.match(r"\d+\.\d+\.\d+", declared.group(1)).group(0)
+    assert crate.group(1) == release, (
+        f"Cargo.toml {crate.group(1)!r} != pyproject's release segment {release!r}")
 
 
 def test_every_declared_marker_is_used_and_every_used_marker_declared():
