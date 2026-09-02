@@ -1,0 +1,954 @@
+---
+title: "WADE against the subset-detection literature"
+subtitle: "A head-to-head on planted ground truth"
+format:
+  html:
+    html-math-method: mathml
+    include-in-header: _mathjax-quiet.html
+    toc: true
+    toc-depth: 3
+    toc-expand: 2
+    embed-resources: true
+    fig-dpi: 150
+    fig-align: center
+    code-tools: true
+  typst:
+    toc: true
+    papersize: us-letter
+jupyter: python3
+execute:
+  warning: false
+---
+
+<!--
+This notebook is EXPENSIVE: about 25 minutes, against the demo's two. Almost
+all of it is one permutation sweep -- 2,000 permutations x 26 statistics --
+and that is the price of giving every method the same null rather than each
+its own. `tools/competitors.py` fuses the sweep into a single pass over the
+data for exactly this reason; computing the eight methods independently cost
+40 minutes for a third of the statistics.
+
+Conventions follow notebooks/demo.qmd, which is the master source for the
+README: sections numbered BY HAND with `number-sections` off in both formats,
+`html-math-method: mathml` so equations survive `embed-resources`, matplotlib
+for everything static. Read that file's header for why each of those is not
+the default choice.
+
+RENDER TRAP (same as the demo's): a stale benchmark.html makes Quarto skip
+rewriting the figure files while still referencing them. If images break:
+
+    rm -rf notebooks/benchmark.html notebooks/benchmark_files notebooks/.quarto
+
+waddR (section 7) needs R and Bioconductor. It is wrapped so that its absence
+skips the section rather than failing the render.
+-->
+
+```{python}
+#| label: setup
+#| echo: false
+import inspect
+import sys
+import time
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+sys.path.insert(0, str(Path.cwd().parent / "tools"))
+import competitors as CP
+import wade
+from wade.plotting import THEMES
+
+TH = THEMES["light"]
+plt.rcParams.update({"axes.edgecolor": TH.axis, "axes.labelcolor": TH.ink,
+                     "xtick.color": TH.muted, "ytick.color": TH.muted,
+                     "text.color": TH.ink, "grid.color": TH.grid,
+                     "axes.spines.top": False, "axes.spines.right": False,
+                     "figure.facecolor": TH.surface, "axes.facecolor": TH.surface})
+
+PHI = 0.1                       # NB dispersion, as in the demo
+N1 = N0 = 300                   # cases, controls
+N_NULL, N_EACH = 1600, 45       # null genes, and genes per planted scenario
+NPERMS = 2000
+COND = np.r_[np.ones(N1, int), np.zeros(N0, int)]
+
+#: label -> (affected fraction of cases, fold change on that fraction).
+#: A negative fold marks the split scenario: half that fraction up by |fold|,
+#: half down by the same, which is the shape `direction` is defined for.
+SCENARIOS = {
+    "global 2x":         (1.00,  2.0),
+    "25% at 4x":         (0.25,  4.0),
+    "10% at 4x":         (0.10,  4.0),
+    "10% at 8x":         (0.10,  8.0),
+    "5% at 8x":          (0.05,  8.0),
+    "2% at 8x":          (0.02,  8.0),
+    "10% at 1/8x":       (0.10,  0.125),
+    "15% two-sided 2x":  (0.15, -2.0),
+}
+LABELS = ["null"] + list(SCENARIOS)
+
+
+def nb(rng, mu, size):
+    """Negative binomial as a Poisson-Gamma mixture."""
+    return rng.poisson(rng.gamma(1 / PHI, PHI * mu, size=size)).astype(float)
+
+
+def gene(rng, mu, frac, fold):
+    """One gene's raw counts, cases first, with the ground truth planted."""
+    ctrl, case = nb(rng, mu, N0), nb(rng, mu, N1)
+    if frac == 0.0:
+        pass
+    elif fold < 0:
+        k = round(frac * N1)
+        i = rng.choice(N1, 2 * k, replace=False)
+        case[i[:k]] = nb(rng, mu * -fold, k)
+        case[i[k:]] = nb(rng, mu / -fold, k)
+    elif frac >= 1.0:
+        case = nb(rng, mu * fold, N1)
+    else:
+        k = round(frac * N1)
+        case[rng.choice(N1, k, replace=False)] = nb(rng, mu * fold, k)
+    return np.r_[case, ctrl]
+
+
+def simulate(seed=0):
+    """Counts and every gene's planted scenario."""
+    rng = np.random.default_rng(seed)
+    rows, truth = [], []
+    for mu in 10 ** rng.uniform(0, 3, N_NULL):
+        rows.append(gene(rng, mu, 0.0, 1.0))
+        truth.append("null")
+    for label, (frac, fold) in SCENARIOS.items():
+        for mu in 10 ** rng.uniform(0.5, 3, N_EACH):
+            rows.append(gene(rng, mu, frac, fold))
+            truth.append(label)
+    return np.array(rows), np.array(truth, dtype=object)
+
+
+T0 = time.perf_counter()
+counts, truth = simulate()
+G = counts.shape[0]
+ONES = np.ones(counts.shape[1])
+
+res = wade.wade(counts, np.ones(G), COND, lib_sizes=ONES,
+                nperms=NPERMS, n_boot=200, seed=1)
+X = np.log2(res.tpm + 1.0)                     # the competitors' scale
+perms = wade.draw_perms(COND, NPERMS, seed=1)
+COMP = CP.permutation_test(X, COND, perms)
+ELAPSED = time.perf_counter() - T0
+
+#: name -> (p, padj, statistic, permutation z), WADE's two stages beside every
+#: competitor. The z is the ranking column and it is the same function for all
+#: of them: `wade.api._perm_z`, which is what `res.z_*` already holds.
+ALL = {"WADE stage 1": (res.p_mean_shift, res.padj_mean_shift,
+                        res.mean_shift, res.z_mean_shift),
+       "WADE stage 2": (res.p_subset, res.padj_subset,
+                        res.subset.statistic, res.z_subset)}
+ALL.update({k: v for k, v in COMP.items() if v[0] is not None})
+
+IS = {lab: truth == lab for lab in LABELS}     # scenario masks
+
+
+def power(padj, alpha=0.05):
+    """Fraction of each scenario's genes called at BH `alpha`."""
+    return {lab: float((padj[m] < alpha).mean()) for lab, m in IS.items()}
+
+
+def sens(stat, lab, fpr=0.10):
+    """Fraction of a scenario's genes ranked above the null genes' `fpr` quantile.
+
+    The ranking question rather than the calling question: a large cohort puts
+    thousands of genes at the p-value floor (`docs/limits.md` 5) and what is
+    read then is the ordering. Sensitivity at a fixed false-positive rate says
+    it in the terms a reader wants — take the top of the list down to a 10%
+    false-positive rate, and this is the share of the truth you have — with no
+    normalization to argue about: chance is 0.10 and perfect is 1.00.
+
+    A gene whose permutation null has zero variance has no z — `_perm_z`
+    returns NaN — and is treated here as **bottom-ranked** rather than
+    dropped, because dropping it would quietly shrink the null set the
+    threshold is read from. That case is not hypothetical: see 4.3.
+    """
+    z = np.nan_to_num(np.asarray(stat, dtype=float), nan=-np.inf)
+    return float((z[IS[lab]] > np.quantile(z[IS["null"]], 1 - fpr)).mean())
+
+
+#: The nine method families, in the order every table and figure uses them.
+FAMILIES = ["WADE stage 2", "WADE stage 1", "t-test", "Wilcoxon",
+            "COPA", "OS", "ORT", "MOST", "LSOSS"]
+
+
+def pick_best(two_sided=True):
+    """`family -> (display name, p, padj, permutation z)` at its best parameter.
+
+    "Best" is the parameter value maximizing that family's *own* mean power
+    across the eight scenarios — an oracle choice, since it needs the answer
+    before choosing the knob. It is granted to the competitors deliberately
+    (4.1), so that any gap left is a gap that survives tuning them in their
+    own favour. 5 measures what the choice is worth without the oracle.
+    """
+    out, best = {}, {}
+    for name, (p, padj, stat, z) in ALL.items():
+        is_wade = name.startswith("WADE")
+        if not is_wade and name.endswith(" 2s") != two_sided:
+            continue
+        base = name[:-3].strip() if name.endswith(" 2s") else name
+        fam = base if is_wade else base.split(" ")[0]
+        mean_power = float(np.mean([(padj[IS[l]] < 0.05).mean() for l in SCENARIOS]))
+        if fam not in best or mean_power > best[fam]:
+            best[fam], out[fam] = mean_power, (base, p, padj, z)
+    return out
+
+
+def md_table(rows, header, digits=3):
+    """A list of rows as a markdown table; Quarto styles these in both formats."""
+    fmt = lambda v: (f"{v:.{digits}f}" if isinstance(v, float) else str(v))
+    print("| " + " | ".join(header) + " |")
+    print("|" + "|".join("---" for _ in header) + "|")
+    for r in rows:
+        print("| " + " | ".join(fmt(v) for v in r) + " |")
+
+
+def show_source(*fns):
+    print("```python")
+    print("\n\n".join(inspect.getsource(f).rstrip() for f in fns))
+    print("```")
+```
+
+# 1. Introduction
+
+WADE claims to separate a global shift from a change confined to a subset of
+cases, without being told in advance which it is looking for. Everything in
+`docs/method.md` tests that claim against WADE's own design, and
+`notebooks/demo.qmd` tests it against planted ground truth. Neither tests it
+against the alternatives.
+
+This notebook does. Eight published statistics are run on the same simulated
+cohort, through the same permutation null and the same false-discovery
+control, so that a difference between two rows of a results table is a
+difference between two statistics and nothing else.
+
+The five outlier statistics — COPA, OS, ORT, MOST and LSOSS — were published
+between 2005 and 2010 for the same problem WADE addresses: a gene elevated in
+a fraction of tumours, invisible to a test of means. The `t`-test and the
+Wilcoxon rank sum are the floors any method must clear. waddR (§7) is the
+nearest published relative, a Wasserstein test with its own decomposition of
+the distance, and it is the one competitor here that is **run rather than
+reimplemented**.
+
+**What is not claimed.** This is simulated count data with planted truth. It
+establishes what each statistic can and cannot see in a regime we control; it
+does not establish which method is right for a particular real cohort.
+
+# 2. What is being compared
+
+## 2.1 The methods
+
+```{python}
+#| label: tbl-methods
+#| echo: false
+#| output: asis
+md_table([
+    ["`t`-test", "pooled two-sample `t`", "first moment", "—"],
+    ["Wilcoxon", "standardized rank sum", "location, any shape", "—"],
+    ["COPA", "the `r`-th percentile of the cases' robust `z`",
+     "one high quantile", "**`r`**"],
+    ["OS", "sum of case `z` past `q75 + k·IQR`, all samples centred",
+     "sum over outliers", "**`k`**"],
+    ["ORT", "the same sum, centred and thresholded on **controls only**",
+     "sum over outliers", "**`k`**"],
+    ["MOST", "max over `k` of the standardized sum of the top `k` cases",
+     "adaptive subset size", "none"],
+    ["LSOSS", "split the cases at the least within-part sum of squares, then `t`",
+     "estimated subset size", "none"],
+    ["WADE 1", "signed area between the quantile functions", "first moment", "—"],
+    ["WADE 2", "departure of the log-ratio curve from a **fitted** global shift",
+     "any departure from *one* fold change", "none"],
+], ["method", "statistic", "what it looks for", "you must choose"])
+```
+
+Two columns matter. **What it looks for** is why a comparison on one scenario
+proves nothing: a statistic reading one high quantile and a statistic summing
+over a threshold fail differently, and a scenario grid is the only way to see
+where. **What you must choose** is the column this notebook is really about.
+COPA's `r`, OS's and ORT's `k` bound what those methods can find *before they
+see the data*, and §5 measures what that costs.
+
+## 2.2 Implementation, and how it was verified
+
+None of the five outlier statistics has a maintained implementation, so each
+is reimplemented in [`tools/competitors.py`](../tools/competitors.py) from its
+paper, with the formula in its docstring. **A benchmark whose competitors are
+transcribed from memory is worthless**, so each is held to a quantity derived
+without reference to the code — almost always its exact expectation under a
+standard normal null, which fixes the centring, the scale and the threshold at
+once.
+
+```{python}
+#| label: tbl-verify
+#| echo: false
+#| output: asis
+rows = CP.verify()
+md_table([(n, f"{e:.4f}", f"{o:.4f}", "ok" if ok else "**FAIL**")
+          for n, e, o, ok in rows],
+         ["check", "expected", "observed", ""], digits=4)
+print()
+print(f": {sum(ok for *_, ok in rows)} of {len(rows)} checks pass. "
+      "The last is the one that makes the others mean something.")
+```
+
+This caught a real error. MOST standardizes the cases by a median absolute
+deviation and then compares the result against the moments of *standard
+normal* order statistics; the first version used the raw median deviation, so
+the standardized values had a standard deviation of 1.50 rather than 1, and
+`T_1` a mean of 3.3 rather than 0. Because those moments are absolute
+constants, that is not a rescaling — it changes which `k` attains the maximum,
+which is the whole of MOST. ORT can use the raw deviation, and does, because a
+constant multiple of a statistic cancels out of a permutation p-value.
+
+The last row is the check the others depend on. The verified functions are the
+readable ones, one per paper; the permutation loop runs a fused pass that
+shares the sort, the medians and the `z` between methods, because computing
+them separately cost 40 minutes rather than 11. If those two ever disagree,
+every row above is verifying code that nothing executes.
+
+## 2.3 One harness
+
+Every method — WADE included — is given the same simulated matrix, the same
+permutation matrix from `wade.draw_perms`, the same empirical p-value with the
+same generalized-Pareto tail refinement, and the same Benjamini–Hochberg
+correction, all from `wade.pvalues`.
+
+This is deliberate and it is not the usual practice. Published comparisons
+often run each method through its author's own inference, which confounds the
+statistic with the machinery around it. Here the machinery is held fixed, so
+the only thing left varying is the number being tested.
+
+**The scale each method sees.** The five outlier statistics assume roughly
+symmetric, homoscedastic data, which for expression means the log scale, so
+they are handed `log2(tpm + 1)` — the same normalized matrix WADE built
+internally. WADE gets the raw counts, because that is its documented entry
+point and its stage-2 null is built by thinning reads.
+
+## 2.4 Two-sidedness
+
+COPA, OS, ORT and MOST were defined to find *elevated* outliers; WADE's
+default is two-sided. Scoring a one-sided statistic on a downward subset would
+be scoring the scenario, not the method, so each competitor is reported twice:
+in its published upper-tail form, and made two-sided the way OS, ORT and
+MOST's own authors did it — the larger of the statistic and the statistic on
+negated data, which for the signed `t` and rank sum is exactly the absolute
+value.
+
+The two-sided column is the like-for-like comparison. The one-sided column is
+there so a reader can confirm that WADE's margin is not an artefact of having
+handicapped the competition.
+
+# 3. The simulated cohort
+
+## 3.1 Design
+
+```{python}
+#| label: tbl-design
+#| echo: false
+#| output: asis
+md_table([[lab, f"{frac:.0%}", ("half up half down at 2x" if fold < 0
+                                else f"{fold:g}x" if fold >= 1 else f"1/{1/fold:g}x"),
+           f"{round(frac * N1)} of {N1}", N_EACH]
+          for lab, (frac, fold) in SCENARIOS.items()],
+         ["scenario", "affected cases", "fold change", "samples", "genes"])
+print()
+print(f": {N_NULL} null genes and {G - N_NULL} planted across eight scenarios, "
+      f"{N1} cases against {N0} controls. Negative binomial counts, dispersion "
+      f"{PHI} (biological CV about {np.sqrt(PHI):.2f}), mean expression drawn "
+      "log-uniformly so every scenario spans the dynamic range.")
+```
+
+The grid is two-dimensional on purpose: **25% at 4×** and **2% at 8×** are
+both subsets, and the methods that find one need not find the other. Two rows
+are there to be *hard*, and one of them is there to be impossible.
+
+```{python}
+#| label: tbl-floor
+#| echo: false
+#| output: asis
+md_table([[l, f"{round(SCENARIOS[l][0] * N1)} of {N1}",
+           f"{wade.detectability_floor(N1, N0, round(SCENARIOS[l][0] * N1)):.2e}"]
+          for l in SCENARIOS if SCENARIOS[l][0] < 1.0],
+         ["scenario", "affected cases", "combinatorial floor"])
+print()
+print(": `wade.detectability_floor` — the smallest p-value any label-permutation "
+      "test can return for that many affected samples, whatever the effect size "
+      "(`docs/limits.md` 4). `2% at 8x` is above 0.05 outright, so no method in "
+      "this family can find it and any that appears to is reading noise.")
+```
+
+`15% two-sided 2x` is the other deliberate one: it moves no mean at all, so
+every first-moment method should miss it by construction.
+
+```{python}
+#| label: fig-scenarios
+#| echo: false
+#| fig-cap: "One gene per scenario, cases sorted. A global shift lifts the whole curve; a subset lifts its tail only; the two-sided scenario lifts one end and drops the other."
+fig, axes = plt.subplots(2, 4, figsize=(11, 4.6), sharex=True)
+for ax, (lab, _) in zip(axes.ravel(), SCENARIOS.items()):
+    g = int(np.flatnonzero(IS[lab])[3])
+    c = np.sort(counts[g, :N1])[::-1]
+    n = np.sort(counts[g, N1:])[::-1]
+    ax.plot(np.linspace(0, 1, N0), np.log2(n + 1), color=TH.ctrl, lw=1.6, label="control")
+    ax.plot(np.linspace(0, 1, N1), np.log2(c + 1), color=TH.case, lw=1.6, label="case")
+    ax.set_title(lab, fontsize=9, color=TH.ink)
+    ax.grid(alpha=.5, lw=.5)
+axes[0, 0].legend(frameon=False, fontsize=8)
+for ax in axes[1]:
+    ax.set_xlabel("sample rank", fontsize=8)
+for ax in axes[:, 0]:
+    ax.set_ylabel("log2(count + 1)", fontsize=8)
+fig.tight_layout()
+fig
+```
+
+## 3.2 Why library normalization is switched off
+
+`wade()` is called with `lib_sizes=np.ones(n)`, which bypasses library-size
+normalization. That is a deliberate choice and it needs stating, because it is
+the one place this notebook departs from how WADE would be run on real data.
+
+Library-size normalization divides every gene by a column total that every
+gene contributes to, so a matrix with a large share of differential signal
+distorts every other gene ([`docs/limits.md`](../docs/limits.md) §2.4). A
+toy matrix with eight planted scenarios is exactly such a matrix. Measured on
+this one, with normalization on:
+
+```{python}
+#| label: tbl-composition-why
+#| echo: false
+#| output: asis
+sig = truth != "null"
+lib = counts.sum(axis=0)
+mass = counts[sig].sum() / counts.sum()
+infl = lib[:N1].mean() / lib[N1:].mean() - 1
+md_table([["signal genes", f"{sig.mean():.1%} of genes", f"{mass:.1%} of library mass"],
+          ["case libraries", f"{infl:+.2%} inflated", "every null gene shifts by log2 of that"]],
+         ["quantity", "", ""])
+```
+
+Real transcriptomes have twenty thousand genes and a small differential
+fraction; a toy matrix has to be told. Switching normalization off removes a
+confound that would otherwise hit the methods *unequally* — COPA and OS centre
+on all samples, ORT and MOST on the controls alone, so a shifted library moves
+their reference points by different amounts — and it costs nothing here,
+because the simulation plants no depth variation for normalization to correct.
+**§8 puts normalization back on and measures what it does to each method**,
+which is the more interesting question than avoiding it.
+
+# 4. Detection
+
+## 4.1 Power by scenario
+
+Each competitor is shown at the parameter value that maximizes *its own* mean
+power across the eight scenarios. That is an oracle choice — it requires
+knowing the answer before choosing the knob — and it is granted deliberately,
+so that every gap below is a gap that survives tuning the competitor in its
+own favour. §5 measures what the choice is worth when you do not have it.
+
+```{python}
+#| label: fig-power
+#| echo: false
+#| fig-cap: "Fraction of each scenario's 45 genes called at BH 0.05. Every method saw the same data and the same 2,000 permutations."
+BEST2, BEST1 = pick_best(True), pick_best(False)
+NAME = {f: BEST2[f][0] for f in FAMILIES}          # display name per family
+M = np.array([[power(BEST2[f][2])[l] for l in SCENARIOS] for f in FAMILIES])
+
+fig, ax = plt.subplots(figsize=(9.2, 0.46 * len(FAMILIES) + 1.9))
+im = ax.imshow(M, cmap="viridis", vmin=0, vmax=1, aspect="auto")
+ax.set_xticks(range(len(SCENARIOS)), list(SCENARIOS), rotation=35, ha="right", fontsize=8.5)
+ax.set_yticks(range(len(FAMILIES)), [NAME[f] for f in FAMILIES], fontsize=9)
+for i in range(M.shape[0]):
+    for j in range(M.shape[1]):
+        ax.text(j, i, f"{M[i, j]:.0%}", ha="center", va="center", fontsize=8,
+                color=TH.surface if M[i, j] < .55 else "#111111")
+ax.set_title("power at BH 0.05, two-sided forms", fontsize=10, color=TH.ink, pad=10)
+for s in ax.spines.values():
+    s.set_visible(False)
+fig.colorbar(im, ax=ax, shrink=.7, label="power")
+fig.tight_layout()
+fig
+```
+
+```{python}
+#| label: tbl-power-onesided
+#| echo: false
+#| output: asis
+md_table([[BEST1[f][0]] + [f"{power(BEST1[f][2])[l]:.0%}" for l in SCENARIOS]
+          for f in FAMILIES],
+         ["method (one-sided, as published)"]
+         + [l.replace(" ", "&nbsp;") for l in SCENARIOS])
+print()
+print(": The same table with every competitor in its published upper-tail form "
+      "— its home turf on the six upward scenarios, and the reason the "
+      "two-sided figure above is not a handicap.")
+```
+
+## 4.2 Calibration under the null
+
+A power comparison means nothing until the type I error is shown to be the
+same. All methods share one permutation null, so this is a check on the
+harness rather than on the methods, and a failure here would invalidate
+everything above it.
+
+```{python}
+#| label: fig-calibration
+#| echo: false
+#| fig-cap: "Left: the null genes' p-values should be uniform. Right: the observed rate at raw p < 0.05, against the nominal 5%."
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 3.6),
+                             gridspec_kw={"width_ratios": [1.15, 1]})
+for f in FAMILIES:
+    pn = BEST2[f][1][IS["null"]]
+    a1.plot(np.sort(pn), np.linspace(0, 1, len(pn)), lw=1.2, alpha=.85, label=NAME[f])
+a1.plot([0, 1], [0, 1], color=TH.muted, ls="--", lw=1)
+a1.set(xlabel="p-value", ylabel="empirical CDF", xlim=(0, 1), ylim=(0, 1))
+a1.legend(frameon=False, fontsize=7, ncol=2)
+a1.grid(alpha=.5, lw=.5)
+
+rate = [float((BEST2[f][1][IS["null"]] < .05).mean()) for f in FAMILIES]
+a2.barh(range(len(FAMILIES)), rate, color=TH.case, height=.62)
+a2.axvline(.05, color=TH.ctrl, lw=1.4, ls="--")
+a2.set_yticks(range(len(FAMILIES)), [NAME[f] for f in FAMILIES], fontsize=8)
+a2.invert_yaxis()
+a2.set_xlabel("null genes with raw p < 0.05")
+a2.grid(alpha=.5, lw=.5, axis="x")
+fig.tight_layout()
+fig
+```
+
+## 4.3 Ranking, which is what survives the p-value floor
+
+On a real cohort thousands of genes tie at the resolution floor and the
+p-value stops ordering them ([`docs/limits.md`](../docs/limits.md) §5); what
+is read then is the statistic itself. That makes ranking the more durable
+comparison, and it needs no p-value at all.
+
+Take each method's own statistic, rank every gene by it, and cut the list
+where 10% of the null genes have been admitted. The number below is the share
+of a scenario's planted genes above that cut: chance is 0.10, perfect is 1.00,
+and no p-value enters it.
+
+Ranking is by the **permutation z**, `(observed − mean(null)) / sd(null)`
+against each gene's own null, and not by the raw statistic. That is not a
+convenience: a COPA score or an outlier sum carries its own gene's median
+absolute deviation in its units, so the raw values are not comparable between
+genes at all. WADE's ranking column is a permutation z already
+([`docs/method.md`](../docs/method.md) §4, §6), and `tools/competitors.py`
+imports the same function rather than rewriting it.
+
+That exposes something about the threshold statistics.
+
+```{python}
+#| label: tbl-undefined
+#| echo: false
+#| output: asis
+rows = []
+for f in FAMILIES:
+    z = BEST2[f][3]
+    n = int(np.isnan(np.asarray(z, dtype=float)).sum())
+    med = (np.median(counts[np.isnan(np.asarray(z, dtype=float))].mean(axis=1))
+           if n else float("nan"))
+    rows.append([NAME[f], f"{n} of {G}", "—" if not n else f"{med:.1f}"])
+md_table(rows, ["method", "genes with no permutation null",
+                "their median expression, counts"])
+print()
+print(": A gene where nothing ever exceeds `q75 + k·IQR` scores exactly zero "
+      "under every relabelling, so its statistic has no null to be compared "
+      "against and no z. COPA, OS and ORT are undefined this way on the "
+      "lowest-expressed genes; WADE, MOST, LSOSS, `t` and Wilcoxon are not. "
+      "Those genes are ranked last below rather than dropped.")
+```
+
+```{python}
+#| label: fig-ranking
+#| echo: false
+#| fig-cap: "Share of each scenario's genes ranked above the null genes' 90th percentile. Chance is 0.10. Ranking is what a large cohort actually uses."
+A = np.array([[sens(BEST2[f][3], l) for l in SCENARIOS] for f in FAMILIES])
+
+fig, ax = plt.subplots(figsize=(9.2, 0.46 * len(FAMILIES) + 1.9))
+im = ax.imshow(A, cmap="viridis", vmin=0, vmax=1, aspect="auto")
+ax.set_xticks(range(len(SCENARIOS)), list(SCENARIOS), rotation=35, ha="right", fontsize=8.5)
+ax.set_yticks(range(len(FAMILIES)), [NAME[f] for f in FAMILIES], fontsize=9)
+for i in range(A.shape[0]):
+    for j in range(A.shape[1]):
+        ax.text(j, i, f"{A[i, j]:.2f}", ha="center", va="center", fontsize=8,
+                color=TH.surface if A[i, j] < .55 else "#111111")
+ax.set_title("sensitivity at a 10% false-positive rate", fontsize=10,
+             color=TH.ink, pad=10)
+for s in ax.spines.values():
+    s.set_visible(False)
+fig.colorbar(im, ax=ax, shrink=.7, label="sensitivity")
+fig.tight_layout()
+fig
+```
+
+# 5. The cost of a tuning parameter
+
+§4 gave every competitor its best parameter. Nobody has that. COPA's `r` and
+OS's and ORT's `k` are chosen before the data is seen, and the choice bounds
+what can be found: COPA reading the 75th percentile of the case group cannot
+see a subset smaller than a quarter of it, and reading the 95th gives up most
+of its power on a global shift.
+
+```{python}
+#| label: fig-tuning
+#| echo: false
+#| fig-cap: "Each tuned method at each of its parameter values, against WADE stage 2, which has none. Where the lines cross is the cost: the best choice depends on the answer."
+fams = [f for f in CP.TUNED]
+fig, axes = plt.subplots(1, len(fams), figsize=(4.0 * len(fams), 3.5), sharey=True)
+xs = np.arange(len(SCENARIOS))
+for ax, fam in zip(axes, fams):
+    par, vals = CP.TUNED[fam]
+    for v, c in zip(vals, (TH.case, TH.ctrl, "#5c9e4a")):
+        key = f"{fam} {par}={v:g} 2s"
+        ax.plot(xs, [power(ALL[key][1])[l] for l in SCENARIOS], "o-", color=c,
+                lw=1.6, ms=4, label=f"{par} = {v:g}")
+    ax.plot(xs, [power(res.padj_subset)[l] for l in SCENARIOS], "s--", color=TH.ink,
+            lw=1.6, ms=4, label="WADE stage 2")
+    ax.set_xticks(xs, list(SCENARIOS), rotation=40, ha="right", fontsize=7.5)
+    ax.set_title(fam, fontsize=10, color=TH.ink)
+    ax.legend(frameon=False, fontsize=8)
+    ax.grid(alpha=.5, lw=.5)
+axes[0].set_ylabel("power at BH 0.05")
+fig.tight_layout()
+fig
+```
+
+```{python}
+#| label: tbl-tuning-spread
+#| echo: false
+#| output: asis
+rows = []
+for fam in fams:
+    par, vals = CP.TUNED[fam]
+    pw = {v: [power(ALL[f"{fam} {par}={v:g} 2s"][1])[l] for l in SCENARIOS] for v in vals}
+    best_each = [max(pw[v][j] for v in vals) for j in range(len(SCENARIOS))]
+    best_fixed = max(np.mean(pw[v]) for v in vals)
+    winners = {vals[int(np.argmax([pw[v][j] for v in vals]))] for j in range(len(SCENARIOS))}
+    rows.append([fam, f"{par} in {{{', '.join(f'{v:g}' for v in vals)}}}",
+                 f"{len(winners)}", f"{best_fixed:.0%}", f"{np.mean(best_each):.0%}",
+                 f"{np.mean(best_each) - best_fixed:+.0%}"])
+rows.append(["WADE stage 2", "none", "—",
+             f"{np.mean([power(res.padj_subset)[l] for l in SCENARIOS]):.0%}",
+             f"{np.mean([power(res.padj_subset)[l] for l in SCENARIOS]):.0%}", "—"])
+md_table(rows, ["method", "parameter", "distinct winners", "best single value",
+                "oracle per scenario", "what tuning is worth"])
+```
+
+The **distinct winners** column is the point. Where more than one parameter
+value wins somewhere, no single choice is right for a cohort containing more
+than one kind of signal — and a real cohort is exactly that. The last two
+columns price the gap between the best fixed choice and an oracle who picks
+per scenario; WADE stage 2 has no such gap because it has nothing to pick.
+
+# 6. What the methods report beyond a p-value
+
+A p-value says a gene is differential. A subset gene raises a second question
+immediately — *how much of the group?* — and only two of the nine methods here
+answer it: WADE's `affected_fraction`, and LSOSS's split point `k`, which is a
+by-product of its statistic rather than a reported quantity but is the closest
+thing the literature offers.
+
+```{python}
+#| label: fig-fraction
+#| echo: false
+#| fig-cap: "The planted fraction against what each method recovers. WADE's interval is the 200-replicate bootstrap; LSOSS's k/n1 is read off its own split point."
+kh = COMP["LSOSS k"][2] / N1          # the split point, as a fraction
+sub = [l for l in SCENARIOS if SCENARIOS[l][1] > 0]      # one-sided scenarios only
+planted = [SCENARIOS[l][0] for l in sub]
+
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 3.9), sharey=True)
+for ax, val, lo, hi, name in ((a1, res.affected_fraction, res.ci_affected_fraction[0],
+                               res.ci_affected_fraction[1], "WADE affected_fraction"),
+                              (a2, kh, None, None, "LSOSS  k / n1")):
+    med = [float(np.median(val[IS[l]])) for l in sub]
+    ax.plot([0, 1], [0, 1], color=TH.muted, ls="--", lw=1, zorder=0)
+    if lo is not None:
+        arms = np.array([[med[i] - np.median(lo[IS[l]]), np.median(hi[IS[l]]) - med[i]]
+                         for i, l in enumerate(sub)]).T
+        ax.errorbar(planted, med, yerr=np.maximum(arms, 0), fmt="o", color=TH.case,
+                    ms=6, lw=1.3, capsize=3)
+    else:
+        ax.plot(planted, med, "o", color=TH.ctrl, ms=6)
+    for x, y, l in zip(planted, med, sub):
+        ax.annotate(l, (x, y), textcoords="offset points", xytext=(7, -3),
+                    fontsize=7.5, color=TH.muted)
+    ax.set(xlabel="planted fraction of cases", title=name, xlim=(-.03, 1.08), ylim=(-.03, 1.15))
+    ax.grid(alpha=.5, lw=.5)
+a1.set_ylabel("recovered")
+fig.tight_layout()
+fig
+```
+
+```{python}
+#| label: tbl-fraction
+#| echo: false
+#| output: asis
+md_table([[l, f"{SCENARIOS[l][0]:.0%}",
+           f"{np.median(res.affected_fraction[IS[l]]):.3f}",
+           f"[{np.median(res.ci_affected_fraction[0][IS[l]]):.3f}, "
+           f"{np.median(res.ci_affected_fraction[1][IS[l]]):.3f}]",
+           f"{np.median(kh[IS[l]]):.3f}",
+           f"{np.median(res.direction[IS[l]]):+.2f}"] for l in SCENARIOS],
+         ["scenario", "planted", "WADE", "95% interval", "LSOSS k/n1", "WADE direction"])
+```
+
+`direction` is the column with no competitor at all: `+1` for a subset moving
+one way, `−1` the other, near `0` for the two-sided scenario. Every other
+method here reduces a gene to one number.
+
+# 7. waddR, the nearest relative
+
+waddR (Schefzik, Flesch & Gonçalves, *Nature Communications* 12, 2021) tests
+two samples with the 2-Wasserstein distance and decomposes it into location,
+size and shape. It reaches the same place WADE does from the other direction —
+and independently arrived at the same inference, a permutation null with a
+generalized-Pareto tail — so it is run **as published** rather than through
+§2.3's harness, which would be replacing the method with a piece of it.
+
+```{python}
+#| label: waddr-run
+#| echo: false
+#| output: asis
+try:
+    t = time.perf_counter()
+    W = CP.waddr(X, COND, permnum=NPERMS, seed=1)
+    WADDR_OK, WADDR_S = True, time.perf_counter() - t
+except RuntimeError as e:
+    WADDR_OK, WADDR_S = False, 0.0
+    print(f"::: {{.callout-note}}\n## waddR not available\n\n{e}\n:::")
+```
+
+```{python}
+#| label: tbl-waddr
+#| echo: false
+#| output: asis
+if WADDR_OK:
+    wp = wade.bh_adjust(W["pval"])
+    md_table([[l, f"{power(wp)[l]:.0%}", f"{power(res.padj_subset)[l]:.0%}",
+               f"{np.median(W['perc_loc'][IS[l]]):.0f}%",
+               f"{np.median(W['perc_size'][IS[l]]):.0f}%",
+               f"{np.median(W['perc_shape'][IS[l]]):.0f}%"] for l in LABELS],
+             ["scenario", "waddR power", "WADE 2 power",
+              "waddR location", "size", "shape"])
+    print()
+    print(f": waddR at {NPERMS} permutations, {WADDR_S:.0f} s for {G} genes. "
+          "The last three columns are its decomposition of the squared distance.")
+```
+
+```{python}
+#| label: fig-waddr
+#| echo: false
+#| fig-cap: "waddR's location share against WADE's two stages. Both separate a global shift from a subset; they disagree about what to call the two-sided scenario."
+if WADDR_OK:
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 3.9))
+    labs = list(SCENARIOS)
+    a1.barh(range(len(labs)), [np.median(W["perc_loc"][IS[l]]) for l in labs],
+            color=TH.case, height=.6, label="location")
+    a1.barh(range(len(labs)), [np.median(W["perc_size"][IS[l]]) for l in labs],
+            left=[np.median(W["perc_loc"][IS[l]]) for l in labs],
+            color=TH.ctrl, height=.6, label="size")
+    a1.barh(range(len(labs)), [np.median(W["perc_shape"][IS[l]]) for l in labs],
+            left=[np.median(W["perc_loc"][IS[l]]) + np.median(W["perc_size"][IS[l]])
+                  for l in labs], color=TH.muted, height=.6, label="shape")
+    a1.set_yticks(range(len(labs)), labs, fontsize=8)
+    a1.invert_yaxis(); a1.legend(frameon=False, fontsize=8, ncol=3)
+    a1.set_xlabel("waddR: share of the squared distance (%)")
+
+    a2.scatter(-np.log10(np.maximum(W["pval"], 1e-6))[IS["null"]],
+               -np.log10(np.maximum(res.p_subset, 1e-6))[IS["null"]],
+               s=6, color=TH.muted, alpha=.35, label="null")
+    for l, c in zip(["global 2x", "10% at 8x", "15% two-sided 2x"],
+                    (TH.ctrl, TH.case, "#5c9e4a")):
+        a2.scatter(-np.log10(np.maximum(W["pval"], 1e-6))[IS[l]],
+                   -np.log10(np.maximum(res.p_subset, 1e-6))[IS[l]],
+                   s=14, color=c, alpha=.85, label=l)
+    a2.set(xlabel="waddR  -log10 p", ylabel="WADE stage 2  -log10 p")
+    a2.legend(frameon=False, fontsize=8); a2.grid(alpha=.5, lw=.5)
+    fig.tight_layout()
+    display(fig)
+```
+
+The comparison to draw is not the p-value column. waddR answers "do these two
+distributions differ, and in what way", and its location share is close to
+WADE's stage 1 in spirit. What it does not have is stage 2's question: waddR's
+shape component is a *residual*, whatever the distance is not explained by a
+shift in mean and spread, while WADE's stage 2 is a test against an explicitly
+**fitted** global fold change, with a p-value for the departure.
+
+# 8. Composition
+
+§3.2 switched library normalization off. Putting it back on distorts every
+gene, because a column total every gene contributes to is not a per-gene
+quantity — and it distorts the methods unequally, because they centre on
+different things.
+
+```{python}
+#| label: comp-run
+#| echo: false
+res_n = wade.wade(counts, np.ones(G), COND, nperms=500, seed=1)
+Xn = np.log2(res_n.tpm + 1.0)
+COMP_N = CP.permutation_test(Xn, COND, wade.draw_perms(COND, 500, seed=1))
+ALLN = {"WADE stage 1": res_n.padj_mean_shift, "WADE stage 2": res_n.padj_subset}
+ALLN.update({k: v[1] for k, v in COMP_N.items() if v[1] is not None})
+```
+
+```{python}
+#| label: tbl-composition
+#| echo: false
+#| output: asis
+#: What each method takes as its reference point -- the reason composition
+#: does not hit them equally.
+CENTRE = {"COPA": "all samples", "OS": "all samples", "ORT": "controls",
+          "MOST": "controls", "LSOSS": "controls", "t-test": "—",
+          "Wilcoxon": "—", "WADE stage 1": "—", "WADE stage 2": "—"}
+
+rows = []
+for f in FAMILIES:
+    key = NAME[f] if NAME[f] in ALLN else NAME[f] + " 2s"
+    if key not in ALLN:
+        continue
+    rows.append([NAME[f], f"{power(BEST2[f][2])['null']:.1%}",
+                 f"{power(ALLN[key])['null']:.1%}", CENTRE[f]])
+md_table(rows, ["method", "null called, normalization off",
+                "normalization on", "centres on"])
+print()
+print(f": Null genes called at BH 0.05. The signal here is {mass:.0%} of the "
+      f"library mass and inflates the case libraries {infl:+.1%}, which is what "
+      "a toy matrix with eight planted scenarios does and a real transcriptome "
+      "does not.")
+```
+
+# 9. Where WADE does not win
+
+Stated because a benchmark that finds its own method best everywhere has
+usually been arranged to.
+
+```{python}
+#| label: tbl-losses
+#| echo: false
+#| output: asis
+#: A user runs WADE once and reads both stages, so "WADE" here is the better
+#: of the two on each scenario -- and every competitor is at its oracle
+#: parameter. Comparing stage 2 against stage 1 would be comparing WADE with
+#: itself, which is not what this section is for.
+rows = []
+for l in SCENARIOS:
+    pw = {f: power(BEST2[f][2])[l] for f in FAMILIES}
+    ours = max(pw["WADE stage 1"], pw["WADE stage 2"])
+    theirs = {f: v for f, v in pw.items() if not f.startswith("WADE")}
+    top = max(theirs, key=theirs.get)
+    if theirs[top] > ours + 1e-9:
+        rows.append([l, NAME[top], f"{theirs[top]:.0%}", f"{ours:.0%}",
+                     f"{theirs[top] - ours:+.0%}"])
+if rows:
+    md_table(rows, ["scenario", "best competitor", "its power",
+                    "WADE, better stage", "gap"])
+else:
+    print("On this cohort no competitor beats the better of WADE's two stages "
+          "in any scenario at BH 0.05.")
+```
+
+Where a gap appears above it is on a one-directional subset, and the mechanism
+is the same each time: WADE runs two-sided by default and pays for the second
+tail, while a competitor's two-sided form is a maximum over two statistics
+that each already know which way they are looking.
+`wade(..., alternative="less")` closes it — and is exactly the sort of prior
+knowledge this notebook is otherwise careful not to grant anybody.
+
+**And a place where WADE is no better than the competition it is measured
+against.** `2% at 8x` is below the combinatorial floor — six affected cases of
+300 gives a smallest supportable p-value of
+`wade.detectability_floor(300, 300, 6)`. A permutation p-value cannot go below
+that; a *refined* one can, because the generalized-Pareto tail is an
+extrapolation and does not know the floor exists.
+
+```{python}
+#| label: tbl-floor-violation
+#| echo: false
+#| output: asis
+k6 = round(0.02 * N1)
+floor = wade.detectability_floor(N1, N0, k6)
+md_table([[NAME[f], f"{np.median(BEST2[f][1][IS['2% at 8x']]):.2e}",
+           f"{(BEST2[f][1][IS['2% at 8x']] < floor).mean():.0%}",
+           f"{power(BEST2[f][2])['2% at 8x']:.0%}"] for f in FAMILIES],
+         ["method", "median raw p", "raw p below the floor", "power at BH 0.05"])
+print()
+print(f": On the {N_EACH} genes with {k6} affected cases of {N1}, whose "
+      f"combinatorial floor is {floor:.2e} (`docs/limits.md` 4). WADE's two "
+      "stages are among the worst offenders, not the best. BH absorbs almost "
+      "all of it — the last column is near zero for everyone — which is the "
+      "reason to read the adjusted p-value and not the raw one, and the "
+      "reason `docs/limits.md` 5 calls the floor a censoring point rather "
+      "than a small number.")
+```
+
+Four limits of this comparison, none of them fixable by running it longer:
+
+* **The simulation is WADE's home ground.** It plants subsets of a group under
+  a negative binomial, which is the model WADE's stage-2 null is built for.
+  A method is expected to win where the data matches its assumptions, and the
+  measurement that would test the other direction — real cohorts with known
+  subset structure — is not here.
+* **`2% at 8x` is below the combinatorial floor**, so no method in this family
+  can find it, and the table above shows every one of them — WADE included —
+  reporting raw p-values the permutation null cannot support.
+* **One geometry.** 300 against 300, balanced. `docs/limits.md` §4.2 shows the
+  floor is driven by imbalance, and an unbalanced cohort would reorder some of
+  this.
+* **The competitors are reimplementations.** §2.2's checks make transcription
+  error unlikely rather than impossible; only waddR is the authors' own code.
+
+# 10. Summary
+
+```{python}
+#| label: tbl-summary
+#| echo: false
+#| output: asis
+sub_only = [l for l in SCENARIOS if SCENARIOS[l][0] < 1.0]
+rows = [[NAME[f], f"{power(BEST2[f][2])['global 2x']:.0%}",
+         f"{np.mean([power(BEST2[f][2])[l] for l in sub_only]):.0%}",
+         f"{np.mean([sens(BEST2[f][3], l) for l in sub_only]):.2f}",
+         CP.TUNED[f][0] if f in CP.TUNED else "none"]
+        for f in FAMILIES]
+md_table(rows, ["method", "global 2x", "mean power, the 7 subset scenarios",
+                "mean sensitivity, subsets", "tuning parameter"])
+```
+
+What the run shows, in the order it matters:
+
+1. **The two questions are separable, and separating them costs nothing.**
+   WADE stage 1 behaves like the `t`-test on a global shift and correctly
+   declines the two-sided scenario; stage 2 carries the subsets. No competitor
+   reports both, and none reports which it found.
+2. **Tuning-free is not a slogan.** COPA, OS and ORT each have a parameter
+   whose best value changes with the scenario, so a cohort containing more
+   than one kind of signal has no right single choice (§5). MOST and LSOSS are
+   free of it too — and MOST pays for that freedom in the tail, because
+   maximizing over subset size gives its null a heavier one.
+3. **Ranking separates further than calling does.** The pAUC table
+   distinguishes methods that the BH table ties at 0% or 100%, which is what
+   `docs/limits.md` §5 predicts for a cohort past the resolution floor.
+4. **Only WADE reports how much of the group differs**, with an interval, and
+   which way. LSOSS's split point is the nearest thing available and it is not
+   presented as an estimate by its authors.
+
+```{python}
+#| label: timing
+#| echo: false
+#| output: asis
+print(f"Run: {G} genes, {N1} v {N0}, {NPERMS} permutations. "
+      f"WADE plus the {len(COMP) - 1} competitor statistics took "
+      f"{ELAPSED / 60:.1f} minutes"
+      + (f"; waddR a further {WADDR_S / 60:.1f}." if WADDR_OK else ".")
+      + f" Kernel: {'Rust' if wade.permutation.HAVE_RUST_KERNEL else 'NumPy'}. "
+      f"wade {wade.__version__}.")
+```

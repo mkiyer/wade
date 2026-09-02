@@ -23,7 +23,9 @@ figure, per-gene metadata in figures, linked views, a stage-1 row, and label
 de-collision. The `demo` notebook landed 2026-08-22. **740 tests pass in about
 12 seconds**, parity unchanged at **9.155e-15** over 436 comparisons.
 
-**The immediate work is the release, then `benchmark`** — `ROADMAP.md` §1.
+**The immediate work is the release** — `ROADMAP.md` §1. The `demo` notebook
+landed 2026-08-22 and `benchmark` on 2026-09-02, so nothing is queued in front
+of it.
 `plan.md` was the recipe for phases B and C and was deleted when C landed, as
 it said to; its outcome is in `ROADMAP.md`, `docs/plotting.md` and the code.
 
@@ -83,12 +85,12 @@ kernel:
 
 The queue is [`../ROADMAP.md`](../ROADMAP.md). In short:
 
-1. **The `benchmark` notebook**, and this is the current work: a head-to-head
-   against COPA / OS / ORT / MOST / LSOSS, t-test, Wilcoxon and waddR on
-   simulated *and* literature data. It is the only place WADE's claim is
-   tested against alternatives rather than against itself, and the real
-   cohort's rank-recovery work is waiting on it. (`demo` landed 2026-08-22;
-   `rna100k` is a relabelling to manuscript material after `benchmark`.)
+1. **The benchmark on real cohorts.** `notebooks/benchmark.qmd` landed
+   2026-09-02 on *simulated* counts — nine methods, one permutation null, one
+   BH — and the literature half of `ROADMAP.md` §3.2 is still missing: the
+   same comparison on real datasets with known subset structure, which is what
+   the real cohort's rank-recovery work wants. (`rna100k` relabelled as
+   manuscript material comes after.)
 2. **The real dataset's own agenda** — `scaling.md` §7, which is where
    everything `notebooks/rna100k.qmd` measured now lives: the saturation of
    significance and the two controls that explain it, the artefact libraries
@@ -473,6 +475,19 @@ itself, and the real cohort's rank-recovery work is waiting on it.
 it, and writes `docs/figures/*.png` — the README's figures and quoted numbers
 come from there, which is why `tools/make_readme_figures.py` was deleted. It
 renders to HTML and PDF (`quarto render notebooks/demo.qmd`).
+
+`benchmark.qmd` is done too, and is **expensive**: about 20 minutes against
+the demo's two, almost all of it one permutation sweep. That sweep is the
+design, not an accident — every method gets the same 2,000 permutations, the
+same GPD refinement, the same BH and the same ranking z, so a difference
+between two rows is a difference between two statistics. `tools/competitors.py`
+holds the nine statistics and fuses them into one pass over the data for
+exactly this reason; computed independently they cost 40 minutes for a third
+as many. Three things in that file were learned the hard way and are written
+down there: MOST needs a sigma-consistent scale or its `k` selection breaks,
+`wade.draw_perms` returns permuted **labels** and not index vectors, and
+ranking must use the permutation z because a raw COPA score carries its own
+gene's MAD in its units.
 
 ```bash
 conda activate wade

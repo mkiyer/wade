@@ -67,10 +67,10 @@ export; twelve labels on near-coincident points is past what placement can fix).
 
 ## 1. Now
 
-**Release** (§2 below), then the **`benchmark`** notebook (§3). The `demo`
-notebook landed 2026-08-22 and is the master source for the README's figures
-and numbers; `benchmark` is what the real cohort's rank-recovery work is
-waiting on, and `rna100k` is a relabelling after that.
+**Release** (§2 below). The `demo` notebook landed 2026-08-22 and the
+`benchmark` notebook 2026-09-02, so the two deliverables that were blocking a
+release are done; `rna100k` relabelled as manuscript material, and the
+benchmark extended to real cohorts, come after.
 
 Release comes first because on 2026-09-02 it turned out never to have been
 tried: `main` was 37 commits ahead of `origin/main`, so the CI added in one of
@@ -140,11 +140,16 @@ landed; **`benchmark` is the current work** (§1).
 1. ~~**`demo`**~~ — **done 2026-08-22**, `notebooks/demo.qmd`. Small synthetic
    data with planted ground truth, renders to HTML and PDF, and is the master
    source for `docs/figures/*.png` and the numbers the README quotes.
-2. **`benchmark`** — the head-to-head, on simulated counts *and* a few real
-   datasets from the literature: COPA / OS / ORT / MOST / LSOSS as the
-   subset-detection competitors, t-test and Wilcoxon as floors, waddR as the
-   nearest Wasserstein relative. This is where WADE's claim is tested against
-   alternatives rather than against itself.
+2. ~~**`benchmark`**~~ — **done 2026-09-02**, `notebooks/benchmark.qmd`, on
+   simulated counts: COPA / OS / ORT / MOST / LSOSS as the subset-detection
+   competitors, `t`-test and Wilcoxon as floors, waddR as the nearest
+   Wasserstein relative and the one run rather than reimplemented. Every
+   method goes through the same permutation null, the same GPD refinement and
+   the same BH, from `wade.pvalues`, so a difference between two rows is a
+   difference between two statistics. The statistics are in
+   `tools/competitors.py`, each verified against its exact null expectation.
+   **Still open**: the same head-to-head on real cohorts from the literature,
+   which is what the rank-recovery work in §2 wants.
 3. **`rna100k`** (exists) — the real cohort. Manuscript material rather than a
    demo, and labelled as such.
 

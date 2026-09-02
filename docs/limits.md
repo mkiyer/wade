@@ -254,6 +254,32 @@ the floor. If you need to resolve *below* it, the only remedy is more
 permutations — and the floor moves as `1/B`, so an order of magnitude costs an
 order of magnitude.
 
+**The refinement can go below the combinatorial floor, and does.** §4's floor
+is a property of the design: with `k` affected cases there is no relabelling
+that produces a smaller p-value, so the *empirical* p-value cannot fall below
+it. The GPD refinement is an extrapolation of a smooth tail and knows nothing
+about that constraint. Measured in
+[`../notebooks/benchmark.qmd`](../notebooks/benchmark.qmd) §9, on 45 genes with
+6 affected cases of 300 — a floor of 1.5e-2 — at `B = 2,000`:
+
+| method | raw p below the floor | power at BH 0.05 |
+|---|---|---|
+| **WADE stage 2**, MOST | **40%** | 11%, 4% |
+| **WADE stage 1** | **33%** | 7% |
+| LSOSS | 24% | 7% |
+| `t`-test | 13% | 2% |
+| ORT | 11% | 2% |
+| Wilcoxon, OS | 4% | 0%, 2% |
+| COPA | 0% | 0% |
+
+WADE is among the worst offenders rather than the best, and the ordering is
+roughly the order in which each method's null has a tail worth extrapolating —
+a heavier tail is a better GPD fit and a longer extrapolation.
+
+**BH absorbs nearly all of it**, which is the practical answer: read `padj_*`,
+not `p_*`, and check the floor for your design before you run anything. It is
+also why `refined_*` is reported, below.
+
 **Which p-values were extrapolated is reported.** `refined_mean_shift` and
 `refined_subset` (both in the written table) say whether a stage's p-value was
 counted from permutations or read off the GPD tail fit. That distinction

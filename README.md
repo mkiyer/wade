@@ -308,6 +308,15 @@ interval, which is wide exactly where the estimate is soft.
   the R original, the cross-language traps, the Rust kernel's boundary.
 - [`ROADMAP.md`](ROADMAP.md) — the work queue.
 
+Two notebooks, both `quarto render`-able to HTML and PDF:
+
+- [`notebooks/demo.qmd`](notebooks/demo.qmd) — the demo and user guide, on
+  small synthetic data with planted ground truth. **The master source** for the
+  figures and numbers on this page.
+- [`notebooks/benchmark.qmd`](notebooks/benchmark.qmd) — the head-to-head
+  against COPA, OS, ORT, MOST, LSOSS, the `t`-test, Wilcoxon and waddR, every
+  method through the same permutation null and the same BH.
+
 ## Status
 
 Implemented and tested: the statistic, both stages, the characterization, the
@@ -336,9 +345,8 @@ golden fixtures were generated from. Worst-case relative deviation across 436
 parity comparisons: **9.2e-15**, with the normalized matrix, the quantile grids
 and the permutation null bit-for-bit identical.
 
-Not yet built: the benchmark notebook — the head-to-head against COPA / OS /
-ORT / MOST / LSOSS, t-test, Wilcoxon and waddR — and format-specific reader
-helpers for featureCounts and MatrixMarket. See the roadmap.
+Not yet built: format-specific reader helpers for featureCounts and
+MatrixMarket, and `rna100k` relabelled as manuscript material. See the roadmap.
 
 ## Provenance
 
