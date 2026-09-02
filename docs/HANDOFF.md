@@ -38,6 +38,21 @@ smoke test calling `wade.permutation.available_backends`, which lives in
 `wade.plotting`). The fourth is a lesson rather than a typo and is in §3
 below: **one machine has one BLAS, and five assertions were pinned to it.**
 
+Its first real run then found a fifth, of the same family: `test_plotting.py`
+ended one test by drawing with `available_backends()[0]`, which is an
+`IndexError` on the two jobs that install **no** plotting backend. Every other
+test in that file parametrizes over `available_backends()`, which yields zero
+cases instead of failing — that is the idiom, and the one place that departed
+from it was the one place that broke. **The dev environment has every optional
+dependency installed and therefore cannot see this class of bug at all**; the
+three CI conditions are reproducible locally with a bare venv:
+
+```bash
+python -m venv /tmp/noplot && /tmp/noplot/bin/pip install -e ".[test,io]"
+/tmp/noplot/bin/python -m pytest -q -m "not kernel"        # 616 passed
+/tmp/noplot/bin/python -m pytest -q -m "not validation"    # 662 passed
+```
+
 ```bash
 export PATH="/usr/local/bin:$PATH"          # only if you need R
 conda activate wade

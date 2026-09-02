@@ -601,7 +601,12 @@ def test_every_theme_renders_the_driver_figure(res_drivers, backend, name):
     assert wade.plot_drivers(res, "ARTEFACT", counts, backend=backend, theme=name) is not None
 
 
-def test_a_theme_can_be_a_name_an_instance_or_the_session_default(res, monkeypatch):
+def test_a_theme_can_be_a_name_an_instance_or_the_session_default(monkeypatch):
+    """Theme *resolution* is backend-free, so this must run with neither
+    backend installed — which is what CI's ``.[test]`` and ``.[test,io]`` jobs
+    have. It used to end by drawing with ``available_backends()[0]``, and that
+    index raised ``IndexError`` on an empty tuple; the drawing half is now the
+    parametrized test below, which yields no cases instead of failing."""
     from dataclasses import replace
 
     assert P._resolve_theme(None) is P.THEMES["light"]
@@ -611,9 +616,18 @@ def test_a_theme_can_be_a_name_an_instance_or_the_session_default(res, monkeypat
     # An instance passes through, so a house style is one replace() away.
     house = replace(P.THEMES["light"], case="#7b3fa0")
     assert P._resolve_theme(house) is house
-    assert wade.plot_stages(res, theme=house, backend=P.available_backends()[0]) is not None
     with pytest.raises(ValueError, match="theme must be a Theme or one of"):
         P._resolve_theme("solarized")
+
+
+@pytest.mark.parametrize("backend", _backends())
+def test_a_theme_instance_reaches_the_renderer(res, backend):
+    """...and the instance is not merely resolved, it is drawn with — on every
+    backend now, where the old version only tried the first."""
+    from dataclasses import replace
+
+    house = replace(P.THEMES["light"], case="#7b3fa0")
+    assert wade.plot_stages(res, theme=house, backend=backend) is not None
 
 
 def test_the_theme_resolves_colour_roles_and_the_label_box(res):
