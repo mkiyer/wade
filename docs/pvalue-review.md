@@ -307,28 +307,33 @@ fires on **50%** against 100%.
 | 1e-6 – 1e-5 | 3 | 180 | **1.43** | 0.72 |
 | 1e-7 – 1e-6 | 3 | 2630 | 14.4 | 10.5 |
 
-Worst anti-conservative ratio:
+### 5.5 The substitution rate predicts everything
 
-| | empirical | GPD moments | GPD mle |
-|---|---|---|---|
-| 40 v 40, stage 2 | 0.93 | **0.019** | **0.019** |
+With all eight cells measured, the shipped estimator's behaviour turns out to be
+governed by a single latent quantity: **how often the fitted shape comes out
+negative, and so how often the exponential substitution fires.**
 
-**This is the important row.** GPD-moments is far more *accurate* on stage 2
-than on stage 1 — and it is also, here, **anti-conservative by 50×**. Its
-perfect safety record on stage 1 was not a property of the estimator. It was a
-property of the exponential substitution firing on every single gene. Where the
-substitution does not fire, the shipped estimator behaves like the ML one,
-because it *is* the same GPD form.
+| design | stage | ξ̂ < 0 | substitution fires | GPD-moments worst ratio | median range |
+|---|---|---|---|---|---|
+| 40 v 40 | 1 | 100% | 100% | 1.000 safe | 3.2 – 2137 |
+| 60 v 20 | 1 | 100% | 100% | 1.000 safe | 3.9 – 4906 |
+| 70 v 10 | 1 | 100% | 100% | 1.000 safe | 3.5 – 2947 |
+| 20 v 60 | 1 | 100% | 100% | 1.000 safe | 3.6 – 1909 |
+| 20 v 60 | 2 | 100% | 100% | 1.000 safe | 3.0 – 220 |
+| 40 v 40 | 2 | 67% | 50% | **0.019 unsafe** | 0.80 – 14.4 |
+| 60 v 20 | 2 | 20% | 20% | **0.345 unsafe** | 1.03 – 299 |
+| 70 v 10 | 2 | — | — | 0.891 | 1.07 – 11.6 (too few deep genes) |
 
-So the honest summary is: **no GPD variant we have tested is safe.** One of them
-merely never gets the chance to be unsafe on one of the two stages.
+The relationship is monotone in both directions at once. **Where the
+substitution fires on everything, the estimator is never anti-conservative and
+is conservative by three orders of magnitude. Where it fires rarely, the
+estimator becomes accurate and becomes unsafe.** It is the same trade, dialled
+by a quantity that varies with the statistic and the geometry and is not under
+our control.
 
-A separate observation, worth recording because it inverts an expectation: the
-p-value problem is **worse for stage 1 than for stage 2**, which is the opposite
-of the stages' relative importance to the method.
-
-> The three unbalanced geometries for stage 2 were still computing when this was
-> written. They are the main gap in the evidence below.
+That is the sharpest statement of the problem we can make. We are not choosing
+between a safe estimator and an accurate one; we are shipping a single estimator
+whose position on that trade-off is set by a latent property of each dataset.
 
 ---
 
@@ -361,7 +366,7 @@ are the two degenerate answers.
 
 | candidate | status | verdict |
 |---|---|---|
-| **GPD by moments** | shipped | Conservative by 3–4,900× on stage 1. Anti-conservative by 50× on stage 2. Its stage-1 safety is an artefact of a substitution that fires there and not elsewhere |
+| **GPD by moments** | shipped | Conservative by 3–4,900× where the exponential substitution fires; anti-conservative by up to 50× where it does not. Which of the two you get is set by the data, not by the estimator (§5.5) |
 | **GPD by ML** | rejected | Best median accuracy of any `O(B)` method, and returns p-values up to 140× too small. For a method whose output feeds FDR control, disqualifying |
 | **Multilevel splitting** | works | 0.86–1.13 median in every geometry, worst case 0.54. But per-gene: abandons the shared-permutation joint null, needs frozen moments for stage 2, and costs ~1 s/gene there against ~0 for a GPD fit |
 | **Saddlepoint** | limited | The most accurate thing we have, with no sampling at all — and it needs the statistic to be a subset sum, which stage 1 only is on a balanced design and stage 2 never is |

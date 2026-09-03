@@ -667,10 +667,55 @@ pieces `wade()` assembles, which would be six chances to diverge silently. The
 frozen evaluator reproduces the kernel to **0.000e+00** on both the observed
 labels and a random permutation.
 
+### 4.7 All eight cells: the substitution rate is the whole story
+
+Run 2026-09-03 over four geometries (n = 80 throughout) x both stages, 1e8
+permutations each. Two results.
+
+**The shipped estimator is anti-conservative wherever the `xi <= 0`
+substitution does not fire**, and its perfect safety record in §4.5 was a
+property of that substitution rather than of the estimator:
+
+| design | stage | `xi < 0` | substitution fires | worst ratio | median range |
+|---|---|---|---|---|---|
+| 40v40 | 1 | 100% | 100% | 1.000 | 3.2 – 2137 |
+| 60v20 | 1 | 100% | 100% | 1.000 | 3.9 – 4906 |
+| 70v10 | 1 | 100% | 100% | 1.000 | 3.5 – 2947 |
+| 20v60 | 1 | 100% | 100% | 1.000 | 3.6 – 1909 |
+| 20v60 | 2 | 100% | 100% | 1.000 | 3.0 – 220 |
+| 40v40 | 2 | 67% | 50% | **0.019** | 0.80 – 14.4 |
+| 60v20 | 2 | 20% | 20% | **0.345** | 1.03 – 299 |
+| 70v10 | 2 | — | — | 0.891 | too few deep genes |
+
+Monotone in both directions at once: where the substitution fires on
+everything the estimator is never anti-conservative and is conservative by
+three orders of magnitude; where it fires rarely it becomes accurate and
+becomes unsafe. **We do not choose between a safe estimator and an accurate
+one — we ship one estimator whose position on that trade-off is set by a
+latent property of each dataset.**
+
+**Multilevel splitting holds across every geometry**: 0.86–1.13 median, worst
+single gene 0.539–0.770. Getting that number required a fix worth recording,
+because the broken version looked exactly like a real result. `multilevel1`
+scored a *subset sum*, which off a balanced design is not what `mean_shift`
+is, and produced medians of 0.00–0.13 at 70v10 with the sign of the error
+following which group was larger. Scoring a subset sum while thresholding at a
+quadrature value estimates the tail of a different statistic. It now scores
+every population member with `null_statistics`, the same kernel brute force
+uses; the O(1) update is gone with it, and what rescues the cost is batching
+the population into one kernel call per sweep.
+
 **What this leaves.** Stage 2's deep bins hold 1 to 3 genes: enough to show the
-GPD degrading, not enough to price it. An unbalanced design is untested for
-both stages. And shipping either alternative means `subset_null_backend`
-taking frozen moments, which changes what stage 2 reports.
+GPD degrading, not enough to price it. And shipping any alternative means
+`subset_null_backend` taking frozen moments, which changes what stage 2
+reports.
+
+**Written up for outside help.** [`pvalue-review.md`](pvalue-review.md) is the
+self-contained version of all of this for a statistician without the code —
+the method, the five estimators, the eight cells, the diagnosis (bounded
+support, reversed-Weibull domain, and two degenerate ways of handling a
+negative shape) and eight questions. This section stays canonical; that file
+is the snapshot.
 
 ---
 
