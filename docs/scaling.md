@@ -526,6 +526,16 @@ distribution of a sum over a random subset without replacement, for which a
 classical **saddlepoint approximation** (Robinson 1982) gives *relative-error*
 accuracy far into the tail at `O(n)` per gene **with no permutations at all.**
 
+**Measured 2026-09-02 (§4.5): it works, and it is the most accurate of the
+four** — within 1% of brute force down to 1e-6 and within 30% at 1e-8, with no
+permutations at all. And the constraint is **linearity, not balance**: for any
+group sizes `T = A(1/n1 + 1/n0) - V/n0` with `A` the case-subset sum, so the
+tail probability is a subset-sum problem whatever the design. What rules it
+out on an unbalanced design is that `mean_shift` is then the grid quadrature —
+an L-statistic — rather than the mean difference (§3.1, `limits.md` §2.5).
+Taking §3.1's open decision to define `mean_shift` as the mean difference
+outright is therefore also the decision that makes the saddlepoint universal.
+
 **Why this is attractive.** It would give stage 1 essentially unlimited
 p-value resolution for the cost of a root-find per gene — cheaper than 2,000
 permutations, let alone 332 rounds of multilevel splitting. It also degrades
@@ -542,22 +552,71 @@ skewed and zero-heavy count distributions where the normal approximation fails.
 The claim to test is *relative* accuracy at 1e-6 and below, not agreement in
 the bulk.
 
-### 4.5 The comparison to run
+### 4.5 The comparison, run
 
-One experiment settles the p-value question: pick a design small enough that
-**brute force is the ground truth** (say 40 v 40, where 1e8 permutations is
-hours but feasible for a handful of genes), then compare, at true p-values
-spanning 1e-3 to 1e-9:
+**Answered 2026-09-02**, `tools/pvalue_study.py`. 40 v 40, log-normal
+expression, stage 1's `mean_shift`, upper tail. Ground truth is **1e9
+streamed permutations** — 46 of 64 genes resolve with at least ten
+exceedances, and the ladder of planted shifts spans true `p` from 2.3e-3 to
+1.3e-7. Each candidate is then given 2,000 permutations, or none.
 
-| method | cost | resolution | assumption |
-|---|---|---|---|
-| empirical | `O(B)` | `1/(B+1)` | none |
-| GPD refinement | `O(B)` | `1/(B·n_tail)` | tail is Generalized Pareto |
-| multilevel splitting | `O(k·N·iters)` per gene | unbounded, error `~sqrt(k/N)` | MCMC mixes |
-| saddlepoint (stage 1) | `O(n)` per gene | unbounded | statistic is linear |
+Ratio of the estimate to the truth, and the worst `|log10|` error in the bin:
 
-Report each method's error against the brute-force truth. That table, filled
-in, is the deliverable.
+| true `p` | n | empirical B=2k | GPD B=2k | saddlepoint | multilevel |
+|---|---|---|---|---|---|
+| 1e-3 – 1e-2 | 4 | 1.32x  (0.17) | 3.20x  (0.70) | **0.99x  (0.00)** | 0.97x  (0.08) |
+| 1e-4 – 1e-3 | 9 | 3.28x  (0.93) | 12.4x  (1.65) | **1.00x  (0.00)** | 0.93x  (0.09) |
+| 1e-5 – 1e-4 | 10 | 21.8x  (1.66) | 75.5x  (2.16) | **1.00x  (0.01)** | 0.95x  (0.10) |
+| 1e-6 – 1e-5 | 7 | 115x  (2.61) | 270x  (2.72) | **1.00x  (0.02)** | 0.94x  (0.12) |
+| 1e-7 – 1e-6 | 8 | 2502x  (3.61) | 2118x  (3.85) | **1.01x  (0.04)** | 1.10x  (0.12) |
+| 1e-8 – 1e-7 | 2 | 25113x  (4.62) | 9899x  (4.22) | **1.11x  (0.26)** | 0.93x  (0.29) |
+
+| method | cost, 64 genes | resolution reached |
+|---|---|---|
+| empirical, B = 2,000 | ~0 s | `1/(B+1)` = 5e-4, as advertised |
+| GPD, B = 2,000 | ~0 s | **~1e-4 in practice**, not the nominal 2e-6 |
+| saddlepoint | 17 s (unoptimized) | none — no sampling at all |
+| multilevel | 0.5 s | none — error grows as `sqrt(k)` |
+
+**The GPD refinement does not reach its own floor, and is conservative by
+orders of magnitude below about 1e-4.** That was the surprise. It is not
+merely censored at `1/(B·n_tail)`; on this statistic it never gets there,
+bottoming out around 5e-5 to 1e-3 while the truth is 1e-7 or smaller.
+
+**The cause is the `xi <= 0` branch, and it is doing exactly what it was
+written to do.** For all 17 genes with true `p` below 1e-5 the fitted shape is
+negative (median `xi` = −0.21), so all 17 take the exponential limit. A GPD
+with negative shape has a hard upper bound at `-sigma/xi`; `gpd_tail_p`
+substitutes the exponential rather than let an observation past that bound
+collapse to a machine-epsilon p-value (its docstring says so). The permutation
+null of a mean difference on 80 samples *is* bounded — the statistic is
+maximal when the largest `n1` values are all cases — so a negative shape is
+the correct fit and the exponential is a far heavier tail than the truth. The
+guard against being wildly anti-conservative is what makes it wildly
+conservative instead.
+
+**Both alternatives work, and both are accurate where the GPD is not.** The
+saddlepoint is essentially exact — within 1% to 1e-6, within 30% at 1e-8 —
+for `O(n)` per gene and no permutations. Multilevel splitting holds 0.93x to
+1.10x throughout at 8 ms per gene, which is what fgsea's own `log2err` would
+predict.
+
+**What this costs today.** The refinement fires when a gene has fewer than
+`n_exc_min` exceedances, which at B = 2,000 is `p` below roughly 5e-3 — and BH
+across 20,000 genes decides at around 2.5e-6. Genes whose true `p` is 1e-5 to
+1e-7 are therefore both *the ones BH is ruling on* and the ones being reported
+75x to 2000x too large. The ordering survives, because the distortion is
+monotone; the calling does not. §7.1's 18.8% of genes at the floor on the real
+contrast is the same phenomenon seen from the other side.
+
+**Scope, stated because it is narrow.** One design (40 v 40, balanced), one
+statistic (stage 1, continuous, upper tail). Stage 2's statistic is a maximum
+over widths of a standardized bridge, has no saddlepoint, and is **not**
+covered here; neither is an unbalanced design, where stage 1 is an L-statistic
+rather than a subset sum (§4.4) and the saddlepoint does not apply either.
+Those two gaps are what a follow-up has to close before anything is replaced.
+
+---
 
 ---
 

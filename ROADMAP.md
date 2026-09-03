@@ -84,12 +84,22 @@ failure was real and is the interesting one: see §2's Release entry.
 
 ### Inference
 
-- **P-value resolution at scale** — `scaling.md` §4, with the deciding
-  experiment specified there. Observed on real data: 18.8% of genes at the
-  mean-shift floor. Three candidates (GPD today, fgsea-style multilevel
-  splitting, a saddlepoint for stage 1 — which `stage1="gemm"` has already made
-  exactly linear). Deliberately demoted: magnitude and the z-scores already
-  supply the *ordering* this would buy.
+- **P-value resolution at scale** — **promoted 2026-09-02**, because
+  `scaling.md` §4.5's deciding experiment was run and the answer was worse
+  than the assumption behind demoting it. Against 1e9 brute-force
+  permutations, the GPD refinement is **75x to 2000x conservative** over
+  1e-5 to 1e-7 — the range BH actually decides in on a 20,000-gene cohort —
+  and never reaches its own nominal 2e-6 floor, because the fitted shape is
+  negative on every deep-tail gene and the `xi <= 0` exponential branch is a
+  far heavier tail than a bounded permutation null. Ordering survives;
+  calling does not, so this is lost power rather than lost cosmetics.
+  Both alternatives were prototyped in `tools/pvalue_study.py` and both work:
+  the saddlepoint is within 1% to 1e-6 with no permutations, multilevel
+  splitting within 10% throughout at 8 ms/gene.
+  **Next**: extend the experiment to stage 2 and to an unbalanced design —
+  neither is covered — then decide. Note the saddlepoint needs stage 1 to be
+  a subset sum, which on an unbalanced design means taking §3.1's open
+  decision first.
 - **GPD moment fit → maximum likelihood.** Moments are poorly behaved for
   `xi > 0.5`, the heavy-tailed regime the refinement exists for. Two
   constraints on any upgrade: the floor `1/(B · n_tail)` must survive it (it
