@@ -710,6 +710,67 @@ GPD degrading, not enough to price it. And shipping any alternative means
 `subset_null_backend` taking frozen moments, which changes what stage 2
 reports.
 
+### 4.8 The reviewer's suggestions, tested
+
+External review of `pvalue-review.md` came back 2026-09-03 with eight
+recommendations. Each checkable one was checked against the existing truth
+files the same day (`tools/pvalue_study.py`, `tools/pvalue_meandiff.py`).
+
+**Right, and the most valuable thing anyone has said about this problem:
+redefine stage 1 as the plain mean difference, then the saddlepoint is
+universal.** Brute-force truth for `x1bar - x0bar` at 1e8 permutations on the
+three unbalanced designs, saddlepoint against it:
+
+| design | resolved | median ratio, 1e-3 → 1e-7 | worst-lo | worst-hi |
+|---|---|---|---|---|
+| 60v20 | 52/64 | 1.00 · 1.00 · 1.00 · 0.95 · 1.10 | 0.83 | 1.34 |
+| 70v10 | 62/64 | 1.01 · 1.00 · 1.01 · 0.99 · 1.01 | 0.66 | 1.08 |
+| 20v60 | 54/64 | 0.99 · 0.99 · 1.00 · 1.02 · 1.15 | 0.75 | 1.37 |
+
+Essentially exact, on the geometries where stage 1 was previously an
+L-statistic and nothing applied. No permutations, no floor, no EVT parameter.
+The price is byte-parity with the R reference on unbalanced fixtures, and the
+quadrature is also the *statistically worse* estimator (`limits.md` §2.5), so
+nothing worth keeping is lost. **Recommended.**
+
+**Right: a GPD with the endpoint fixed at the analytic maximum** — top `n1`
+values as cases — is never anti-conservative on 40v40 and 60v20 (worst 1.000)
+and conservative by only 1.5–35× against the exponential substitution's
+3–2137×. The fit is one closed-form parameter, `alpha = -n / sum log(1 - z)`.
+It is the right fallback for an L-statistic if stage 1 were *not* redefined,
+and it is dominated by the saddlepoint where both apply. It does not reach
+stage 2, which has no analytic endpoint.
+
+**Right: BH needs marginal validity and PRDS, not a shared permutation
+ensemble.** Per-gene multilevel splitting does not weaken it. This removes the
+main structural objection §4.3 raised, and the question for stage 2 becomes
+purely one of compute.
+
+**Wrong, tested: "n_tail = 250 includes bulk data, biasing the shape negative;
+use 20–60."** The fitted shape is negative at every threshold from 1.2% to
+12.5% and *most* negative at the smallest (ML, 15 deep-tail genes at 40v40):
+
+| n_tail | 25 | 50 | 100 | 150 | 250 |
+|---|---|---|---|---|---|
+| median `xi`, ML | −0.38 | −0.11 | −0.14 | −0.19 | −0.19 |
+| ML worst-lo | 0.125 | 0.062 | 0.031 | — | 0.022 |
+| ML median at 1e-7 | 81× | 48× | 20× | — | 8× |
+
+The bounded support is real, not a bulk artefact, and a smaller threshold
+makes the ML fit worse on both axes at once.
+
+**Wrong, tested: a profile-likelihood upper bound on survival gives "1.5–2×
+controlled conservatism."** At 95% it is 1.9–67× conservative *and*
+anti-conservative to 0.31; at 99%, 2.2–255× and 0.46. Neither safe nor cheap.
+The χ² asymptotics are doubtful near a boundary parameter, which the endpoint
+is.
+
+**Overclaimed:** the saddlepoint is `O(n)` per gene with a root-find, not
+`O(1)`; its error is bounded, not "exact" (0.66–1.37 here); and `x_max` is
+"analytically known or tightly bounded" for stage 1 only — stage 2's maximum
+over widths of a standardized bridge has no closed form, so the
+four-parameter-Beta and fixed-endpoint suggestions do not reach it.
+
 **Written up for outside help.** [`pvalue-review.md`](pvalue-review.md) is the
 self-contained version of all of this for a statistician without the code —
 the method, the five estimators, the eight cells, the diagnosis (bounded
