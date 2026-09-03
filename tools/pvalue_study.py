@@ -387,6 +387,279 @@ def _compare(path="pvalue_truth.npz", b_small=2000):
           "faster; nothing here depends on its speed.")
 
 
+
+# ---------------------------------------------------------------------------
+# stage 2, which is a different problem
+
+
+PHI = 0.1
+BLOCK2 = 500_000
+
+
+def cohort2(seed=0):
+    """NB counts with a planted subset of growing strength, cases first.
+
+    Counts, not log-normals: stage 2's null is built by binomial **thinning**
+    of reads, so the study has to feed it the thing it was designed for.
+    """
+    rng = np.random.default_rng(seed)
+    nb = lambda mu, size: rng.poisson(rng.gamma(1 / PHI, PHI * mu, size=size)).astype(float)
+    rows, truth = [], []
+    for k in RUNGS2:
+        for _ in range(G_PER_RUNG):
+            mu = 10 ** rng.uniform(1.6, 2.4)
+            case, ctrl = nb(mu, N1), nb(mu, N0)
+            case[:k] = nb(mu * FOLD2, k)
+            rows.append(np.r_[case, ctrl])
+            truth.append(k)
+    return np.array(rows), np.array(truth)
+
+
+#: The ladder for stage 2 is the **number of affected cases**, not the effect
+#: size, and finding that out was the first result here. At a fixed k = 8 of
+#: 40, subsets of 2x through 25x all returned p between 2.5e-4 and 5e-4: the
+#: gene had reached the combinatorial floor for k = 8 (2.7e-3 by
+#: `detectability_floor`, and p sits about a decade under it, per
+#: `limits.md` §4.1) and a larger effect cannot buy depth the design has not
+#: got. Varying k at a fixed strong fold spans true p from about 1e-2 to
+#: 1e-8, which is the range 4.5 asks for.
+RUNGS2 = (6, 8, 10, 12, 14, 16, 18, 20)
+FOLD2 = 8.0
+
+
+def _stage2_block(counts, perms):
+    """One block: `(observed T, exceedance count)`, standardized consistently.
+
+    The statistic is `max_k (B_k - mu_k) / sigma_k` with **mu and sigma
+    estimated from the permutations themselves** (`method.md` §3), so unlike
+    stage 1 it is *not* a fixed function of a label vector — the observed
+    value moves with the permutation sample (measured: 3% relative at
+    B = 2,000). Blocks are therefore self-consistent rather than shared: each
+    takes its own observed value and its own null, both standardized by the
+    same moments, and the estimate converges as the block grows. Measured
+    across four independent blocks of 500,000: the observed T spreads 0.09%
+    (max 0.38%) and the exceedance rate 0.4% (max 5.6%, on genes with few
+    exceedances). At 20,000 it is 0.46% and 2.4%, which is why the block is
+    large.
+    """
+    r = wade.wade(counts, np.ones(counts.shape[0]), COND, lib_sizes=np.ones(N),
+                  perms=perms, nperms=len(perms), seed=1,
+                  alternative="greater", keep_null=True)
+    return r.subset.statistic, (r.subset.null >= r.subset.statistic[:, None]).sum(axis=1)
+
+
+def brute_force_stage2(counts, n_perms, block=BLOCK2, seed=7, report=None):
+    rng = np.random.default_rng(seed)
+    nexc = np.zeros(counts.shape[0], dtype=np.int64)
+    done = 0
+    t0 = time.perf_counter()
+    while done < n_perms:
+        b = int(min(block, n_perms - done))
+        perms = rng.permuted(np.broadcast_to(COND, (b, N)), axis=1)
+        _, e = _stage2_block(counts, perms)
+        nexc += e
+        done += b
+        if report and (done // block) % report == 0:
+            el = time.perf_counter() - t0
+            print(f"    {done:>14,} / {n_perms:,}   {el / 60:5.1f} min   "
+                  f"eta {el * (n_perms / done - 1) / 60:5.1f} min", flush=True)
+    return nexc, done
+
+
+def _calibrate2():
+    counts, truth = cohort2()
+    B = 500_000
+    print(f"stage 2: {counts.shape[0]} genes, B = {B:,}\n")
+    nexc, done = brute_force_stage2(counts, B)
+    p = empirical_p(nexc, done)
+    print(f"{'affected k':>11} {'floor':>11} {'median p':>12} {'min p':>12}")
+    for f in RUNGS2:
+        m = truth == f
+        print(f"{f:>11} {wade.detectability_floor(N1, N0, int(f)):11.2e} "
+              f"{np.median(p[m]):12.3e} {p[m].min():12.3e}")
+    print(f"\nfloor at this B: {1 / (done + 1):.2e}")
+
+
+def _truth2(n_perms):
+    counts, truth = cohort2()
+    print(f"stage 2 brute force: {counts.shape[0]} genes, {n_perms:,.0f} "
+          f"permutations, blocks of {BLOCK2:,}", flush=True)
+    nexc, done = brute_force_stage2(counts, int(n_perms), report=20)
+    np.savez("pvalue_truth2.npz", nexc=nexc, n_perms=done, truth=truth)
+    p = empirical_p(nexc, done)
+    print(f"\n{'affected k':>11} {'floor':>11} {'median p':>12} {'exceedances':>13}")
+    for f in RUNGS2:
+        m = truth == f
+        print(f"{f:>11} {wade.detectability_floor(N1, N0, int(f)):11.2e} "
+              f"{np.median(p[m]):12.3e} {int(np.median(nexc[m])):13,}")
+
+
+def _compare2(path="pvalue_truth2.npz", b_small=2000):
+    d = np.load(path)
+    nexc, n_big, truth = d["nexc"], int(d["n_perms"]), d["truth"]
+    counts, _ = cohort2()
+    true_p = empirical_p(nexc, n_big)
+    resolved = nexc >= 10
+
+    rng = np.random.default_rng(11)
+    perms = rng.permuted(np.broadcast_to(COND, (b_small, N)), axis=1)
+    r = wade.wade(counts, np.ones(counts.shape[0]), COND, lib_sizes=np.ones(N),
+                  perms=perms, nperms=b_small, seed=1, alternative="greater",
+                  keep_null=True)
+    obs, null = r.subset.statistic, r.subset.null
+    emp = empirical_p((null >= obs[:, None]).sum(axis=1), b_small)
+    gpd, _, _ = perm_pvalues(obs, null, alternative="greater")
+    fits = [gpd_tail_p(o, null[i], detail=True) for i, o in enumerate(obs)]
+
+    print(f"stage 2. brute force: {n_big:,} permutations, {resolved.sum()} of "
+          f"{len(obs)} genes resolved; floor {1 / (n_big + 1):.1e}\n")
+    print(f"{'true p':>13} {'n':>4}   {'empirical B=2k':>22}{'GPD B=2k':>22}")
+    print(f"{'':>13} {'':>4}   " + "".join(f"{'median  worst |log10|':>22}" for _ in range(2)))
+    edges = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8]
+    for lo, hi in zip(edges[1:], edges[:-1]):
+        m = resolved & (true_p < hi) & (true_p >= lo)
+        if not m.any():
+            continue
+        cells = ""
+        for est in (emp, gpd):
+            rr = np.log10(np.maximum(est[m], 1e-300) / true_p[m])
+            cells += f"{10 ** np.median(rr):>12.2f}x{np.abs(rr).max():>9.2f}"
+        print(f"{lo:.0e}-{hi:.0e} {int(m.sum()):>4}   {cells}")
+    xi = np.array([f.xi for f in fits])
+    expo = np.array([f.branch == "exponential" for f in fits])
+    deep = resolved & (true_p < 1e-5)
+    if deep.any():
+        print(f"\n  on the {deep.sum()} genes with true p < 1e-5: shape negative for "
+              f"{(xi[deep] < 0).mean():.0%} (median xi {np.median(xi[deep]):+.2f}), "
+              f"{expo[deep].mean():.0%} on the exponential branch")
+
+
+
+# ---------------------------------------------------------------------------
+# multilevel for stage 2, and why it needs the moments frozen
+
+
+def capture_stage2(counts, b_probe=2000, seed=1):
+    """`(xs, b_obs, q)` — stage 2's actual inputs, captured rather than rebuilt.
+
+    `subset_test` builds `xs` (the thinned, normalized, pseudocounted matrix)
+    from six things `wade()` assembles: the jitter stream, `tpm_like`, the
+    fitted fold change, `thin_counts`, `one_count` and a seed derivation. All
+    six are reachable, and reconstructing them here would be six chances to
+    diverge silently from the shipped path and get a confidently wrong answer.
+    So this wraps `subset_null_backend` for one call and takes what it was
+    handed — `subset_test` imports it inside its own body, so a runtime patch
+    is seen.
+    """
+    import wade.permutation as WP
+
+    grabbed = {}
+    original = WP.subset_null_backend
+
+    def spy(xs, b_obs, perms, q, **kw):
+        grabbed.setdefault("xs", xs)
+        grabbed.setdefault("b_obs", b_obs)
+        grabbed.setdefault("q", q)
+        return original(xs, b_obs, perms, q, **kw)
+
+    WP.subset_null_backend = spy
+    try:
+        rng = np.random.default_rng(seed)
+        perms = rng.permuted(np.broadcast_to(COND, (b_probe, N)), axis=1)
+        wade.wade(counts, np.ones(counts.shape[0]), COND, lib_sizes=np.ones(N),
+                  perms=perms, nperms=b_probe, seed=1, alternative="greater")
+    finally:
+        WP.subset_null_backend = original
+    return grabbed["xs"], grabbed["b_obs"], grabbed["q"]
+
+
+def frozen_moments(xs, b_obs, q, n_ref=200_000, seed=3):
+    """`(mu, safe)` — the null moments of the bridge, estimated once and fixed.
+
+    **This is what stage 2 needs before any tail method can be applied to it.**
+    Its statistic is `max_k (B_k - mu_k) / sigma_k` with the moments estimated
+    from the same permutations the tail is read from (`method.md` §3), so it
+    is not a fixed function of a label assignment — measured, the observed
+    value moves 3% between permutation samples at B = 2,000. Multilevel
+    splitting samples from the distribution *conditioned* on exceeding a
+    level, whose moments are not the null's, so applying it directly would
+    standardize by the wrong numbers and silently estimate the tail of a
+    different statistic.
+
+    Splitting the two estimates is also better than what stage 1 does today.
+    `mu` and `sigma` are bulk quantities converging as `1/sqrt(B)`; the tail
+    is a rare-event quantity. Estimating them from one modest uniform sample
+    and the tail by a method that can reach costs nothing and separates two
+    error sources that are currently entangled.
+    """
+    from wade.permutation import subset_null_backend
+
+    rng = np.random.default_rng(seed)
+    ref = rng.permuted(np.broadcast_to(COND, (n_ref, N)), axis=1)
+    _, _, mu, sd, _ = subset_null_backend(xs, b_obs, ref, q, alternative="greater")
+    usable = sd > 0
+    usable[:, -1] = False              # B_m is identically zero: no information
+    return mu, np.where(usable, sd, np.inf)
+
+
+def frozen_T(xs, q, mu, safe, labels, gene=None):
+    """The stage-2 statistic as a fixed function of a label assignment."""
+    from wade.subset import _bridge_from
+
+    x = xs if gene is None else xs[gene:gene + 1]
+    m = mu if gene is None else mu[gene:gene + 1]
+    sf = safe if gene is None else safe[gene:gene + 1]
+    return np.max((_bridge_from(x, labels, q) - m) / sf, axis=1)
+
+
+def multilevel_stage2(xs, q, mu, safe, t_obs, genes, n_sample=1000, sweeps=4,
+                      seed=5, max_rounds=2000):
+    """fgsea's scheme on stage 2's statistic, with the moments held fixed.
+
+    Unlike stage 1 there is no O(1) update: a label swap changes the whole
+    quantile function, so every move costs a fresh bridge. That is the price
+    of stage 2 not being a subset sum, and it is why this is seconds per gene
+    rather than milliseconds.
+    """
+    from scipy.special import digamma
+
+    rng = np.random.default_rng(seed)
+    half = n_sample // 2
+    out, rounds = np.empty(len(genes)), np.empty(len(genes), dtype=int)
+
+    for j, g in enumerate(genes):
+        pop = rng.permuted(np.broadcast_to(COND, (n_sample, N)), axis=1).copy()
+        s = np.array([frozen_T(xs, q, mu, safe, pop[r], gene=g)[0]
+                      for r in range(n_sample)])
+        a, k = float(t_obs[g]), 0
+        while k < max_rounds:
+            srt = np.argsort(s)
+            level = float(s[srt[half - 1]])
+            if level >= a:
+                break
+            keep = srt[half:]
+            pick = np.r_[keep, keep][:n_sample]
+            pop, s = pop[pick].copy(), s[pick].copy()
+            for _ in range(sweeps):
+                for r in range(n_sample):
+                    ones = np.flatnonzero(pop[r] == 1)
+                    zeros = np.flatnonzero(pop[r] == 0)
+                    i1 = ones[rng.integers(len(ones))]
+                    i0 = zeros[rng.integers(len(zeros))]
+                    pop[r, i1], pop[r, i0] = 0, 1
+                    t = frozen_T(xs, q, mu, safe, pop[r], gene=g)[0]
+                    if t >= level:
+                        s[r] = t
+                    else:
+                        pop[r, i1], pop[r, i0] = 1, 0
+            k += 1
+        rem = int((s >= a).sum())
+        out[j] = float(np.exp(k * (digamma(half) - digamma(n_sample + 1))
+                              + digamma(rem + 1) - digamma(n_sample + 1)))
+        rounds[j] = k
+    return out, rounds
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "calibrate"
     if cmd == "calibrate":
@@ -395,5 +668,11 @@ if __name__ == "__main__":
         _truth(float(sys.argv[2]) if len(sys.argv) > 2 else 1e9)
     elif cmd == "compare":
         _compare(*sys.argv[2:3])
+    elif cmd == "calibrate2":
+        _calibrate2()
+    elif cmd == "truth2":
+        _truth2(float(sys.argv[2]) if len(sys.argv) > 2 else 1e8)
+    elif cmd == "compare2":
+        _compare2(*sys.argv[2:3])
     else:
         raise SystemExit(f"unknown command {cmd!r}")

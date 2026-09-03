@@ -96,10 +96,20 @@ failure was real and is the interesting one: see §2's Release entry.
   Both alternatives were prototyped in `tools/pvalue_study.py` and both work:
   the saddlepoint is within 1% to 1e-6 with no permutations, multilevel
   splitting within 10% throughout at 8 ms/gene.
-  **Next**: extend the experiment to stage 2 and to an unbalanced design —
-  neither is covered — then decide. Note the saddlepoint needs stage 1 to be
-  a subset sum, which on an unbalanced design means taking §3.1's open
-  decision first.
+  **Stage 2 measured too** (§4.6), and it inverts the priority: the GPD is
+  only 4-80x off there against stage 1's 75-2000x, because stage 2's fitted
+  shape is negative for 71% of deep-tail genes against stage 1's 100%, so the
+  `xi <= 0` exponential substitution fires far less. **Stage 1 has the worse
+  problem**, which is the opposite of the stages' relative importance.
+  Multilevel works on stage 2 at 0.94x median — but only after `mu` and
+  `sigma` are **frozen** from a uniform sample, because stage 2's statistic is
+  standardized by moments estimated from the same permutations the tail is
+  read from and is therefore not a fixed function of a label assignment.
+  **Next**, in order: an unbalanced design (untested, and the case that
+  decides whether the saddlepoint is reachable at all without §3.1's
+  decision); more genes in stage 2's deep bins, which hold 1-3; then a
+  decision, which means `subset_null_backend` taking frozen moments and so
+  changes what stage 2 reports.
 - **GPD moment fit → maximum likelihood.** Moments are poorly behaved for
   `xi > 0.5`, the heavy-tailed regime the refinement exists for. Two
   constraints on any upgrade: the floor `1/(B · n_tail)` must survive it (it

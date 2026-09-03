@@ -609,12 +609,68 @@ across 20,000 genes decides at around 2.5e-6. Genes whose true `p` is 1e-5 to
 monotone; the calling does not. §7.1's 18.8% of genes at the floor on the real
 contrast is the same phenomenon seen from the other side.
 
-**Scope, stated because it is narrow.** One design (40 v 40, balanced), one
-statistic (stage 1, continuous, upper tail). Stage 2's statistic is a maximum
-over widths of a standardized bridge, has no saddlepoint, and is **not**
-covered here; neither is an unbalanced design, where stage 1 is an L-statistic
-rather than a subset sum (§4.4) and the saddlepoint does not apply either.
-Those two gaps are what a follow-up has to close before anything is replaced.
+**Scope.** One design (40 v 40, balanced), continuous data, upper tail. An
+unbalanced design is not covered and cannot be, for stage 1: it is an
+L-statistic there rather than a subset sum (§4.4), so neither the saddlepoint
+nor this reduction applies. Stage 2 is below.
+
+### 4.6 Stage 2, which is a different problem
+
+Same design, NB counts, `k` affected cases of 40 at 8x, ground truth 2e8
+streamed permutations. **The ladder here is `k`, not the effect size** — at a
+fixed `k = 8`, subsets of 2x through 25x all returned `p` between 2.5e-4 and
+5e-4, because the gene had reached the combinatorial floor for `k = 8` and no
+effect size buys depth a design has not got. 29 of 64 genes resolve.
+
+| true `p` | n | empirical B=2k | GPD B=2k | multilevel |
+|---|---|---|---|---|
+| 1e-3 – 1e-2 | 10 | 1.47x  (0.24) | **1.15x  (0.38)** | |
+| 1e-4 – 1e-3 | 7 | 2.86x  (0.68) | **0.80x  (1.71)** | |
+| 1e-5 – 1e-4 | 5 | 28.4x  (1.63) | 4.09x  (0.98) | **0.94x median,** |
+| 1e-6 – 1e-5 | 3 | 171x  (2.33) | **1.43x  (0.43)** | **worst 2.5x,** |
+| 1e-7 – 1e-6 | 3 | 3447x  (3.58) | 15.5x  (2.04) | **over the 12** |
+| 1e-8 – 1e-7 | 1 | 7139x  (3.85) | 80.6x  (1.91) | **genes < 1e-4** |
+
+**The GPD is far better on stage 2 than on stage 1, and the mechanism says
+why.** §4.5 blamed the `xi <= 0` exponential substitution. Stage 1's fitted
+shape is negative for **100%** of deep-tail genes (median −0.21) and 100% take
+that branch; stage 2's is negative for **71%** (median −0.07) and 57% take it.
+A maximum over widths has a heavier null tail than a mean difference, so the
+GPD form fits and the substitution bites less often. The prediction and the
+measurement agree: the damage tracks how often the branch fires.
+
+**So the p-value problem is worse for stage 1 than for stage 2**, which is the
+opposite of what the stages' relative importance would suggest. Stage 1 is
+75-2000x conservative where BH decides; stage 2 is 4-80x, on few genes.
+
+**Multilevel splitting works on stage 2, and needs one thing first.** Stage 2's
+statistic is `max_k (B_k - mu_k)/sigma_k` with the moments estimated from *the
+same permutations the tail is read from*, so it is **not a fixed function of a
+label assignment** — the observed value moves 3% between permutation samples
+at B = 2,000 (0.09% at 500,000, which is why brute force streams blocks that
+large and lets each carry its own observed value). Multilevel samples the
+distribution *conditioned* on exceeding a level, whose moments are not the
+null's, so pointed at stage 2 as it stands it would standardize by the wrong
+numbers and estimate the tail of a different statistic, silently.
+
+Freezing `mu` and `sigma` from one uniform sample fixes it, and is better than
+what is done now: they are bulk quantities converging as `1/sqrt(B)` while the
+tail is a rare-event quantity, and estimating them separately untangles two
+error sources that are currently conflated. With that done, multilevel holds
+**0.94x median and 2.5x worst** over the 12 genes below 1e-4, at 1.1 s/gene —
+a thousand times slower per gene than on stage 1, because a label swap changes
+the whole quantile function and there is no O(1) update.
+
+`tools/pvalue_study.py` captures stage 2's real inputs by wrapping
+`subset_null_backend` for one call rather than rebuilding them from the six
+pieces `wade()` assembles, which would be six chances to diverge silently. The
+frozen evaluator reproduces the kernel to **0.000e+00** on both the observed
+labels and a random permutation.
+
+**What this leaves.** Stage 2's deep bins hold 1 to 3 genes: enough to show the
+GPD degrading, not enough to price it. An unbalanced design is untested for
+both stages. And shipping either alternative means `subset_null_backend`
+taking frozen moments, which changes what stage 2 reports.
 
 ---
 
