@@ -31,7 +31,7 @@ continuous data and is not tested or tuned for it.
 mamba env create -f mamba_env.yaml
 conda activate wade
 pip install -e . --no-build-isolation
-pytest                       # ~12 s
+pytest                       # ~18 s
 pytest -m "not kernel"       # if you built without the Rust toolchain
 ```
 
@@ -324,7 +324,7 @@ normalizers, permutation inference with GPD refinement and BH, Rust kernels
 for both permutation loops, the count-native subset stage (binomial thinning,
 the one-count pseudocount, bootstrap intervals), the plotting extension (four
 figures over one data layer, three themes, and a linked view), and the
-data-in/results-out boundary. **740 tests, about 12 s.**
+data-in/results-out boundary. **760 tests, about 18 s.**
 
 At 20,000 genes, 100 v 100 and 2,000 permutations a full run takes about 17 s
 on a 16-core laptop (9.7 s with `thin=False`); the permutation loops, which
@@ -336,7 +336,17 @@ capped (`max_probs`), genes can be processed in blocks whose results are
 bit-identical to the one-pass run (`gene_chunk`), and two opt-in fast paths —
 `stage1="gemm"` on balanced designs and `fit_backend="rust"` for the
 fold-change fit — bring a 1,000-gene, 6,000 v 6,000, 200-permutation run from
-20 s to 2.3 s. A 30,000-gene × 80,000-sample cohort, which previously needed
+20 s to 2.3 s.
+
+Stage 1 also has an exact alternative to permutation. `stage1="saddlepoint"`
+redefines the detection statistic as the plain difference of group means and
+computes its permutation p-value in closed form by a double saddlepoint, at any
+group balance: no permutations, no tail extrapolation, and a floor of
+1/C(n, n1) rather than 2e-6. Validated against 1e8 brute-force permutations at
+median 0.91-1.15 accuracy where the shipped GPD refinement is 3-4,906x
+conservative. It costs about 60x the stage-1 permutation loop and needs SciPy.
+It changes reported numbers, so it is opt-in and named; see `docs/method.md`
+§6 and `docs/pvalue-review.md`. A 30,000-gene × 80,000-sample cohort, which previously needed
 ~163 GB and did not run, completes in **30 minutes at a 56 GB peak** with
 2,000 permutations (measured; `docs/scaling.md` §1).
 
@@ -345,8 +355,10 @@ golden fixtures were generated from. Worst-case relative deviation across 436
 parity comparisons: **9.2e-15**, with the normalized matrix, the quantile grids
 and the permutation null bit-for-bit identical.
 
-Not yet built: format-specific reader helpers for featureCounts and
-MatrixMarket, and `rna100k` relabelled as manuscript material. See the roadmap.
+Not yet built: an equivalent exact or refined tail for **stage 2**, which is
+the open problem (`docs/pvalue-review.md`); format-specific reader helpers for
+featureCounts and MatrixMarket; and `rna100k` relabelled as manuscript
+material. See the roadmap.
 
 ## Provenance
 

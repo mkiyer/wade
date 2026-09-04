@@ -74,7 +74,8 @@ measured (`docs/scaling.md` §2.1):
   permutation null inherits the same quadrature and the inflation cancels in
   the p-value — but on a capped grid `mean_shift` should be read as signed
   quantile area, not a mean-difference estimate, and the §2 balanced-design
-  identity holds only approximately.
+  identity holds only approximately. `stage1="saddlepoint"` (§6) is exempt: it
+  computes the group means directly and never reads the grid.
 
 The cap is never applied silently: the realized $m$ is `result.nprobs` and is
 recorded with `max_probs` in `result.params` and the manifest. `max_probs=None`
@@ -99,12 +100,20 @@ effect. Measured: the same characterization statistic reads a pure 2× shift as
 
 $$\texttt{mean\_shift} = \frac{1}{m}\sum_p D(p)$$
 
-The signed area between the quantile functions. When $n_1 = n_0$ this is
-*exactly* the difference of the two sample means; on unequal groups it is a
-grid quadrature that over-weights the extremes of the larger group, so it should
-be read as "signed quantile area" rather than as a drop-in mean estimate.
-Inference is unaffected, because the permutation null inherits the same bias and
-it cancels in the p-value.
+The signed area between the quantile functions. Because
+$\int_0^1 Q(p)\,dp = E[X]$ is an identity, that area *is* the difference of
+the two sample means, and the grid is a quadrature of it: exact when
+$n_1 = n_0$, and on unequal groups an interpolation that over-weights the
+extremes of the larger group. Inference is unaffected, because the permutation
+null inherits the same bias and it cancels in the p-value.
+
+`stage1="saddlepoint"` computes the identity instead of the quadrature, which
+buys an exact p-value with no permutations and no floor (§6). The two are not
+interchangeable: off balance the quadrature is a *trimmed* summary and is the
+more powerful statistic — measured at 2–4× when $n_1 > n_0$ — while the
+saddlepoint still wins end to end because the floor costs more than the
+trimming buys (`scaling.md` §4.10). Under `stage1="saddlepoint"` this
+paragraph's quadrature is not computed at all.
 
 **This is the ordinary test**, and naming it plainly matters: it is what any
 conventional DE method already computes, and WADE's claim is not to improve on
@@ -364,6 +373,28 @@ refinement ever happens and the floor is $1/(B+1)$.
 The refined p-value is floored at $1/(B \cdot n_{\text{tail}})$. **This is an
 honesty constraint, not a numerical guard**: it is what $B$ permutations can
 support. A port that returns smaller p-values by "improving" it is a regression.
+
+**Exact stage-1 inference** (`stage1="saddlepoint"`, opt-in). The mean
+difference is a monotone function of the case-group subset sum, so its
+permutation distribution is the distribution of a subset sum drawn without
+replacement — which Skovgaard's double saddlepoint evaluates directly, with no
+permutations and no tail model. With $A$ the case subset sum and $V$ the total,
+$t = A(1/n_1 + 1/n_0) - V/n_0$; sampling without replacement is handled by
+conditioning independent Bernoulli selectors on $\sum Z = n_1$, giving
+$K(s,t) = \sum_i \log(1 + e^{s v_i + t})$ and a two-equation saddlepoint.
+**Balance is not required** — only that the statistic be a subset sum, which
+the exact mean difference is at every geometry and the grid quadrature is not.
+
+Validated against $10^8$ brute-force permutations on four geometries, on
+negative-binomial counts through the real normalization, at 52% zeros, and at
+300 v 300: median $\hat p/p$ between 0.91 and 1.15 down to $10^{-7}$, against
+3–4,906× for the GPD path on the same genes. The floor drops from $1/(B
+\cdot n_{\text{tail}})$ to $1/\binom{n}{n_1}$, which is 9.3e-24 at 40 v 40.
+It costs about 60× the stage-1 permutation loop it replaces — 0.7 min at
+40 v 40 and 50 min at 3,000 v 3,000 for 20,000 genes — and needs SciPy, which
+is otherwise optional. Stage 2 still permutes, so the loop runs either way.
+**Stage 2 has no equivalent**: its statistic is a maximum over widths and is a
+subset sum at no geometry. See `docs/pvalue-review.md`.
 
 **BH-FDR** is applied across genes, separately per axis.
 

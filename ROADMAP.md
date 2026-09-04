@@ -67,13 +67,26 @@ export; twelve labels on near-coincident points is past what placement can fix).
 
 ## 1. Now
 
-**Release** (§2 below). The `demo` notebook landed 2026-08-22 and the
-`benchmark` notebook 2026-09-02, so the two deliverables that were blocking a
-release are done; `rna100k` relabelled as manuscript material, and the
-benchmark extended to real cohorts, come after.
+**Stage 2's p-value tail** (§2 below). Stage 1 was solved on 2026-09-03 —
+`stage1="saddlepoint"` gives it an exact permutation p-value with no sampling
+and no floor — and that leaves stage 2 as the one part of the method whose
+inference is known wrong: 4–80× off where it is safe, and anti-conservative to
+0.019 where it is accurate. It is also the distinctive stage and 80% of the
+runtime. Every route that worked for stage 1 is closed to it, so this is a
+research item, not an implementation item; `docs/pvalue-review.md` is the
+question written out for external review, and its §8 is the ordered list.
 
-Release comes first because on 2026-09-02 it turned out never to have been
-tried: `main` was 37 commits ahead of `origin/main`, so the CI added in one of
+The **first step is mechanical, not statistical**: freeze `μ_k` and `σ_k` from
+a separate uniform permutation sample. Until that happens the observed `T` is
+not a fixed function of the labels (it moves 3% between samples at B = 2,000),
+which blocks multilevel splitting and every other conditioned-sampling method.
+
+v0.1.0 was tagged 2026-09-02 and CI is green on all 12 jobs. What remains of
+the release is distribution — PyPI and a GitHub Release with the wheels CI
+already builds — and it is paused deliberately, not forgotten: see §2.
+
+Release was the previous "Now" because on 2026-09-02 it turned out never to
+have been tried: `main` was 37 commits ahead of `origin/main`, so the CI added in one of
 those commits had never run, and **11 of its 12 jobs would have failed** —
 `--no-build-isolation` with no maturin in the runner, `--no-index` blocking
 numpy as well as PyPI, and a smoke test naming `wade.permutation` for a
@@ -110,14 +123,23 @@ failure was real and is the interesting one: see §2's Release entry.
   permutations. Validated against 1e8-permutation truth on four geometries,
   on NB counts through `wade()`'s own normalization, on sparse counts, and at
   300 v 300 — 0.91–1.15 median, worst 0.61–0.89, where the shipped path is
-  3–4,906× conservative. **To implement**: vectorized Newton saddlepoint;
-  `stage1="gemm"` becomes the only stage 1 and loses its balance guard; the
-  quadrature and `z_mean_shift` retire; parity divergence on unbalanced
-  fixtures recorded in `test_divergences.py`; validate at 47% zeros and
-  n > 600 in the suite. **Stage 2 stays open**: freeze the moments, then
+  3–4,906× conservative. **Implemented 2026-09-03** as
+  `src/wade/saddlepoint.py` and `stage1="saddlepoint"`, opt-in with 18 tests;
+  it is not the default and should not become one until stage 2 is solved,
+  because stage 2 keeps the permutation loop running and the saddlepoint is
+  then pure added cost (~60× the stage-1 loop) — `scaling.md` §4.9.
+  One finding worth carrying: the grid quadrature is the **better statistic**
+  off balance, by 2–4× when n1 > n0, because interpolating the larger group
+  trims it and expression is right-skewed (§4.10). It still loses end to end,
+  because its floor at 2e-6 costs more than the trimming buys. An exact or
+  relative-error tail for an **L-statistic** would recover that 2–4×, and is
+  question 4 in `pvalue-review.md` §8.
+  **Stage 2 stays open** and is now §1: freeze the moments, then
   multilevel with the move in the kernel for genes at the empirical floor;
   no analytic endpoint exists for it, so none of the fixed-endpoint routes
-  reach it.
+  reach it. A computable upper bound on stage 2's statistic — even a loose
+  one — would make the fixed-endpoint GPD available and is worth more than
+  either route.
 - **GPD moment fit → maximum likelihood.** Moments are poorly behaved for
   `xi > 0.5`, the heavy-tailed regime the refinement exists for. Two
   constraints on any upgrade: the floor `1/(B · n_tail)` must survive it (it
@@ -157,8 +179,14 @@ the units that mean something — the statistic's own scale — both read a stea
 the measurement. **A dev machine with one BLAS cannot see this**; CI is what
 sees it, which is the argument for running it.
 
-What remains: publishing wheels, an API documentation build, and a decision on
-whether the validation simulations ship as tests, as documentation, or both.
+**v0.1.0 was tagged and pushed on 2026-09-02** and all 12 jobs are green.
+
+What remains: publishing wheels to PyPI and a GitHub Release, an API
+documentation build, and a decision on whether the validation simulations ship
+as tests, as documentation, or both. Distribution is **paused pending the
+user's call** — the first public version would carry stage 2's known
+conservatism, which `limits.md` now states plainly, and whether to ship on
+that basis is theirs to decide, not a default.
 
 ## 3. Notebooks
 

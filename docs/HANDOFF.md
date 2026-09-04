@@ -20,12 +20,35 @@ As of 2026-08-21 the **implementation queue is empty**: the last six core items
 landed, `plotting.py` became the `wade/plotting/` subpackage, and the whole
 visualization queue is built — themes, drawn bootstrap intervals, a driver
 figure, per-gene metadata in figures, linked views, a stage-1 row, and label
-de-collision. The `demo` notebook landed 2026-08-22. **740 tests pass in about
-12 seconds**, parity unchanged at **9.155e-15** over 436 comparisons.
+de-collision. The `demo` notebook landed 2026-08-22, `benchmark` 2026-09-02.
+**760 tests pass in about 18 seconds**, parity unchanged at **9.155e-15** over
+436 comparisons.
 
-**The immediate work is the release** — `ROADMAP.md` §1. The `demo` notebook
-landed 2026-08-22 and `benchmark` on 2026-09-02, so nothing is queued in front
-of it.
+**v0.1.0 is tagged and pushed** (2026-09-02) and CI is green on all 12 jobs.
+What is *not* done for the release is distribution: no PyPI upload, no GitHub
+Release with wheels. That is a deliberate pause, not an oversight — see §5.
+
+**The work since the tag has been the p-value floor**, and it is the subject a
+new session most needs to understand. Both stages need resolution near 1e-6
+from 2,000 permutations; the GPD refinement that is supposed to supply it is
+3–4,906× conservative in one regime and anti-conservative to 0.019 in another,
+and which one you get is set by a latent property of the data (how often the
+`ξ̂ ≤ 0` exponential substitution fires — `scaling.md` §4.7, monotone across
+all eight design × stage cells). **Stage 1 now has an answer and stage 2 does
+not.** `docs/pvalue-review.md` is the full write-up, written for a statistician
+without code access; read it before touching `pvalues.py`.
+
+Stage 1's answer is `stage1="saddlepoint"` (`src/wade/saddlepoint.py`, landed
+2026-09-03): redefine the detection statistic as the exact difference of group
+means — which the quantile area *is*, by the identity ∫Q(p)dp = E[X] — and get
+its permutation p-value in closed form from Skovgaard's double saddlepoint. No
+permutations, no tail model, no floor above 1/C(n, n1). Balance is **not**
+required; only that the statistic be a subset sum, which the exact mean
+difference is and the grid quadrature is not. Validated against 1e8 brute-force
+permutations at four geometries, on NB counts through the real normalization,
+at 52% zeros and at 300 v 300. It is **opt-in** because it changes reported
+numbers.
+
 `plan.md` was the recipe for phases B and C and was deleted when C landed, as
 it said to; its outcome is in `ROADMAP.md`, `docs/plotting.md` and the code.
 
@@ -99,6 +122,22 @@ kernel:
 ## 2. What is NOT built, in order
 
 The queue is [`../ROADMAP.md`](../ROADMAP.md). In short:
+
+0. **Stage 2's tail** — the open problem, and the highest-value item in the
+   project. Stage 1 is solved and stage 2 is not, and stage 2 is the
+   distinctive stage, is 80% of the runtime, and is where the anti-conservative
+   failures live. Every route that worked for stage 1 is closed to it: its
+   statistic is a maximum over widths, a subset sum at no geometry, so no
+   saddlepoint; and unlike stage 1 it has **no analytic maximum**, so the
+   fixed-endpoint GPD that would otherwise work is unavailable. Two concrete
+   sub-tasks, in order, in `pvalue-review.md` §8: *freeze* μ_k and σ_k from a
+   separate uniform sample (they are currently estimated from the same
+   permutations the tail is read from, which makes T not a fixed function of
+   the labels and blocks every conditioned-sampling method), then apply kernel
+   multilevel splitting to the genes at the floor. Multilevel is measured at
+   0.94 median / 2.5× worst but costs ~1 s per gene, so it must be a
+   second pass over few genes, not the default. A computable upper bound on T
+   would be worth more than either and is question 2 for the collaborators.
 
 1. **The benchmark on real cohorts.** `notebooks/benchmark.qmd` landed
    2026-09-02 on *simulated* counts — nine methods, one permutation null, one
@@ -460,6 +499,10 @@ Reasoning is in `method.md`; this is the index.
 | The quantile grid is capped: `m = min(n1, n0, max_probs)`, default 2,000; realized `m` recorded, rule `m ≳ 2.5/π_min` | `method.md` §1, `scaling.md` §2.1 |
 | Chunking is a memory layout, never a numerical choice: `gene_chunk` is bit-identical, asserted with `assert_array_equal` | `scaling.md` §2.2, `tests/test_chunking.py` |
 | Fast paths that change numbers are opt-in and named: `stage1="gemm"`, `fit_backend="rust"`; `backend="auto"` never changes an answer | `scaling.md` §3.1/§3.3 |
+| Stage 1 has an exact p-value: `stage1="saddlepoint"`, any balance, opt-in because it changes numbers and needs SciPy | `method.md` §6, `scaling.md` §4.9 |
+| The quadrature is the *better statistic* off balance (2–4× when n1 > n0, because interpolating the larger group trims it) but loses end to end, because the floor costs more than the trimming buys | `scaling.md` §4.10 |
+| The combinatorial floor is a **scale, not a bound** — 21–42% of genes fall below it. It must never be used to clamp a p-value | `limits.md` §4.1, `pvalue-review.md` App. A |
+| GPD-ML has the best median accuracy of the free estimators and is disqualified for being anti-conservative to 0.007 | `scaling.md` §4.5 |
 | The fit bracket was rejected: a missed bracket is anti-conservative | `scaling.md` §3.3 |
 | Bootstrap CIs stay within-group resampling with replacement; Poisson and hybrid schemes measured miscalibrated, m-of-n under-covers | `scaling.md` §6 |
 | Stage 2's shift correction is binomial thinning of raw counts (observed and null), `f̂` by middle-half matching after thinning | `method.md` §10.3 |
@@ -478,13 +521,63 @@ cites them.
 
 ## 5. Suggested first move
 
-**Push, and watch CI go green** — see §1. Everything since `5dcf2f7` is local
-only, the workflow has never executed, and its first run is the only thing that
-can confirm the four fixes on Linux and Windows as well as here. Then tag.
+Ordered. The first item is the one that matters; the rest are real but smaller.
 
-**Then the `benchmark` notebook**, `ROADMAP.md` §3 — the head-to-head. It is
-the only deliverable that tests WADE against alternatives rather than against
-itself, and the real cohort's rank-recovery work is waiting on it.
+### 1. Stage 2's tail — the open problem
+
+§2 item 0 has the substance. The **first concrete step** is to freeze `μ_k` and
+`σ_k`. Today they are estimated from the same permutation sample the tail is
+read from, so the observed `T` moves 3% between samples at B = 2,000 and 0.09%
+at 500,000 — it is not a fixed function of the labels. Nothing that samples a
+*conditioned* distribution can be applied until that is fixed, and multilevel
+splitting is the method that would then apply. Estimate them from a separate
+uniform draw, check parity moves only where expected, and record the change as
+a named answer change in `scaling.md`.
+
+Do **not** start by trying more GPD variants. `pvalue-review.md` Appendix B
+records five that were tested and refuted, including the two most natural ones
+(a smaller `n_tail`, and a profile-likelihood bound). The diagnosis is in §6 of
+that document: the null has a finite right endpoint, the negative shape fit is
+*correct*, and both shipped behaviours are degenerate answers to the same
+question — how to behave near an endpoint estimated from 250 order statistics.
+
+### 2. Get the collaborators' answers back into the tree
+
+`docs/pvalue-review.md` is written to be sent as-is. Its §8 is six ordered
+questions. When answers come back, they belong in `scaling.md` §4 beside the
+measurement that motivated them, tested the way Appendix B's suggestions were
+tested — against the existing 1e8 brute-force ground truth, which is the
+project's most expensive asset and should be reused rather than regenerated.
+`tools/pvalue_study.py` has a `stress` driver that sweeps every geometry ×
+stage cell.
+
+### 3. Finish the distribution half of the release
+
+v0.1.0 is tagged and CI is green. Not done: PyPI, and a GitHub Release carrying
+the abi3 wheels CI already builds. This is deliberately paused — shipping
+`stage1="saddlepoint"` as opt-in while stage 2's p-values are known to be
+3–4,906× conservative means the first public version has a documented soft
+spot. That is defensible if `limits.md` says so plainly, which it now does.
+**Ask the user before uploading anything**; distribution is outward-facing and
+the pause may be intentional on their side too.
+
+### 4. The benchmark on real cohorts
+
+`ROADMAP.md` §3 — the only deliverable that tests WADE against alternatives
+rather than against itself, and the one the real cohort's rank-recovery work is
+waiting on. `notebooks/benchmark.qmd` landed 2026-09-02 on *simulated* counts;
+the literature half is still missing.
+
+### If the user asks "should the saddlepoint be the default?"
+
+Not yet, and the reason is not statistical. It costs ~60× the stage-1
+permutation loop (0.7 min at 40 v 40 up to 50 min at 3,000 v 3,000 for 20,000
+genes), it needs SciPy, and it changes every reported `mean_shift` off balance.
+The case for flipping it gets much stronger once stage 2 is solved, because
+today the permutation loop runs anyway for stage 2, so the saddlepoint is pure
+added cost. Revisit the question then, not before.
+
+### The notebooks
 
 `demo.qmd` is **done** and is the master source: it generates the dataset, runs
 it, and writes `docs/figures/*.png` — the README's figures and quoted numbers
@@ -506,7 +599,7 @@ gene's MAD in its units.
 
 ```bash
 conda activate wade
-pytest -q                                   # 740 passing, ~12 s — the baseline
+pytest -q                                   # 760 passing, ~18 s — the baseline
 quarto render notebooks/demo.qmd            # the demo, and the README's figures
 ```
 
@@ -515,15 +608,28 @@ Three rules govern everything here, and they have earned their place:
 * **Nothing changes a reported number.** `pytest -q` is the check and the
   parity ledger printed at the end of the run is the sharper one (currently
   9.155e-15 over 436 comparisons). Fast paths that *do* change numbers are
-  opt-in and named — `stage1="gemm"`, `fit_backend="rust"`.
+  opt-in and named — `stage1="gemm"`, `stage1="saddlepoint"`,
+  `fit_backend="rust"`.
 * **Measure before and after**, and put the numbers in the document that owns
-  the subject (`scaling.md` for performance), never in a commit message.
-  `tools/bench_scaling.py` reproduces every performance claim.
+  the subject (`scaling.md` for performance and for the p-value study),
+  never in a commit message. `tools/bench_scaling.py` reproduces every
+  performance claim; `tools/pvalue_study.py` every p-value claim.
 * **Prefer deleting to adding.** A four-hunter audit removed ~1,300 lines on
   2026-08-21 and the package got better. Before adding a parameter or a code
   path, ask whether an existing one already covers the case — twice recently
   the answer was yes (CPM is `normalizer=1.0`; the chunked driver with one
   chunk *is* the one-pass driver).
+
+A fourth rule earned its place during the saddlepoint work: **a numerical
+routine must check its own answer.** Four separate bugs in
+`src/wade/saddlepoint.py` each returned a *plausible wrong p-value* rather than
+an error — a bracket that ballooned past what bisection could close, a warm
+start where Newton made no progress, an outer bracket scaled by the range of
+the sum instead of the values, and an `atanh` reparameterisation that capped
+the root an order of magnitude short. All four were caught only because the
+final answer is verified against both saddlepoint equations before it is
+returned, and each now has a named regression test whose docstring records the
+failure. Anything approximating a tail gets the same treatment.
 
 To see the current state in one command:
 
