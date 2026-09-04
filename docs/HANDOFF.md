@@ -264,10 +264,12 @@ labels on near-coincident points is past what any placement rule can fix.
 | file | what it is for |
 |---|---|
 | [`../README.md`](../README.md) | the user-facing contract |
+| [`manual.md`](manual.md) | **the user manual** — install, run, read the output, choose options, what to check first. The only document written for someone who just wants to use WADE; send a new user here, not to `method.md` |
 | [`method.md`](method.md) | what WADE computes and why — §10 is the scale/counts derivation |
 | [`limits.md`](limits.md) | what it cannot do; read before running |
 | [`scaling.md`](scaling.md) | **the research agenda for large data** — measurements, hypotheses, risks, single cell, and what the real cohort measured |
 | [`plotting.md`](plotting.md) | the plotting **extension** — the data layer, plotting elsewhere, and what it is not for |
+| [`pvalue-review.md`](pvalue-review.md) | the p-value estimators and the open problem, for a statistician without code access |
 | [`implementation-notes.md`](implementation-notes.md) | R parity, cross-language traps, the kernels |
 | [`../ROADMAP.md`](../ROADMAP.md) | the work queue |
 | this file | what is not obvious from any of the above |
@@ -569,13 +571,17 @@ stage cell.
 
 ### 3. Finish the distribution half of the release
 
-v0.1.0 is tagged and CI is green. Not done: PyPI, and a GitHub Release carrying
-the abi3 wheels CI already builds. This is deliberately paused — shipping
-`stage1="saddlepoint"` as opt-in while stage 2's p-values are known to be
-3–4,906× conservative means the first public version has a documented soft
-spot. That is defensible if `limits.md` says so plainly, which it now does.
-**Ask the user before uploading anything**; distribution is outward-facing and
-the pause may be intentional on their side too.
+v0.1.0 is tagged and CI is green, and as of 2026-09-04 the mechanics are ready:
+five wheel rows covering every platform PyPI needs (manylinux x86_64 and
+aarch64, macOS arm64 and x86_64, Windows x64), and a `publish` job in
+`ci.yml`. **That job is deliberately not tag-triggered** — a PyPI upload cannot
+be undone and a version cannot be reused — so publishing is a manual
+`workflow_dispatch` run with `publish` checked, gated behind the whole matrix.
+It needs a PyPI trusted publisher for the repo and a GitHub environment named
+`pypi`; no API token.
+
+**Ask before pressing it.** Distribution is outward-facing, and the first
+public version carries stage 2's documented conservatism.
 
 ### 4. The benchmark on real cohorts
 

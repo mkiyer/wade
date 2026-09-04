@@ -81,9 +81,11 @@ a separate uniform permutation sample. Until that happens the observed `T` is
 not a fixed function of the labels (it moves 3% between samples at B = 2,000),
 which blocks multilevel splitting and every other conditioned-sampling method.
 
-v0.1.0 was tagged 2026-09-02 and CI is green on all 12 jobs. What remains of
-the release is distribution — PyPI and a GitHub Release with the wheels CI
-already builds — and it is paused deliberately, not forgotten: see §2.
+v0.1.0 was tagged 2026-09-02 and CI is green. The packaging work landed
+2026-09-04: wheels for every platform PyPI needs, a fail-fast SciPy check, a
+user manual (`docs/manual.md`), and the result's memory contract cut from 3.1×
+the count matrix to 1.1× (`scaling.md` §2.3). What remains is pressing the
+button — the `publish` job is manual on purpose: see §2.
 
 Release was the previous "Now" because on 2026-09-02 it turned out never to
 have been tried: `main` was 37 commits ahead of `origin/main`, so the CI added in one of

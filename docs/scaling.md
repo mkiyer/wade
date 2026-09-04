@@ -221,15 +221,59 @@ end-to-end. Likely a storage-only option with the kernels widening on read.
 **Open question.** Whether it earns its complexity once §2.1 and §2.2 land, or
 whether the answer is simply "the matrix is 19.2 GB, own it".
 
-**Sharpened 2026-08-20, not implemented.** After §2.1 and §2.2, the peak is
-no longer transients but the four full `genes × samples` float64 residents
-`WadeResult` carries — counts, jitter, `tpm`, pseudocount — plus the int32
-thinned counts during the run. The jitter is a seeded stream and the
-pseudocount a rank-1 outer product (`norm_factor / (normalizer · lib)`), so
-neither has to be materialized; whether to make them lazy is a question about
-the result object's contract (`gene_detail`, the parity fixtures' explicit
-`jitter=` path), not about the kernels. That, rather than float32, is the
-next memory cut if one is ever needed — the target now fits without either.
+**Sharpened 2026-08-20, then measured and half-fixed 2026-09-04.** The 2026-08-20
+reading was that the peak is the four full `genes × samples` float64 residents
+`WadeResult` carries — counts, jitter, `tpm`, pseudocount. **The first half was
+right and the diagnosis was wrong.**
+
+*The result's contract, fixed.* The jitter is a seeded draw and the pseudocount
+is `norm_factor / (normalizer · lib)` scaled, so neither has to be stored. Both
+are now rebuilt on access from what the result already keeps, and the
+normalizer is held by reference so a matrix normalizer costs nothing extra. A
+result kept the array only when it cannot be rebuilt — `seed=None`, or a
+caller-supplied jitter. Measured at 20,000 × 2,000:
+
+| | before | after |
+|---|---|---|
+| the result carries | 0.99 GB, **3.1× the input** | 0.35 GB, **1.1×** |
+
+Pinned by `tests/test_result_memory.py`, which asserts both halves of the
+contract: what comes back is bit-identical to what the run used, *and* the
+result does not store it. Parity unmoved at 9.155e-15.
+
+*The peak, which is a different problem.* Fixing the contract did not move the
+peak at all, because the peak is transient rather than resident. Measured from
+the installed wheel:
+
+| genes | samples | B | input | peak | ratio |
+|---|---|---|---|---|---|
+| 20,000 | 2,000 | 2,000 | 0.32 GB | 5.98 GB | 18.7× |
+| 20,000 | 2,000 | **500** | 0.32 GB | 5.88 GB | 18.4× |
+| 20,000 | **500** | 2,000 | 0.08 GB | 2.58 GB | 32.3× |
+| **5,000** | 2,000 | 2,000 | 0.08 GB | 1.83 GB | 22.9× |
+
+Three things fall out, and two of them contradict what this section assumed:
+
+* **The peak barely depends on `nperms`** — 5.98 against 5.88 GB for a 4×
+  change. The `(genes × B)` null matrices are not the driver, so raising the
+  permutation count is close to memory-free.
+* **`gene_chunk` is not the memory knob §2.2 implies.** At 20,000 × 2,000 it
+  buys 8%: 5.98 GB unchunked, 5.69 at `gene_chunk=2000`, 5.52 at 500. It is
+  still exactly bit-identical and still the right tool for the *input* side,
+  but it does not reach this peak.
+* **Stage 2 is where the peak lives.** `subset=False` drops it from 5.98 to
+  3.86 GB, and `thin=False` to 5.22. So roughly 2.1 GB of the 6 is the subset
+  test's working space, which is neither chunked nor proportional to `B`.
+
+*Two hypotheses closed.* It is not the null matrices (`B` barely matters,
+above) and it is not thread-local working space: `RAYON_NUM_THREADS=1` peaks
+at 5.76 GB against 5.98 for the default 16, a 4% difference. So the 6 GB is
+genuinely allocated per-run, not per-thread, and a memory-constrained user
+cannot trade threads for footprint.
+
+**Open, and now the real question.** The remaining cut is stage 2's transient,
+not the result and not float32. The budgeting rule until then is **three times
+the count matrix**, and it is in `manual.md` §6.
 
 ---
 

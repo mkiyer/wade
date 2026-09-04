@@ -298,14 +298,24 @@ interval, which is wide exactly where the estimate is soft.
 
 ## Documentation
 
+**Start with [`docs/manual.md`](docs/manual.md)** — install, run, read the
+output, choose the options that matter, and what to check before trusting a
+result. It is the only document written for someone who just wants to use WADE.
+
+The rest, by audience:
+
 - [`docs/method.md`](docs/method.md) — what WADE computes and why. The contract.
 - [`docs/limits.md`](docs/limits.md) — what it cannot do; read before running.
 - [`docs/scaling.md`](docs/scaling.md) — large cohorts: every measurement, and
   what is still open.
+- [`docs/pvalue-review.md`](docs/pvalue-review.md) — the p-value estimators,
+  their measured behaviour, and the one open statistical problem. Written for
+  a statistician without code access.
 - [`docs/plotting.md`](docs/plotting.md) — the plotting **extension**: the data
   layer, how to plot elsewhere, and what this layer is not for.
 - [`docs/implementation-notes.md`](docs/implementation-notes.md) — parity with
   the R original, the cross-language traps, the Rust kernel's boundary.
+- [`docs/HANDOFF.md`](docs/HANDOFF.md) — for whoever develops WADE next.
 - [`ROADMAP.md`](ROADMAP.md) — the work queue.
 
 Two notebooks, both `quarto render`-able to HTML and PDF:
@@ -366,6 +376,13 @@ Extracted from the MCTP cfRNA analysis repository at commit `828f2f1c`, where it
 began as a small set of functions called HITLIB. No patient-derived data is
 included; everything here is synthetic. Details in
 [`reference/PROVENANCE.md`](reference/PROVENANCE.md).
+
+**The R implementation is retired.** It is not maintained, not installed, and
+not a dependency of anything. `reference/R/wade.R` is kept frozen, with
+checksums and a test that fails if it changes, because it is the oracle the
+golden fixtures in `tests/fixtures/` were generated from — the suite reads
+those JSON files and never runs R. Keeping it is what lets a future change be
+checked against the original rather than against its own output.
 
 ## License
 

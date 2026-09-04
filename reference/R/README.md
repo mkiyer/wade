@@ -1,11 +1,20 @@
-# `reference/R/` — the original R implementation, as a runnable sandbox
+# `reference/R/` — the original R implementation, frozen
 
-This directory holds the R code the WADE Python package will be ported *from*,
-pinned so it can still be executed. It is reference material and a
-cross-checking tool, not a package: there is no `DESCRIPTION`, no `NAMESPACE`,
-and nothing here is intended to be installed or maintained. The point is that
-when the port disagrees with the original, you can run the original and find out
-which one is wrong.
+**The R implementation is retired.** The port is complete, this code is no
+longer developed, and nothing in WADE depends on it at run time or at test
+time: the suite reads the golden fixtures in `tests/fixtures/*.json` and never
+invokes R.
+
+It is kept, frozen and checksummed, for one reason. Those fixtures were
+*generated* from this code, so it is the only way to check a future change
+against the original rather than against WADE's own output. Regenerating them
+(`tools/r/generate_fixtures.R`) is the one task that still needs a working R,
+and it is rare. `tests/test_reference_is_frozen.py` fails if any file here
+changes, because evidence that changes is not evidence — a patch belongs in
+the harness, never here.
+
+It is reference material, not a package: there is no `DESCRIPTION`, no
+`NAMESPACE`, and nothing here is intended to be installed or maintained.
 
 `wade.R` is a byte-identical copy of the cfRNA original and must stay that way.
 Verify with `shasum -a 256 -c sha256sums.txt` from this directory (8 files, all

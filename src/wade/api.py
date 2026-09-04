@@ -79,7 +79,13 @@ class WadeResult:
 
     stats: WadeStats
     tpm: np.ndarray
-    jitter: np.ndarray
+    #: Storage for the two derived matrices below. Both are `genes x samples`
+    #: and both are *reconstructible*, so a result normally keeps neither and
+    #: rebuilds them on access — see the `jitter` and `pseudocount` properties.
+    #: Carrying them cost 2x the count matrix on top of `tpm`, which set the
+    #: peak of a large run (`docs/scaling.md` 2.3).
+    _jitter: np.ndarray | None
+    _pc: tuple | np.ndarray | None
     perms: np.ndarray | None
     params: dict = field(default_factory=dict)
 
@@ -123,12 +129,6 @@ class WadeResult:
     #: **Read by nothing here.** It exists so figures and tables can optionally
     #: show it (``docs/plotting.md``); dropping it would change no number.
     gene_meta: dict = field(default_factory=dict)
-
-    #: The pseudocount added before the log-ratio curve, per cell — one count
-    #: in each sample's normalized units for :func:`wade` (``method.md``
-    #: §10.4), or ``None`` when ``pseudocount=0``. Kept so
-    #: :meth:`gene_detail` draws the curve the statistics were read from.
-    pseudocount: np.ndarray | None = None
 
     #: Bootstrap 95% intervals, ``(2, genes)`` each, when ``n_boot > 0``.
     ci_affected_fraction: np.ndarray | None = None
@@ -205,9 +205,63 @@ class WadeResult:
                              "pass the row and cond to wade_gene() directly")
         from .diagnostics import wade_gene
         i = self.gene_index(gene)
-        pc = None if self.pseudocount is None else self.pseudocount[i]
+        pc = self.pseudocount_row(i)
         return wade_gene(self.tpm[i], self.cond, pseudocount=pc,
                          max_probs=self.params.get("max_probs"))
+
+    @property
+    def jitter(self) -> np.ndarray:
+        """The continuity jitter the run used, `genes x samples`.
+
+        Rebuilt from the seed rather than stored. The four RNG streams are
+        spawned deterministically from one `SeedSequence`, so regenerating the
+        first reproduces the draw exactly -- asserted bit-for-bit in
+        `tests/test_layer2_normalization.py`. A result keeps the array only
+        when it cannot be rebuilt: `seed=None`, or a caller-supplied jitter.
+        """
+        if self._jitter is not None:
+            return self._jitter
+        from . import normalize as _normalize
+
+        js = np.random.SeedSequence(self.params["seed"]).spawn(4)[0]
+        return _normalize.draw_jitter(self.tpm.shape, noise=self.params["noise"],
+                                      rng=np.random.default_rng(js))
+
+    @property
+    def pseudocount(self) -> np.ndarray | None:
+        """One count in each sample's normalized units, `genes x samples`.
+
+        `None` when the pseudocount is switched off. Rebuilt on access from
+        the normalizer and library sizes rather than stored; the normalizer is
+        held by reference, so a matrix normalizer costs nothing extra because
+        the caller already has that array.
+
+        **Rebuilding is `O(genes x samples)`, so bind it once rather than
+        indexing it in a loop** -- `res.pseudocount[i]` in a loop over genes
+        rebuilds the whole matrix every time. `pseudocount_row()` is the
+        cheap way to get one gene.
+        """
+        if self._pc is None or isinstance(self._pc, np.ndarray):
+            return self._pc
+        from .thinning import one_count
+
+        normalizer, lib, norm_factor, scale = self._pc
+        return one_count(normalizer, lib, self.tpm.shape,
+                         norm_factor=norm_factor) * scale
+
+    def pseudocount_row(self, i: int) -> np.ndarray | None:
+        """One gene's pseudocount, without building the whole matrix."""
+        if self._pc is None:
+            return None
+        if isinstance(self._pc, np.ndarray):
+            return self._pc[i]
+        from .thinning import one_count
+
+        normalizer, lib, norm_factor, scale = self._pc
+        norm = normalizer if np.ndim(normalizer) == 0 else np.asarray(normalizer)[i]
+        row = one_count(np.atleast_1d(norm), lib, (1, self.tpm.shape[1]),
+                        norm_factor=norm_factor) * scale
+        return row[0]
 
     def columns(self) -> dict[str, np.ndarray]:
         """The result frame as a plain dict of equal-length arrays."""
@@ -414,7 +468,7 @@ def _perm_z(stat: np.ndarray, null: np.ndarray) -> np.ndarray:
 
 
 def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
-            alternative, keep_null, gene_names, tpm, jitter, pseudocount,
+            alternative, keep_null, gene_names, tpm, retain_jitter, pc,
             n_boot, sample_names, condition_meta, max_probs,
             gene_chunk=None, stage1_stat=None, stage1="grid",
             fit_backend="numpy", strata=None, gene_meta=None) -> WadeResult:
@@ -482,13 +536,12 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
         case_mean=obs.case_mean, ctrl_mean=obs.ctrl_mean,
         p_mean_shift=p_mean, padj_mean_shift=bh_adjust(p_mean),
         nexc_mean_shift=nexc, refined_mean_shift=refined,
-        stats=obs, tpm=tpm, jitter=jitter, perms=perms,
+        stats=obs, tpm=tpm, _jitter=retain_jitter, _pc=pc, perms=perms,
         null_mean_shift=null if keep_null else None,
         subset=sub, p_subset=p_subset, padj_subset=padj_subset,
         nexc_subset=nexc_subset, refined_subset=refined_subset,
         z_mean_shift=z_mean, z_subset=z_subset,
         cond=cond, sample_names=sample_names, gene_meta=dict(gene_meta or {}),
-        pseudocount=pseudocount,
         ci_affected_fraction=ci.get("affected_fraction"),
         ci_direction=ci.get("direction"),
         ci_subset_log2_fc=ci.get("subset_log2_fc"),
@@ -531,7 +584,8 @@ def _concat_subsets(parts: list[SubsetResult]) -> SubsetResult:
     )
 
 
-def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
+def _wade_chunked(*, counts, normalizer, cond, lib, jitter, retain_jitter,
+                  noise, norm_factor,
                   nperms, perms, seed, perm_rng, thin_rng, boot_rng,
                   n_exc_min, n_tail, alternative, allow_single_sample_group,
                   keep_null, gene_names, backend, subset, thin, pseudocount,
@@ -590,6 +644,12 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
                     out=thinned)
         del c_int
 
+    # The pseudocount is not materialized here: it is `norm_factor / (norm *
+    # lib)` scaled, so the result keeps the three small inputs and rebuilds it
+    # on access. `normalizer` is held by reference, so a matrix normalizer
+    # costs nothing extra -- the caller already has that array.
+    pc = ((normalizer, lib, norm_factor, float(pseudocount))
+          if pseudocount > 0 else None)
     pc_full = (one_count(normalizer, lib, counts.shape, norm_factor=norm_factor)
                * pseudocount if pseudocount > 0 else None)
 
@@ -653,7 +713,7 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
         obs=obs, null=null, perms=perms, sub=sub, ci=ci, cond=cond,
         nperms=nperms, seed=seed, n_exc_min=n_exc_min, n_tail=n_tail,
         alternative=alternative, keep_null=keep_null, gene_names=gene_names,
-        tpm=tpm, jitter=jitter, pseudocount=pc_full, n_boot=n_boot,
+        tpm=tpm, retain_jitter=retain_jitter, pc=pc, n_boot=n_boot,
         sample_names=sample_names, condition_meta=condition_meta,
         max_probs=max_probs, gene_chunk=gene_chunk,
         stage1_stat=stage1_stat, stage1=stage1, fit_backend=fit_backend,
@@ -862,6 +922,7 @@ def wade(
         js, ps, ts, bs = np.random.SeedSequence(seed).spawn(4)
         jitter_rng, perm_rng, thin_rng, boot_rng = (np.random.default_rng(s_) for s_ in (js, ps, ts, bs))
 
+    user_jitter = jitter is not None
     if jitter is None:
         jitter = _normalize.draw_jitter(counts.shape, noise=noise, rng=jitter_rng)
     else:
@@ -879,9 +940,15 @@ def wade(
            else np.asarray(lib_sizes, dtype=np.float64))
     _check_libraries(lib, sample_names, allow_empty_samples)
 
+    # The result rebuilds the jitter from the seed rather than carrying it
+    # (a full genes x samples matrix). It can only do that when the draw is
+    # reproducible, so keep the array when it is not.
+    retain_jitter = jitter if (user_jitter or seed is None) else None
+
     return _wade_chunked(
         counts=counts, normalizer=normalizer, cond=cond, lib=lib,
-        jitter=jitter, noise=noise, norm_factor=norm_factor,
+        jitter=jitter, retain_jitter=retain_jitter,
+        noise=noise, norm_factor=norm_factor,
         nperms=nperms, perms=perms, seed=seed, perm_rng=perm_rng,
         thin_rng=thin_rng, boot_rng=boot_rng, n_exc_min=n_exc_min,
         n_tail=n_tail, alternative=alternative,
