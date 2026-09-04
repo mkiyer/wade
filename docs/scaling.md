@@ -900,10 +900,102 @@ different quantity.
 self-contained version of all of this for a statistician without the code —
 the method, the five estimators, the eight cells, the diagnosis (bounded
 support, reversed-Weibull domain, and two degenerate ways of handling a
-negative shape) and eight questions. This section stays canonical; that file
+negative shape) and six ordered questions. This section stays canonical; that file
 is the snapshot.
 
 ---
+
+---
+
+### 4.11 The reviewer's stage-2 endpoint, tested — and why the route is closed
+
+`pvalue-review.md` §8 asked for a computable upper bound on stage 2's
+statistic, because a GPD with the endpoint **fixed** at the analytic maximum
+is the one tail model that was never anti-conservative for stage 1 (§4.8). A
+reviewer proposed one: sort the gene's observed log-ratio curve descending, so
+that
+
+$$B_{k,\max} = \sum_{i\le k} R_{(i)} - \frac{k}{m}\sum_i R_i , \qquad
+  x_{\max} = \max_{k<m} \frac{B_{k,\max} - \mu_k}{\sigma_k}$$
+
+and then fit $S(y) = (1 - (y-u)/(x_{\max}-u))^{\alpha}$, whose survival is
+strictly positive below $x_{\max}$ by construction.
+
+**It is not a bound, and where it is not violated it equals the observation.**
+Both stages of the claim were measured against 2,000,000 permutations per
+gene, 24 genes, on the frozen statistic:
+
+| | 40 v 40 | 60 v 20 |
+|---|---|---|
+| genes where some permutation exceeds $x_{\max}$ | **16 / 24** | **24 / 24** |
+| median violation rate | 5.7e-4 | 4.1e-2 |
+| worst violation rate | **5.9e-2** | **3.0e-1** |
+| genes where $x_{\max}$ equals $T_{\text{observed}}$ exactly | 16 / 24 | 19 / 24 |
+
+At 60 v 20, **30% of ordinary permutations exceed the claimed hard upper
+bound** on the worst gene. Both failures have one cause. The construction
+treats the multiset $\{R_i\}$ as invariant under relabelling; it is not,
+because a permutation rebuilds *both* quantile functions rather than reordering
+one curve. Measured directly at 40 v 40, over 4,000 permutations:
+
+* $\sum_i R_i$, which the formula carries over as a constant, has an observed
+  value of +9.3 and a 1st-to-99th percentile range of **−17.3 to +16.8**.
+* Individual $R_i$ exceed the largest *observed* $R$ in up to **7.0%** of
+  permutations, so "the highest achievable log-fold ratios" are not the
+  observed ones.
+
+And the second failure is the first one seen from the other side. For a gene
+with a genuine top-quantile subset effect the observed $R$ is *already*
+descending, so sorting it is a no-op and $x_{\max}$ collapses onto $T$ itself
+— giving $z_{\text{obs}} = 1$, survival exactly 0, and $p = 0$ on 16 of 24
+genes at 40 v 40 and 17 of 24 at 60 v 20. The construction is vacuous for
+precisely the genes it exists to serve.
+
+**A corrected bound is available, is valid, and does not help.** Write
+$B_k = \sum_i w_i (L^{(1)}_i - L^{(0)}_i)$ with $w_i = \mathbb{1}\{i \le k\} -
+k/m$ and $L = \log_2 Q$. Type-7 quantiles are elementwise monotone in the
+sorted sample, so every position of either group's grid is bracketed by the
+grid of the extreme subset — cases = the $n_1$ largest pooled values, or the
+$n_1$ smallest — and each position can be bounded in the direction its weight
+wants. Prefix sums give every $k$ in $O(m)$. **Zero violations in 96,000,000
+gene-permutations** across both geometries.
+
+It is also useless, and the reason is the finding worth keeping:
+
+| gene | true $\xi$ (from 2e6) | $T_{\text{obs}}$ | max null in 2e6 | corrected $x_{\max}$ | fixed-endpoint $\hat p/p$ |
+|---|---|---|---|---|---|
+| 12 | **+0.312** | 7.77 | 8.57 | 15.02 | **0.007** |
+| 11 | **+0.149** | 5.82 | 7.09 | 14.08 | **0.018** |
+| 9 | −0.045 | 3.97 | 4.29 | 8.42 | 5.41 |
+
+**Stage 2's endpoint is real but irrelevant.** It sits at roughly twice the
+largest value two million permutations ever reach, so over the entire range
+where p-values live the null behaves like an unbounded heavy tail — genuinely
+$\xi > 0$ on some genes. Anchoring an extrapolation to a point that far out
+discards the local tail behaviour, which is what actually determines $p$ at
+1e-6, and forcing bounded support onto a $\xi = +0.31$ tail underestimates by
+140×. Over the nine genes with $p_{\text{true}} < 10^{-4}$ the fixed-endpoint
+fit has median 0.755 and worst 0.074 — anti-conservative, and worse than
+GPD-ML, which §4.5 already disqualified for exactly that.
+
+This is the sharpest available statement of how the two stages differ.
+**Stage 1's maximum is approached by the permutation null** — the top-$n_1$
+assignment is itself a permutation — so the endpoint carries information and
+the fixed-endpoint GPD works. **Stage 2's is not approached**, so it does not.
+The fixed-endpoint family is closed for stage 2, and it is closed for a
+structural reason rather than for want of a better bound.
+
+**What survives from the same review.** Freezing $\mu_k$ and $\sigma_k$ from a
+separate uniform sample is right and is unchanged as the first step; the truth
+runs in this section are computed on the frozen statistic and it behaves.
+Applying an expensive estimator only to genes at the empirical floor is right.
+The arithmetic offered for it is not: at 18% of 20,000 genes and a **measured
+2.98 s/gene** for stage-2 multilevel at 40 v 40 — not the 1 s assumed, and
+rising with $n$ — that tier is 187 min single-threaded, or about 12 min at
+perfect 16-core scaling, against the "under 2 minutes" claimed. Multilevel
+does reach 2e-16 on these genes, which is the thing no tail fit does.
+
+Reproduced by `tools/pvalue_study.py` plus the endpoint constructions above.
 
 ---
 

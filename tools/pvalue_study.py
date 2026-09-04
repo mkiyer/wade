@@ -1,4 +1,4 @@
-"""`docs/scaling.md` §4.5–§4.7 — how far into the tail can each method be trusted?
+"""`docs/scaling.md` §4.5–§4.11 — how far into the tail can each method be trusted?
 
 Pick a design small enough that **brute force is the ground truth**, then hold
 every candidate to it at true p-values spanning 1e-3 to 1e-8. A study, not part
@@ -51,7 +51,7 @@ from dataclasses import dataclass
 import numpy as np
 
 import wade
-from wade.permutation import null_statistics, subset_null_backend
+from wade.permutation import null_statistics, split_groups, subset_null_backend
 from wade.pvalues import gpd_tail_p, perm_pvalues
 from wade.stats import wade_stats
 
@@ -440,6 +440,86 @@ def multilevel2(d: Design, xs, q, mu, safe, t_obs, genes,
         out[j] = float(np.exp(_log_p(k, int((s >= a).sum()), n_sample)))
         rounds[j] = k
     return out, rounds
+
+
+# ---------------------------------------------------------------------------
+# stage 2 endpoints (scaling.md 4.11)
+
+
+def reviewer_xmax(d: Design, xs, q, mu, safe, g):
+    """The proposed stage-2 endpoint: the observed `R` curve, sorted descending.
+
+    **Not a bound.** It treats the multiset `{R_i}` as invariant under
+    relabelling, but a permutation rebuilds *both* quantile functions rather
+    than reordering one curve, so permutations reach `R` values outside the
+    observed set and carry a different `sum(R)`. Measured, permutations exceed
+    it on 16/24 genes at 40v40 and 24/24 at 60v20, up to 30% of draws. Kept
+    because reproducing the refutation is the point.
+    """
+    from wade.quantiles import type7_quantiles
+    from wade.subset import log_ratio_curve
+
+    m = len(q)
+    i1, i0 = split_groups(d.cond)
+    R = log_ratio_curve(type7_quantiles(xs[g:g + 1, i1], q),
+                        type7_quantiles(xs[g:g + 1, i0], q))[0]
+    k = np.arange(1, m)
+    bk = np.cumsum(np.sort(R)[::-1])[:m - 1] - (k / m) * R.sum()
+    return float(np.max((bk - mu[g, :m - 1]) / safe[g, :m - 1]))
+
+
+def valid_xmax(d: Design, xs, q, mu, safe, g):
+    """A relaxation that **is** a bound: 0 violations in 96e6 gene-permutations.
+
+    `B_k = sum_i w_i (L1_i - L0_i)` with `w_i = 1{i<=k} - k/m` and `L = log2 Q`.
+    Type-7 quantiles are elementwise monotone in the sorted sample, so every
+    grid position of either group is bracketed by the grid of the extreme
+    subset (that group taking the largest, or the smallest, pooled values);
+    bound each position in the direction its weight wants. Prefix sums give
+    every `k` in O(m).
+
+    Valid and useless: stage 2's endpoint lands at about twice the largest of
+    2e6 null draws, so a fit anchored there is anti-conservative to 0.007 on a
+    gene whose true tail shape is +0.31. See `scaling.md` 4.11.
+    """
+    from wade.quantiles import type7_quantiles
+
+    m = len(q)
+    v = np.sort(xs[g])[::-1]
+    hi1 = type7_quantiles(v[None, :d.n1], q)[0]
+    lo1 = type7_quantiles(v[None, -d.n1:], q)[0]
+    hi0 = type7_quantiles(v[None, :d.n0], q)[0]
+    lo0 = type7_quantiles(v[None, -d.n0:], q)[0]
+    upper = np.log2(hi1) - np.log2(lo0)          # w_i > 0: the head
+    lower = np.log2(lo1) - np.log2(hi0)          # w_i < 0: the tail
+    k = np.arange(1, m)
+    bk = ((1 - k / m) * np.cumsum(upper)[:m - 1]
+          - (k / m) * (lower.sum() - np.cumsum(lower)[:m - 1]))
+    return float(np.max((bk - mu[g, :m - 1]) / safe[g, :m - 1]))
+
+
+def fixed_endpoint_p(obs, null, xmax, n_tail=250):
+    """`S(y) = (1 - (y-u)/(xmax-u))**alpha`, the shape by ML in closed form.
+
+    With the endpoint fixed the GPD has one free parameter and
+    `alpha = -n / sum(log(1 - z))` exactly, `z` the exceedances rescaled onto
+    `[0, 1)`. Equivalent to a GPD with `xi = -1/alpha`, `sigma = (xmax-u)/alpha`.
+    Returns `None` where refinement does not fire, and `0.0` when the
+    observation is at or past the claimed endpoint -- which is the outcome that
+    matters, and is what the proposed endpoint produces on 20 of 23 genes.
+    """
+    s = np.sort(null)[::-1]
+    thr = float(s[n_tail])
+    exc = s[:n_tail][s[:n_tail] > thr]
+    if exc.size < 10 or obs <= thr or not xmax > thr:
+        return None
+    width = xmax - thr
+    z = np.clip((exc - thr) / width, 0.0, 1 - 1e-15)
+    alpha = -len(z) / np.log1p(-z).sum()
+    z_obs = (obs - thr) / width
+    if z_obs >= 1.0:
+        return 0.0
+    return (n_tail / len(s)) * (1 - z_obs) ** alpha
 
 
 # ---------------------------------------------------------------------------

@@ -323,8 +323,18 @@ observation lands near or past it.** The two shipped behaviours are the two
 degenerate answers.
 
 For stage 1 that problem is now bypassed rather than solved — the saddlepoint
-does not model a tail at all. **For stage 2 it is unsolved**, and stage 2 has
-no analytic endpoint to exploit either (see question 1).
+does not model a tail at all.
+
+**For stage 2 the problem is not the same problem**, which took a refuted
+proposal to establish (question 2). Stage 2's null does have a finite endpoint
+in principle, but it is far above anything the null reaches, and the fitted
+shape there is genuinely *positive* on some genes: `ξ = +0.31` measured from
+two million permutations on the gene where every bounded fit fails worst. So
+stage 2 is not a bounded-support problem that needs its endpoint handled well.
+It is a mixed regime — some genes bounded, some heavy-tailed — with no
+observable telling them apart at `B = 2,000`, which is why the shipped
+estimator is simultaneously 4–80× conservative and anti-conservative to 0.019
+depending on the gene.
 
 ---
 
@@ -334,7 +344,7 @@ no analytic endpoint to exploit either (see question 1).
 |---|---|---|
 | statistic | difference of group means (a subset sum at every geometry) | max over widths of a studentised bridge |
 | shipped p-value | permutation + GPD, 3–4,906× conservative | permutation + GPD, 4–80× off *and* anti-conservative to 0.019 |
-| available answer | **double saddlepoint** — 0.99–1.00 median, no floor, no sampling | **none** |
+| available answer | **double saddlepoint** — 0.99–1.00 median, no floor, no sampling | **none**; fixed-endpoint route closed (§8 q2) |
 | status | implemented as `stage1="saddlepoint"`, opt-in, validated | **open** |
 
 Stage 2 is the harder and more important half: it is WADE's distinctive stage,
@@ -360,15 +370,30 @@ Specifically: is there a standard treatment for tail probabilities near an
 *estimated* finite endpoint — one that degrades gracefully as the observation
 approaches and passes it, rather than saturating at zero?
 
-### 2. Stage 2's endpoint
+### 2. Stage 2's endpoint — asked, answered, and closed
 
-For stage 1 the maximum of the statistic is available in closed form (the
-largest `n1` values as cases), and a GPD with the endpoint **fixed** there is
-never anti-conservative and only 1.5–35× conservative (Appendix B). Stage 2's
-statistic is `max_k (B_k − μ_k)/σ_k` over a cumulative bridge, and we do not
-know its maximum. **Is there a computable upper bound — even a loose one?** A
-greedy or relaxation bound would make the fixed-endpoint approach available
-for stage 2 and might close this entirely.
+*This was the second question. It has since been tested and the route is
+closed; it is left here because the reason is informative and because it
+narrows what question 1 can accept.* A reviewer proposed sorting the observed
+`R` curve descending to bound `B_k`. That is not a bound — a permutation
+rebuilds both quantile functions rather than reordering one curve, and up to
+30% of ordinary permutations exceed it — and on the genes where it is not
+violated it collapses onto the observed statistic itself, giving survival
+exactly 0. A *valid* relaxation bound does exist and was constructed and
+verified (zero violations in 96,000,000 gene-permutations). **It does not
+help**, and that is the useful part:
+
+> Stage 2's endpoint sits at roughly **twice the largest value two million
+> permutations ever reach**. Over the whole range where p-values live the null
+> behaves like an unbounded heavy tail — genuinely `ξ = +0.31` on some genes —
+> so a bounded fit anchored that far out underestimates by 140×.
+
+**Stage 1's maximum is approached by the permutation null** (the top-`n1`
+assignment *is* a permutation), which is why the fixed-endpoint GPD works
+there. **Stage 2's is not approached.** The whole fixed-endpoint family is
+therefore closed for stage 2, for a structural reason rather than for want of
+a tighter bound — so an answer to question 1 that relies on the endpoint will
+not work here either. Full measurements in `scaling.md` §4.11.
 
 ### 3. Should stage 2's studentisation be frozen?
 
@@ -463,6 +488,25 @@ same ground is not covered twice.
   though question 6 revisits it under strong correlation.
 
 **Refuted by measurement.**
+
+* *Bound `B_k` by sorting the observed `R` descending, then fit a
+  fixed-endpoint GPD.* Not a bound: 16/24 genes at 40 v 40 and **24/24 at
+  60 v 20** have permutations that exceed it, up to 30% of them. The
+  construction holds the multiset `{R_i}` fixed, but a permutation rebuilds
+  both quantile functions — measured, `Σ R_i` swings over −17.3 to +16.8
+  against an observed +9.3, and individual `R_i` exceed the largest observed
+  `R` in 7% of permutations. Where it is *not* violated it equals the observed
+  statistic exactly (16/24 and 19/24 genes), because a genuine top-quantile
+  subset effect already makes `R` descending, so sorting is a no-op — survival
+  0, `p` 0, on 16/24 and 17/24 genes. A corrected relaxation bound is valid (zero
+  violations in 96,000,000 gene-permutations) and still anti-conservative to
+  0.007, for the structural reason in question 2. `scaling.md` §4.11.
+
+* *Apply the expensive estimator only to the ~18% of genes at the empirical
+  floor, keeping the run under two minutes.* The tiering is right; the
+  arithmetic is not. Stage-2 multilevel measures **2.98 s/gene** at 40 v 40 and
+  rises with n, so 18% of 20,000 genes is 187 min single-threaded and about
+  12 min at perfect 16-core scaling.
 
 * *`n_tail = 250` drags bulk data into the fit and biases ξ̂ negative; use
   20–60.* Backwards. The shape is negative at every threshold from 1.2% to

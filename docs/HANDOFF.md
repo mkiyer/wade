@@ -135,9 +135,15 @@ The queue is [`../ROADMAP.md`](../ROADMAP.md). In short:
    permutations the tail is read from, which makes T not a fixed function of
    the labels and blocks every conditioned-sampling method), then apply kernel
    multilevel splitting to the genes at the floor. Multilevel is measured at
-   0.94 median / 2.5× worst but costs ~1 s per gene, so it must be a
-   second pass over few genes, not the default. A computable upper bound on T
-   would be worth more than either and is question 2 for the collaborators.
+   0.94 median / 2.5× worst but costs a measured **2.98 s/gene** at 40 v 40
+   (rising with n), so it must be a second pass over few genes, not the
+   default — 18% of 20,000 genes is 187 min single-threaded, about 12 min
+   threaded. A computable upper bound on T looked like the better prize and
+   **is no longer available**: one was proposed, tested and closed on
+   2026-09-04 (`scaling.md` §4.11). Stage 2's endpoint is real but sits at
+   about twice anything two million permutations reach, and the fitted shape
+   is genuinely positive on some genes, so no fixed-endpoint fit can work.
+   That closes the whole family, not one construction.
 
 1. **The benchmark on real cohorts.** `notebooks/benchmark.qmd` landed
    2026-09-02 on *simulated* counts — nine methods, one permutation null, one
@@ -534,12 +540,22 @@ splitting is the method that would then apply. Estimate them from a separate
 uniform draw, check parity moves only where expected, and record the change as
 a named answer change in `scaling.md`.
 
-Do **not** start by trying more GPD variants. `pvalue-review.md` Appendix B
-records five that were tested and refuted, including the two most natural ones
-(a smaller `n_tail`, and a profile-likelihood bound). The diagnosis is in §6 of
-that document: the null has a finite right endpoint, the negative shape fit is
-*correct*, and both shipped behaviours are degenerate answers to the same
-question — how to behave near an endpoint estimated from 250 order statistics.
+Do **not** start by trying more GPD variants, and in particular **do not try
+to bound stage 2's statistic.** `pvalue-review.md` Appendix B records seven
+suggestions tested and refuted, including the three most natural ones: a
+smaller `n_tail`, a profile-likelihood bound, and a fixed endpoint. The last is
+the important one, because it is the route stage 1 succeeded by. It fails for
+stage 2 structurally: stage 1's maximum is *approached* by the permutation null
+(the top-`n1` assignment is itself a permutation), stage 2's is not — measured,
+the endpoint is about twice the largest of two million null draws, and the true
+tail shape is `ξ = +0.31` on the gene where bounded fits fail worst. Stage 2 is
+a **mixed** regime, some genes bounded and some heavy-tailed, with nothing at
+`B = 2,000` distinguishing them. That, not a badly handled endpoint, is why the
+shipped estimator is conservative and anti-conservative at once.
+
+So the live routes for stage 2 are the sampling ones — multilevel splitting on
+the frozen statistic, applied only to genes at the floor — and any tail model
+that can *tell the two regimes apart* rather than assuming either.
 
 ### 2. Get the collaborators' answers back into the tree
 

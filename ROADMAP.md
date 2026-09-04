@@ -136,10 +136,14 @@ failure was real and is the interesting one: see §2's Release entry.
   question 4 in `pvalue-review.md` §8.
   **Stage 2 stays open** and is now §1: freeze the moments, then
   multilevel with the move in the kernel for genes at the empirical floor;
-  no analytic endpoint exists for it, so none of the fixed-endpoint routes
-  reach it. A computable upper bound on stage 2's statistic — even a loose
-  one — would make the fixed-endpoint GPD available and is worth more than
-  either route.
+  no analytic endpoint exists for it. A computable upper bound was the
+  obvious hope and was **closed on 2026-09-04** (`scaling.md` §4.11): a
+  proposed bound was not one (30% of permutations exceed it at 60 v 20) and
+  a corrected, verified bound does not help, because stage 2's endpoint sits
+  at about twice anything 2e6 permutations reach and its true tail shape is
+  positive on some genes. The fixed-endpoint family is closed for stage 2 for
+  a structural reason: stage 1's maximum is approached by the permutation
+  null, stage 2's is not. **Sampling is the live route.**
 - **GPD moment fit → maximum likelihood.** Moments are poorly behaved for
   `xi > 0.5`, the heavy-tailed regime the refinement exists for. Two
   constraints on any upgrade: the floor `1/(B · n_tail)` must survive it (it
