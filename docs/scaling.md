@@ -263,16 +263,18 @@ sequentially left-to-right for R parity (`implementation-notes.md` hazard 10).
 This must therefore be an **opt-in fast path**, with the parity-pinned kernel
 remaining the default and the reference.
 
-**The deeper question this raises.** `method.md` §2 already apologizes for the
-quadrature on unbalanced designs — "a grid quadrature that over-weights the
-extremes of the larger group ... it should be read as signed quantile area
-rather than a drop-in mean estimate". Combined with §2.1, where a capped grid
-makes the quadrature drift further from the mean difference, there is a case
-for **defining `mean_shift` as the difference of group means outright**. That
-would be faster, simpler, exactly interpretable, and identical on balanced
-designs — but it breaks parity with the R reference on unbalanced fixtures,
-which is a decision about what the fixtures are for, not a performance call.
-**Do not make it silently.**
+**The deeper question this raises — decided 2026-09-03.** `method.md` §2
+already apologizes for the quadrature on unbalanced designs — "a grid
+quadrature that over-weights the extremes of the larger group ... it should be
+read as signed quantile area rather than a drop-in mean estimate". There was
+always a case for **defining `mean_shift` as the difference of group means
+outright**, and §4.9 is the evidence that settled it. It is not a change of
+statistic: `∫₀¹ Q(p) dp = E[X]` is an identity, so the signed area between two
+quantile functions *is* the difference of means, and the grid was only ever a
+quadrature of that integral — exact when balanced, approximate otherwise. The
+decision replaces the approximation with the exact value. It breaks byte-parity
+with the R reference on unbalanced fixtures; that is the price, it is stated,
+and `test_divergences.py` is where it is recorded when the code lands.
 
 **Landed 2026-08-20** as `wade(..., stage1="gemm")`, opt-in, balanced designs
 only (refused otherwise), grid path unchanged and still the default. The
@@ -770,6 +772,50 @@ is.
 "analytically known or tightly bounded" for stage 1 only — stage 2's maximum
 over widths of a standardized bridge has no closed form, so the
 four-parameter-Beta and fixed-endpoint suggestions do not reach it.
+
+### 4.9 Stage 1, decided: the exact area and the saddlepoint
+
+The reviewer's first recommendation, tested until there was nothing left to
+test at this scale (`tools/pvalue_meandiff.py`,
+`tools/pvalue_saddlepoint_counts.py`). Stage 1 becomes the exact signed area —
+`x1bar − x0bar` — at every geometry, and its p-value comes from Skovgaard's
+double saddlepoint against the exact permutation null. No permutations, no
+floor, no extreme-value parameter.
+
+Ratio of the saddlepoint to brute-force truth, median over each decade of true
+p and the worst single gene either way:
+
+| data | design | resolved | median, 1e-2 → 1e-7 | worst-lo | worst-hi |
+|---|---|---|---|---|---|
+| log-normal | 40v40 | 44/64 | 1.00 · 0.99 · 0.99 · 1.02 · 0.91 | 0.61 | 1.02 |
+| log-normal | 60v20 | 52/64 | 1.00 · 1.00 · 1.00 · 0.95 · 1.10 | 0.83 | 1.34 |
+| log-normal | 70v10 | 62/64 | 1.01 · 1.00 · 1.01 · 0.99 · 1.01 | 0.66 | 1.08 |
+| log-normal | 20v60 | 54/64 | 0.99 · 0.99 · 1.00 · 1.02 · 1.15 | 0.75 | 1.37 |
+| **NB counts**, through `wade()`'s normalization and jitter | 40v40 | 30/64 | 1.00 · 1.00 · 1.02 · 0.99 · 0.84 | 0.84 | 1.05 |
+| **NB counts, 20% zeros, median count 3** | 40v40 | 38/64 | 1.01 · 1.06 · 0.94 · 0.93 · 0.76 | 0.67 | 1.54 |
+| **NB counts** | **300v300** | 31/64 | 1.00 · 1.00 · — · 1.03 · 1.14 | 0.89 | 1.23 |
+
+Three things to read off it. The saddlepoint is **geometry-blind** once the
+statistic is a subset sum, which is the whole point. It is **better at larger
+n**, as an asymptotic method should be — worst-lo 0.89 at 300 v 300 against
+0.61 at 40 v 40. And it **holds on sparse counts**, with more scatter (worst-hi
+1.54 on the zero-inflated cohort) but no anti-conservative failure below 0.67.
+Against that, what ships today is 3–4,906× conservative on the same genes.
+
+**Not yet measured**: heavier zero-inflation than 20% — the real cohort has 47%
+(§7.5) — and n above 600. Both belong in the implementation's own test suite.
+
+**Cost.** 62–134 ms per gene as an unoptimized nested bisection (90 × 90 CGF
+evaluations). Newton on both variables, vectorized across genes, should bring a
+20,000-gene run to seconds; that is an estimate until it is written, and the
+current stage-1 permutation loop it replaces is 0.3 ms per gene, so the change
+is a resolution win and roughly compute-neutral, not a speedup.
+
+**What it removes.** Stage 1's permutation loop, its GPD refinement, its
+`1/(B·n_tail)` floor, and the need for `z_mean_shift` as a ranking column — a
+p-value with no floor ranks on its own. `stage1="gemm"` becomes the only stage 1
+and loses its balance guard. `w1` is untouched: it is the unsigned area and a
+different quantity.
 
 **Written up for outside help.** [`pvalue-review.md`](pvalue-review.md) is the
 self-contained version of all of this for a statistician without the code —

@@ -105,11 +105,19 @@ failure was real and is the interesting one: see §2's Release entry.
   `sigma` are **frozen** from a uniform sample, because stage 2's statistic is
   standardized by moments estimated from the same permutations the tail is
   read from and is therefore not a fixed function of a label assignment.
-  **Next**, in order: an unbalanced design (untested, and the case that
-  decides whether the saddlepoint is reachable at all without §3.1's
-  decision); more genes in stage 2's deep bins, which hold 1-3; then a
-  decision, which means `subset_null_backend` taking frozen moments and so
-  changes what stage 2 reports.
+  **Stage 1 is decided** (`scaling.md` §3.1, §4.9): the exact signed area
+  `x1bar − x0bar` at every geometry, p-value by double saddlepoint, no
+  permutations. Validated against 1e8-permutation truth on four geometries,
+  on NB counts through `wade()`'s own normalization, on sparse counts, and at
+  300 v 300 — 0.91–1.15 median, worst 0.61–0.89, where the shipped path is
+  3–4,906× conservative. **To implement**: vectorized Newton saddlepoint;
+  `stage1="gemm"` becomes the only stage 1 and loses its balance guard; the
+  quadrature and `z_mean_shift` retire; parity divergence on unbalanced
+  fixtures recorded in `test_divergences.py`; validate at 47% zeros and
+  n > 600 in the suite. **Stage 2 stays open**: freeze the moments, then
+  multilevel with the move in the kernel for genes at the empirical floor;
+  no analytic endpoint exists for it, so none of the fixed-endpoint routes
+  reach it.
 - **GPD moment fit → maximum likelihood.** Moments are poorly behaved for
   `xi > 0.5`, the heavy-tailed regime the refinement exists for. Two
   constraints on any upgrade: the floor `1/(B · n_tail)` must survive it (it
