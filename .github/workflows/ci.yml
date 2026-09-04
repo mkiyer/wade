@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload the built wheels and sdist to PyPI"
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -71,25 +76,39 @@ jobs:
           pytest -q -m "not kernel"
 
   wheels:
-    name: wheel / ${{ matrix.os }}
+    name: wheel / ${{ matrix.target }} ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # One row per wheel PyPI needs. abi3-py310 means a single wheel per
+        # platform covers every supported Python, so this matrix is the whole
+        # distribution. Two rows cross-compile and cannot run what they build:
+        # aarch64 Linux (built in a QEMU container) and x86_64 macOS (built on
+        # an arm64 runner). `native` gates the smoke test rather than dropping
+        # those platforms, which is how users on them end up needing a Rust
+        # toolchain.
+        include:
+          - { os: ubuntu-latest,  target: x86_64,  manylinux: auto, native: true  }
+          - { os: ubuntu-latest,  target: aarch64, manylinux: auto, native: false }
+          - { os: macos-latest,   target: aarch64, manylinux: "",   native: true  }
+          - { os: macos-latest,   target: x86_64,  manylinux: "",   native: false }
+          - { os: windows-latest, target: x64,     manylinux: "",   native: true  }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
-      # abi3-py310: one wheel per platform covers every supported Python.
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
           command: build
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
           args: --release --out dist
       - name: Check the wheel installs and imports on its own
+        if: matrix.native
         shell: bash
         run: |
           python -m pip install --upgrade pip
@@ -98,10 +117,14 @@ jobs:
           # the wheel itself from dist and nowhere else.
           pip install "numpy>=1.24"
           pip install --no-index --find-links dist --no-deps wade
-          python -c "import wade, wade.plotting as P; print(wade.__version__, wade.permutation.HAVE_RUST_KERNEL, P.available_backends())"
+          # The kernel must be present in the wheel: a wheel that silently
+          # fell back to NumPy is the failure this job exists to catch.
+          python -c "import wade; assert wade.permutation.HAVE_RUST_KERNEL, \
+              'wheel has no compiled kernel'; print(wade.__version__, 'kernel ok')"
+          python -c "import wade.plotting as P; print(P.available_backends())"
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}
+          name: wheel-${{ matrix.os }}-${{ matrix.target }}
           path: dist/*.whl
 
   sdist:
@@ -114,3 +137,26 @@ jobs:
         with: { command: sdist, args: --out dist }
       - uses: actions/upload-artifact@v4
         with: { name: sdist, path: dist/*.tar.gz }
+
+  # Deliberately NOT triggered by a tag. A PyPI upload cannot be undone and a
+  # version number cannot be reused, so publishing is a button press: run the
+  # workflow manually with `publish` checked. Everything above it still runs
+  # first, so nothing reaches PyPI that has not passed the full matrix.
+  #
+  # Needs a PyPI trusted publisher for this repo (pypi.org -> the project ->
+  # Publishing), and a GitHub environment named `pypi`. No API token.
+  publish:
+    needs: [test, oldest-numpy, no-kernel, wheels, sdist]
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: "{wheel-*,sdist}"
+          merge-multiple: true
+      - run: ls -l dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

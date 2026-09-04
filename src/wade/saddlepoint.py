@@ -204,7 +204,13 @@ def saddlepoint_subset_sum(values, n1, a, *, upper=True):
     back to it. That boundary is the one place this is not a relative-error
     method, and it is the region where the empirical p-value works.
     """
-    from scipy.stats import norm
+    try:
+        from scipy.stats import norm
+    except ModuleNotFoundError as exc:      # pragma: no cover - see api.py
+        raise ImportError(
+            "the saddlepoint p-value needs SciPy, which WADE does not require "
+            "otherwise. Install it, or use the default stage1='grid'."
+        ) from exc
 
     v = np.ascontiguousarray(values, dtype=np.float64)
     if v.ndim != 2:

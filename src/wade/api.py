@@ -329,6 +329,19 @@ def _validate_stage1(stage1: str, cond, fit_backend: str = "numpy") -> None:
         raise ValueError(
             f"stage1 must be 'grid', 'gemm' or 'saddlepoint'; got {stage1!r}"
         )
+    if stage1 == "saddlepoint":
+        # Fail here, not four minutes into the permutation loop. SciPy is the
+        # one dependency the statistic does not otherwise have, and this is
+        # the only path that needs it.
+        from importlib.util import find_spec
+
+        if find_spec("scipy") is None:
+            raise ImportError(
+                "stage1='saddlepoint' needs SciPy, which WADE does not "
+                "require otherwise. Install it (`pip install scipy` or "
+                "`conda install scipy`), or use the default stage1='grid', "
+                "which needs only NumPy (docs/method.md §6)."
+            )
     if stage1 == "gemm":
         cond = np.asarray(cond)
         n1, n0 = int(np.sum(cond == 1)), int(np.sum(cond == 0))

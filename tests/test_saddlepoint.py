@@ -239,3 +239,27 @@ def test_it_resolves_past_the_permutation_floor():
     # and the diagnostic columns keep their meaning
     assert not sp.refined_mean_shift.any()
     assert np.all(np.isfinite(sp.z_mean_shift))
+
+
+def test_missing_scipy_fails_fast_and_says_what_to_do(monkeypatch):
+    """SciPy is the one dependency the statistic does not otherwise have, and
+    this is the only path that needs it. A consumer who installed the wheel
+    (NumPy only) and opted in used to get a bare ``ModuleNotFoundError`` from
+    inside the tail computation — after the permutation loop had already run,
+    which on a real cohort is minutes of work thrown away. The check now sits
+    in ``_validate_stage1``, so it costs nothing and fires before any work."""
+    import importlib.util
+
+    real = importlib.util.find_spec
+
+    def no_scipy(name, *a, **kw):
+        return None if name == "scipy" else real(name, *a, **kw)
+
+    monkeypatch.setattr(importlib.util, "find_spec", no_scipy)
+    counts = _cohort(seed=0)
+    with pytest.raises(ImportError, match="needs SciPy"):
+        wade.wade(counts, np.ones(len(counts)), COND, nperms=10, seed=1,
+                  lib_sizes=np.ones(len(COND)), stage1="saddlepoint")
+    # and the default path is untouched by SciPy's absence
+    wade.wade(counts, np.ones(len(counts)), COND, nperms=10, seed=1,
+              lib_sizes=np.ones(len(COND)))
