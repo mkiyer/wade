@@ -265,11 +265,19 @@ Three things fall out, and two of them contradict what this section assumed:
   3.86 GB, and `thin=False` to 5.22. So roughly 2.1 GB of the 6 is the subset
   test's working space, which is neither chunked nor proportional to `B`.
 
-*Two hypotheses closed.* It is not the null matrices (`B` barely matters,
-above) and it is not thread-local working space: `RAYON_NUM_THREADS=1` peaks
-at 5.76 GB against 5.98 for the default 16, a 4% difference. So the 6 GB is
-genuinely allocated per-run, not per-thread, and a memory-constrained user
-cannot trade threads for footprint.
+*Two hypotheses closed.* It is not the null matrices — `B` barely matters,
+above — and it is not thread-local working space. The peak is flat across a
+16× change in thread count at 20,000 × 2,000:
+
+| `RAYON_NUM_THREADS` | 1 | 4 | 16 (default) |
+|---|---|---|---|
+| peak | 5.76 GB | 5.78 GB | 5.98 GB |
+
+3.8% end to end, so the 6 GB is genuinely allocated per *run*, not per thread,
+and a memory-constrained user cannot trade threads for footprint. Whatever
+holds it is one allocation proportional to `genes × samples`, not `genes × B`
+and not `threads × anything` — which is what makes stage 2's working space the
+place to look.
 
 **Open, and now the real question.** The remaining cut is stage 2's transient,
 not the result and not float32. The budgeting rule until then is **three times
