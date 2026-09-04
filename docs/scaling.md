@@ -816,9 +816,28 @@ permutation path cannot report below `1/(B·n_tail)` = 2e-6 and is 3–4,906×
 conservative approaching it, while the saddlepoint has no floor above
 `1/C(n, n1)` — 9.3e-24 at 40 v 40 — and is accurate to about 1%. On a
 20,000-gene cohort BH decides near 2.5e-6, which is precisely where the
-permutation path stops working. Six minutes is a fair price for the range in
-which the method makes its decisions; it is not a free win, and
-`stage1="saddlepoint"` is opt-in partly for that reason.
+permutation path stops working.
+
+**The ratio is constant, so the decision is about cohort size.** Measured for
+20,000 genes:
+
+| design | saddlepoint | the stage-1 loop it replaces | ratio |
+|---|---|---|---|
+| 40 v 40 | 0.7 min | ~0 | 66× |
+| 300 v 300 | 4.6 min | 0.1 min | 58× |
+| 1,000 v 1,000 | 17.6 min | 0.3 min | 66× |
+| 3,000 v 3,000 | 49.8 min | 0.8 min | 62× |
+
+Both are `O(n)` per gene, so the ~60× is structural rather than something
+tuning removes: the saddlepoint spends it on nested root-finds, ~60 CGF
+evaluations per gene against one matrix product. Below about a thousand per
+group it is minutes and worth it. At the §1 target — 80,000 samples — it is
+tens of hours and **not** the right tool; there the empirical p-value has
+`B = 2,000` resolution against a combinatorial floor that is astronomically
+small, so refinement matters least exactly where this costs most. That is a
+happy accident rather than a design, and it bounds where this belongs:
+`stage1="saddlepoint"` is for the small-and-medium cohorts whose p-values BH
+cannot otherwise resolve, and it is opt-in partly for that reason.
 
 **What it removes.** Stage 1's permutation loop, its GPD refinement, its
 `1/(B·n_tail)` floor, and the need for `z_mean_shift` as a ranking column — a

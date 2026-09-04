@@ -783,6 +783,13 @@ def wade(
         ``nexc_mean_shift`` still come from the permutation null when one was
         drawn for stage 2; ``refined_mean_shift`` is False throughout, there
         being no floor to refine past. Needs SciPy, imported only when used.
+
+        **Cost scales with the cohort, not the gene count**: for 20,000 genes,
+        0.7 min at 40 v 40, 4.6 at 300 v 300, 17.6 at 1,000 v 1,000 and 50 at
+        3,000 v 3,000 — about 60× the stage-1 permutation loop it replaces, at
+        every size, since both are ``O(n)`` per gene. Worth it where the
+        permutation floor is what limits you; at tens of thousands of samples
+        it is not, and there the floor is not the binding constraint anyway.
     fit_backend
         ``"numpy"`` (default) or ``"rust"`` for the fold-change fit's
         bisection (``docs/scaling.md`` §3.3). **Opt-in, and unlike**
