@@ -839,6 +839,57 @@ happy accident rather than a design, and it bounds where this belongs:
 `stage1="saddlepoint"` is for the small-and-medium cohorts whose p-values BH
 cannot otherwise resolve, and it is opt-in partly for that reason.
 
+### 4.10 Which stage-1 statistic is actually better — and the answer flips
+
+§4.9 recommended the exact mean difference partly because the quadrature is
+biased off balance (`limits.md` §2.5). Measured, that framing was incomplete
+in a way that matters, so both halves are recorded here.
+
+**As a statistic, the quadrature is better when `n1 > n0`.** With *both*
+p-values brute-forced at 2e6 permutations, so neither has a floor and neither
+is approximated, on a planted global shift:
+
+| design | log-normal, 1.6x | NB counts, 2.0x | who wins |
+|---|---|---|---|
+| 100 v 10 | 3.0e-2 vs 7.3e-2 | 4.0e-6 vs 1.7e-5 | **quadrature, 2–4×** |
+| 70 v 10 | 2.5e-2 vs 6.9e-2 | — | **quadrature, 2.8×** |
+| 55 v 55 | identical | identical | tied, as the identity requires |
+| 20 v 60 | 6.6e-3 vs 3.4e-3 | 1.6e-4 vs 1.2e-4 | **mean difference, ~1.3–1.9×** |
+
+The asymmetry is the mechanism, not noise: the grid reads **both** groups at
+`m = min(n1, n0)` points, so whichever group is larger gets interpolated. When
+that is the *case* group, reading 100 values at 10 quantiles acts as trimming,
+and on right-skewed expression a trimmed summary beats a mean that a few large
+values dominate. When it is the *control* group, the same interpolation throws
+away precision in the reference and costs power. The quadrature's "bias" is
+therefore also a robustification, and calling it simply a defect was wrong.
+
+**End to end, the saddlepoint still wins — including at 100 v 10.** 2,000
+genes, BH 0.05, the two shipped pipelines:
+
+| planted | 100 v 10: grid+GPD | saddlepoint | 55 v 55: grid+GPD | saddlepoint |
+|---|---|---|---|---|
+| null | 0.1% | 0.4% | 0.1% | 0.6% |
+| 1.3x | 4.0% | **12.0%** | 50.0% | **78.0%** |
+| 1.5x | 34.0% | **42.0%** | 100% | 100% |
+| 1.8x | 72.0% | **80.0%** | 100% | 100% |
+| 2.2x | **96.0%** | 94.0% | 100% | 100% |
+
+So a 2–4× better statistic still loses, because the p-value attached to it
+floors at 2e-6 and is 3–4,906× conservative approaching it: the grid reported
+a smallest p of 1.2e-5 where the saddlepoint reached 2.6e-12. **The
+refinement, not the statistic, is what limits stage 1**, and it limits it most
+at weak effects, which is where BH is deciding. Only at 2.2x — where both
+pipelines are saturating anyway — does the statistic's advantage surface, and
+then by two genes in fifty.
+
+**What this opens.** The best available stage 1 would be the *quadrature's*
+statistic with an *exact* p-value, and that does not exist: the quadrature is
+an L-statistic, and §4.4's saddlepoint needs a subset sum. Recovering that
+2–4× on unbalanced designs means finding a relative-error tail approximation
+for a linear combination of order statistics — question 6 of
+`pvalue-review.md`, and now with a measured prize attached to it.
+
 **What it removes.** Stage 1's permutation loop, its GPD refinement, its
 `1/(B·n_tail)` floor, and the need for `z_mean_shift` as a ranking column — a
 p-value with no floor ranks on its own. `stage1="gemm"` becomes the only stage 1

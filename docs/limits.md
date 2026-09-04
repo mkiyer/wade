@@ -175,6 +175,18 @@ geometry, and reporting it as one would be false precision.
 **The smaller group governs.** Adding cases to a study with 18 controls buys
 nothing here.
 
+**A worked case, because it comes up: 100 cases against 10 controls.** The
+grid has 10 points, so `affected_fraction` is qualitative at best. The
+combinatorial floor decides the rest, and it is severe — 5 affected cases of
+100 floors at 0.62, 10 at 0.37, 25 at 0.067, and only 50 reaches 1.6e-3.
+**Stage 2 cannot work at that geometry** unless roughly half the cases share
+the change, at which point it is barely a subset. A *global* shift is a
+different matter: all 100 affected floors at 2.1e-14, so stage 1 is perfectly
+usable. Run it, use `stage1="saddlepoint"` (measured 12% power against the
+grid's 4% at a 1.3x shift, `scaling.md` §4.10), and read stage 2 as a
+screen rather than a test. Ten more controls would buy more than a hundred
+more cases.
+
 ---
 
 ## 4. The combinatorial floor
