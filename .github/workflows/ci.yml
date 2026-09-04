@@ -89,23 +89,31 @@ jobs:
         # those platforms, which is how users on them end up needing a Rust
         # toolchain.
         include:
-          - { os: ubuntu-latest,  target: x86_64,  manylinux: auto, native: true  }
-          - { os: ubuntu-latest,  target: aarch64, manylinux: auto, native: false }
-          - { os: macos-latest,   target: aarch64, manylinux: "",   native: true  }
-          - { os: macos-latest,   target: x86_64,  manylinux: "",   native: false }
-          - { os: windows-latest, target: x64,     manylinux: "",   native: true  }
+          # `manylinux: auto` is the action's own default and is ignored off
+          # Linux, so every row can carry it rather than the matrix growing a
+          # conditional.
+          - { os: ubuntu-latest,  target: x86_64,             native: true  }
+          - { os: ubuntu-latest,  target: aarch64,            native: false }
+          - { os: macos-latest,   target: aarch64-apple-darwin, native: true  }
+          - { os: macos-latest,   target: x86_64-apple-darwin, native: false }
+          - { os: windows-latest, target: x64,                native: true  }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # maturin-action installs the Rust target it needs for a cross build;
+      # naming it here too means a missing target fails at setup with a clear
+      # message rather than midway through cargo.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ contains(matrix.target, '-') && matrix.target || '' }}
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
           command: build
           target: ${{ matrix.target }}
-          manylinux: ${{ matrix.manylinux }}
+          manylinux: auto
           args: --release --out dist
       - name: Check the wheel installs and imports on its own
         if: matrix.native

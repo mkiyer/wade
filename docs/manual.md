@@ -321,6 +321,23 @@ thing to compute before a run.
 It is a **scale, not a hard bound**. Roughly 21 to 42 percent of genes fall
 below it in real data, so never use it to clamp a p-value.
 
+**Worked example.** 3,000 genes, 50 cases against 50 controls, 60 genes given
+a 6× change in `k` of the cases, 2,000 permutations, Benjamini-Hochberg at
+0.05. Only `k` changes between rows:
+
+| affected cases | floor | subset genes found | false positives | `affected_fraction` |
+|---|---|---|---|---|
+| 8 of 50 | 2.9e-3 | **0** of 60 | 0 | 0.18 (true 0.16) |
+| 15 of 50 | 8.9e-6 | 50 of 60 | 0 | 0.32 (true 0.30) |
+| 25 of 50 | 5.2e-10 | 59 of 60 | 0 | 0.53 (true 0.50) |
+
+The top row finds nothing, and the software is not at fault: at 8 affected
+cases no relabelling test can produce a p-value small enough to survive
+correction across 3,000 genes. The genes are still *ranked* correctly, they
+just cannot be *called*. Notice also that `affected_fraction` recovers the
+planted fraction in every row, including the one where nothing is
+significant, and that there are no false positives anywhere.
+
 ### Stage 2's p-values are conservative
 
 This is the honest caveat and it is worth stating plainly. Stage 1 has an
