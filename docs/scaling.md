@@ -805,11 +805,20 @@ Against that, what ships today is 3–4,906× conservative on the same genes.
 **Not yet measured**: heavier zero-inflation than 20% — the real cohort has 47%
 (§7.5) — and n above 600. Both belong in the implementation's own test suite.
 
-**Cost.** 62–134 ms per gene as an unoptimized nested bisection (90 × 90 CGF
-evaluations). Newton on both variables, vectorized across genes, should bring a
-20,000-gene run to seconds; that is an estimate until it is written, and the
-current stage-1 permutation loop it replaces is 0.3 ms per gene, so the change
-is a resolution win and roughly compute-neutral, not a speedup.
+**Cost, now that it is written — and the estimate above was wrong.**
+Vectorized across genes with a closed-form inner bracket and Newton on both
+solves, a 20,000-gene run costs **46 s at 40 v 40, 176 s at 150 v 150 and
+363 s at 300 v 300**. The stage-1 permutation loop it replaces is about 5 s at
+300 v 300, so this is roughly **70× more expensive, not compute-neutral**.
+
+What is bought for that is the whole point and worth being precise about: the
+permutation path cannot report below `1/(B·n_tail)` = 2e-6 and is 3–4,906×
+conservative approaching it, while the saddlepoint has no floor above
+`1/C(n, n1)` — 9.3e-24 at 40 v 40 — and is accurate to about 1%. On a
+20,000-gene cohort BH decides near 2.5e-6, which is precisely where the
+permutation path stops working. Six minutes is a fair price for the range in
+which the method makes its decisions; it is not a free win, and
+`stage1="saddlepoint"` is opt-in partly for that reason.
 
 **What it removes.** Stage 1's permutation loop, its GPD refinement, its
 `1/(B·n_tail)` floor, and the need for `z_mean_shift` as a ranking column — a

@@ -20,7 +20,8 @@ import numpy as np
 from . import normalize as _normalize
 from .io import Condition, as_counts, result_columns
 from .permutation import draw_perms, null_statistics, validate_perms
-from .pvalues import ALTERNATIVES, DEFAULT_N_EXC_MIN, DEFAULT_N_TAIL, bh_adjust, perm_pvalues
+from .pvalues import (ALTERNATIVES, DEFAULT_N_EXC_MIN, DEFAULT_N_TAIL, bh_adjust,
+                      exceedance_counts, perm_pvalues)
 from .stats import WadeStats, split_groups, wade_stats
 from .subset import SubsetResult, characterization_ci, subset_test
 from .thinning import fit_fold_change, one_count, thin_counts
@@ -324,8 +325,10 @@ def _check_libraries(lib: np.ndarray, sample_names, allow: bool) -> None:
 def _validate_stage1(stage1: str, cond, fit_backend: str = "numpy") -> None:
     if fit_backend not in ("numpy", "rust"):
         raise ValueError(f"fit_backend must be 'numpy' or 'rust'; got {fit_backend!r}")
-    if stage1 not in ("grid", "gemm"):
-        raise ValueError(f"stage1 must be 'grid' or 'gemm'; got {stage1!r}")
+    if stage1 not in ("grid", "gemm", "saddlepoint"):
+        raise ValueError(
+            f"stage1 must be 'grid', 'gemm' or 'saddlepoint'; got {stage1!r}"
+        )
     if stage1 == "gemm":
         cond = np.asarray(cond)
         n1, n0 = int(np.sum(cond == 1)), int(np.sum(cond == 0))
@@ -415,7 +418,25 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
     """
     g = obs.mean_shift.shape[0]
     stat = obs.mean_shift if stage1_stat is None else stage1_stat
-    if null is not None:
+    if stage1 == "saddlepoint":
+        # No permutation enters the p-value: the exact permutation tail is
+        # computed from the values themselves (`wade.saddlepoint`,
+        # `scaling.md` §4.9). The null is still built when permutations were
+        # drawn for stage 2 -- it is one matrix product -- so `z_mean_shift`
+        # and `nexc_mean_shift` keep their meaning as ranking and diagnostic
+        # columns. `refined_mean_shift` is False everywhere by construction:
+        # there is nothing to refine when there is no floor.
+        from .saddlepoint import mean_diff_saddlepoint_p
+
+        p_mean = mean_diff_saddlepoint_p(tpm, cond, stat, alternative=alternative)
+        refined = np.zeros(g, dtype=bool)
+        if null is not None:
+            nexc = exceedance_counts(stat, null, alternative=alternative)
+            z_mean = _perm_z(stat, null)
+        else:
+            nexc = np.zeros(g, dtype=np.int64)
+            z_mean = np.full(g, np.nan)
+    elif null is not None:
         p_mean, nexc, refined = perm_pvalues(
             stat, null, n_exc_min=n_exc_min, n_tail=n_tail,
             alternative=alternative,
@@ -568,7 +589,7 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
     do_subset = nperms > 0 and subset and m_real >= 3
 
     W_null = w_obs = stage1_stat = None
-    if stage1 == "gemm":
+    if stage1 in ("gemm", "saddlepoint"):
         from .permutation import _mean_diff_weights
         w_obs = _mean_diff_weights(cond)
         stage1_stat = np.empty(g, dtype=np.float64)
@@ -586,7 +607,7 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, noise, norm_factor,
         stats_parts.append(wade_stats(
             x_ch, cond, allow_single_sample_group=allow_single_sample_group,
             max_probs=max_probs))
-        if stage1 == "gemm":
+        if stage1 in ("gemm", "saddlepoint"):
             stage1_stat[ch] = x_ch @ w_obs
             if W_null is not None:
                 null[ch] = x_ch @ W_null
@@ -747,6 +768,21 @@ def wade(
         ``result.mean_shift`` then reports the statistic the p-value actually
         tested; the grid quadrature stays available as
         ``result.stats.mean_shift``. Stage 2 is unaffected either way.
+
+        ``"saddlepoint"`` — **any geometry** — is the same exact mean
+        difference with its p-value computed rather than sampled: the
+        permutation tail of a subset sum has a double-saddlepoint form
+        (:mod:`wade.saddlepoint`, ``docs/scaling.md`` §4.9), so stage 1 gets
+        **no resolution floor at all**. That is the point of it. The empirical
+        p-value stops at ``1/(B+1)`` and the GPD refinement that fills the gap
+        was measured 3–4,906× conservative on stage 1, which costs power
+        exactly where BH decides; the saddlepoint agrees with 1e8-permutation
+        brute force to 0.99–1.00 in the median and is never worse than 0.61
+        anti-conservative. It is **opt-in and changes reported numbers**, so
+        it is named rather than inferred. ``z_mean_shift`` and
+        ``nexc_mean_shift`` still come from the permutation null when one was
+        drawn for stage 2; ``refined_mean_shift`` is False throughout, there
+        being no floor to refine past. Needs SciPy, imported only when used.
     fit_backend
         ``"numpy"`` (default) or ``"rust"`` for the fold-change fit's
         bisection (``docs/scaling.md`` §3.3). **Opt-in, and unlike**

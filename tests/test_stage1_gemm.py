@@ -92,8 +92,12 @@ def test_gemm_refuses_an_unbalanced_design():
     cond = np.r_[np.ones(N, int), np.zeros(N - 10, int)]
     with pytest.raises(ValueError, match="balanced"):
         wade.wade(counts, np.ones(G), cond, nperms=20, stage1="gemm")
-    with pytest.raises(ValueError, match="'grid' or 'gemm'"):
+    with pytest.raises(ValueError, match="'grid', 'gemm' or 'saddlepoint'"):
         wade.wade(counts[:, : 2 * N - 10], np.ones(G), cond, nperms=20, stage1="fast")
+    # ...and the balance guard belongs to `gemm` alone: it is about the
+    # quadrature identity, not about the mean difference, so `saddlepoint`
+    # runs at any geometry (`tests/test_saddlepoint.py`).
+    wade.wade(counts, np.ones(G), cond, nperms=20, stage1="saddlepoint")
 
 
 def test_gemm_is_exact_under_the_grid_cap():
