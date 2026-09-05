@@ -1,11 +1,25 @@
-"""Fixture loading and the deviation ledger for the parity suite.
+"""Fixture loading and the deviation ledger for the layered numeric suite.
 
 The suite is built **inside-out** on the design in
 ``docs/implementation-notes.md``.
 
+**Where the fixtures' authority comes from.** They were generated from the
+original R implementation, which was retired and deleted on 2026-09-04 — a
+frozen copy of a dead program is an heirloom, not provenance. Their authority
+now rests on ``test_independent_reference.py``, which re-derives every
+recorded quantity from something that is neither R nor WADE: the closed forms,
+``numpy.quantile`` for the type-7 grids and
+``scipy.stats.false_discovery_control`` for BH, both separately written and
+separately maintained. Read that file before trusting anything here.
+
+So there are two halves and each is useless alone. This suite checks that
+**WADE agrees with the fixtures**; that file checks that **the fixtures are
+right**. Together they say WADE is correct; either one alone says only that
+something is self-consistent.
+
 **What it is for, now that the statistic it originally validated has been
-replaced.** The tail-window machinery is gone, so parity with R on
-``tail.mean`` and ``tail.conc`` no longer tests anything that runs. What the
+replaced.** The tail-window machinery is gone, so the recorded
+``tail.mean`` and ``tail.conc`` no longer test anything that runs. What the
 fixtures still pin is the *shared machinery underneath* every statistic —
 normalization, the type-7 quantile grids, the permutation null, the GPD
 refinement and BH — which the redesign uses unchanged and which is exactly
@@ -27,10 +41,12 @@ Two things this suite refuses to do:
   the last bits. Merely reversing a summation order changes about two
   thirds of genes at a relative magnitude of 1e-14
   (``docs/implementation-notes.md`` hazard 10).
-* **The R is not the oracle for ``tail_conc`` or for a one-sample
-  group.** In both cases a correct port disagrees with ``wade.R``, and a
-  suite that enforces agreement enforces the bug. Those live in
-  ``test_divergences.py``.
+* **A recorded value is not automatically the right value.** For a
+  one-sample group the reference implementation had a reshape defect, so
+  the fixture records a number WADE deliberately does not reproduce; a
+  suite that enforced agreement would enforce the bug. That divergence is
+  asserted positively in ``test_divergences.py`` rather than left as an
+  unexplained tolerance.
 
 Every comparison is recorded in a ledger and the worst-case relative
 deviation is printed at the end of the run. That number is what
@@ -50,9 +66,9 @@ import pytest
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 #: Scenarios the port is expected to reproduce.
-#: The `weighted` and `log2scaled` fixtures exercised wade.R's `weight` and
-#: `log2_scale` pre-transforms, which no reference call site ever used and
-#: which the redesign does not carry. The fixtures remain on disk as a record.
+#: The `weighted` and `log2scaled` fixtures exercised the reference's `weight`
+#: and `log2_scale` pre-transforms, which no call site ever used and which the
+#: redesign does not carry. The fixtures remain on disk as a record.
 PARITY_SCENARIOS = [
     "tiny", "main", "even_larger", "vecnorm", "m2", "nperms0",
     "gate_closed", "refine", "zerolib", "nonames", "tailconc", "tiesheavy",
@@ -160,11 +176,12 @@ def load_fixture(name: str) -> dict:
         path = FIXTURE_DIR / f"{name}.json"
         if not path.exists():
             raise FileNotFoundError(
-                f"missing fixture {path}. Regenerate with:\n"
-                f'  export PATH="/usr/local/bin:$PATH"\n'
-                f"  cd reference/R && RENV_CONFIG_SANDBOX_ENABLED=FALSE "
-                f'RENV_PATHS_CACHE="$HOME/Library/Caches/org.R-project.R/R/renv/cache" '
-                f"Rscript ../../tools/r/generate_fixtures.R"
+                f"missing fixture {path}. These files are permanent committed "
+                f"data, not build output: the generator that produced them was "
+                f"retired with the R reference on 2026-09-04, and their "
+                f"correctness is now established by "
+                f"test_independent_reference.py rather than by regeneration. "
+                f"Restore it from git rather than trying to rebuild it."
             )
         with path.open(encoding="utf-8") as fh:
             _CACHE[name] = _walk(json.load(fh))
@@ -197,8 +214,8 @@ def max_rel_dev(got, want) -> tuple[float, int]:
         bad = int(np.flatnonzero(g_nan != w_nan)[0])
         raise AssertionError(
             f"missing-value positions differ: index {bad} is "
-            f"{'nan' if g_nan[bad] else got[bad]} in the port and "
-            f"{'nan' if w_nan[bad] else want[bad]} in R"
+            f"{'nan' if g_nan[bad] else got[bad]} in WADE and "
+            f"{'nan' if w_nan[bad] else want[bad]} in the fixture"
         )
     g_inf, w_inf = np.isinf(got), np.isinf(want)
     if not np.array_equal(g_inf, w_inf) or not np.array_equal(got[g_inf], want[w_inf]):
@@ -223,7 +240,7 @@ def assert_close(got, want, tol: float, label: str, layer: str = ""):
         w = np.asarray(want, dtype=np.float64).ravel()
         raise AssertionError(
             f"{label}: worst relative deviation {dev:.3e} exceeds tolerance {tol:.1e} "
-            f"at flat index {idx} (port {g[idx]!r} vs R {w[idx]!r})"
+            f"at flat index {idx} (got {g[idx]!r} vs expected {w[idx]!r})"
         )
     return dev
 
@@ -246,7 +263,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     if not _LEDGER:
         return
     tr = terminalreporter
-    tr.write_sep("=", "WADE parity: worst-case relative deviation vs the R reference")
+    tr.write_sep("=", "WADE numeric agreement: worst-case relative deviation")
 
     by_layer: dict[str, list[tuple[str, float, float]]] = {}
     for layer, label, dev, tol, _ in _LEDGER:
@@ -271,7 +288,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         )
     tr.write_line("")
     tr.write_line(
-        f"  {'WORST OVER ALL PARITY COMPARISONS':<34s} {overall:9.3e}   "
+        f"  {'WORST OVER ALL COMPARISONS':<34s} {overall:9.3e}   "
         f"({total} comparisons)"
     )
     tr.write_line(

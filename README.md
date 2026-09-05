@@ -360,10 +360,13 @@ It changes reported numbers, so it is opt-in and named; see `docs/method.md`
 ~163 GB and did not run, completes in **30 minutes at a 56 GB peak** with
 2,000 permutations (measured; `docs/scaling.md` §1).
 
-Ported from an R implementation that remains in `reference/` as the oracle the
-golden fixtures were generated from. Worst-case relative deviation across 436
-parity comparisons: **9.2e-15**, with the normalized matrix, the quantile grids
-and the permutation null bit-for-bit identical.
+Numerically verified two ways. Worst-case relative deviation across 436
+comparisons against the golden fixtures: **9.2e-15**, with the normalized
+matrix, the quantile grids and the permutation null bit-for-bit identical. The
+fixtures themselves are re-derived from independent authorities — `numpy`'s
+type-7 quantiles, `scipy`'s Benjamini-Hochberg, and the closed forms — by
+`tests/test_independent_reference.py`, which is forbidden from importing WADE
+so that a bug in WADE cannot make it pass.
 
 Not yet built: an equivalent exact or refined tail for **stage 2**, which is
 the open problem (`docs/pvalue-review.md`); format-specific reader helpers for
@@ -374,15 +377,24 @@ material. See the roadmap.
 
 Extracted from the MCTP cfRNA analysis repository at commit `828f2f1c`, where it
 began as a small set of functions called HITLIB. No patient-derived data is
-included; everything here is synthetic. Details in
-[`reference/PROVENANCE.md`](reference/PROVENANCE.md).
+included; everything here is synthetic.
 
-**The R implementation is retired.** It is not maintained, not installed, and
-not a dependency of anything. `reference/R/wade.R` is kept frozen, with
-checksums and a test that fails if it changes, because it is the oracle the
-golden fixtures in `tests/fixtures/` were generated from — the suite reads
-those JSON files and never runs R. Keeping it is what lets a future change be
-checked against the original rather than against its own output.
+**The R implementation it was ported from has been deleted** (2026-09-04). A
+frozen copy of a program nobody runs is not provenance, and provenance for a
+statistical method belongs in comparison against tools a reader already
+trusts. So it lives in two places instead:
+
+- **Against other methods** — `notebooks/benchmark.qmd` runs WADE head to head
+  against COPA, OS, ORT, MOST, LSOSS, the `t`-test, Wilcoxon and waddR, every
+  method through the same permutation null, the same refinement and the same
+  BH, so a difference between two rows is a difference between two statistics.
+- **Against independent implementations and first principles** —
+  `tests/test_independent_reference.py` re-derives every golden fixture value
+  from `numpy`'s type-7 quantiles, `scipy`'s Benjamini-Hochberg and the closed
+  forms. It is forbidden from importing WADE, asserted by a test, so a bug in
+  WADE cannot make it pass. Behaviour is checked by brute-force enumeration
+  (`tests/test_layer9_validation.py`, `tests/test_saddlepoint.py`) and by the
+  1e8-permutation studies in `docs/scaling.md` §4.
 
 ## License
 

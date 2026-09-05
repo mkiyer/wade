@@ -3,9 +3,9 @@ channels:
   - conda-forge
 dependencies:
   # Core Python. requires-python in pyproject.toml is >=3.10. Left
-  # unpinned: the full parity suite has been run green on both 3.12 and
-  # 3.14, and the worst-case deviation against the R reference was
-  # identical to the digit on both, so nothing here is version-sensitive.
+  # unpinned: the full suite has been run green on both 3.12 and 3.14, and
+  # the worst-case numeric deviation was identical to the digit on both, so
+  # nothing here is version-sensitive.
   - python>=3.10
   - pip
   # Runtime. Keep in sync with the `dependencies` list in pyproject.toml.
@@ -58,14 +58,15 @@ dependencies:
 
 # NOT DECLARED HERE, DELIBERATELY: R.
 #
-# reference/R/ is the parity oracle and it runs against system R 4.6.1 at
-# /usr/local/bin/R, restoring its 31-package closure offline by symlinking
-# from a pre-existing read-only renv cache. That is not reproducible through
-# conda — there are no R 4.6 arm64 binaries on CRAN and the Posit mirrors
-# are unreachable from this environment, so there is no install path at all.
-# Adding r-base here would create a SECOND, different R and quietly invite
-# someone to regenerate fixtures against it.
+# WADE needed R for exactly two things and now needs it for one. The R
+# implementation it was ported from was deleted on 2026-09-04, so nothing
+# regenerates tests/fixtures/*.json any more -- those files are permanent
+# committed data whose correctness is established by
+# tests/test_independent_reference.py, which uses numpy and scipy and never
+# runs R.
 #
-# You only need R to regenerate tests/fixtures/*.json. The committed
-# fixtures are what the parity suite reads, so the full suite passes with
-# no R present. See reference/R/README.md for the sandbox invocation.
+# The one remaining use is optional and belongs to the benchmark, not the
+# suite: tools/competitors.py can shell out to Rscript to run waddR as one
+# of the nine methods in notebooks/benchmark.qmd. It is skipped when Rscript
+# is absent. Declaring r-base here would pull a whole second toolchain into
+# every developer's environment to serve one optional row of one notebook.

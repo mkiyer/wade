@@ -6,14 +6,38 @@ in [`method.md`](method.md) and what it cannot do is in [`limits.md`](limits.md)
 
 ---
 
-## 1. Parity with the R reference
+## 1. What the numbers are verified against
 
-WADE was ported from `reference/R/wade.R`, which remains in the repository as
-the oracle the golden fixtures were generated from. The port is verified
-independently of it: the fixtures are committed, so the test suite runs with no
-R present.
+WADE began as a port of an R implementation, and the golden fixtures in
+`tests/fixtures/` were generated from it. **That implementation was retired
+and deleted on 2026-09-04.** Keeping a frozen copy of a dead program in the
+repository so a test could point at it was not provenance; it was an heirloom,
+and it made the numbers' authority a thing nobody could run.
 
-**Worst-case relative deviation: 9.155e-15 across 436 comparisons.**
+Verification now has two halves, and each is useless alone:
+
+* **The fixtures are right** — `tests/test_independent_reference.py` re-derives
+  every recorded quantity from an authority that is neither R nor WADE. The
+  closed forms for the grid, the normalization and the empirical p-value;
+  `numpy.quantile` for the type-7 grids; `scipy.stats.false_discovery_control`
+  for BH. Two of those are separately written, separately maintained
+  implementations by other people. **A bug in WADE cannot make that file
+  pass**, which is why it is forbidden from importing WADE — a guard asserted
+  in the file rather than left to review.
+* **WADE agrees with the fixtures** — the layered suite below.
+
+Behavioural correctness, which no fixture can establish, rests on brute-force
+enumeration (`test_layer9_validation.py`, `test_saddlepoint.py`, and the 1e8
+permutation studies in `scaling.md` §4) and on the head-to-head against COPA,
+OS, ORT, MOST, LSOSS, the t-test, Wilcoxon and waddR in
+`notebooks/benchmark.qmd`. That comparison is the provenance that matters for
+a method: agreement with the tools a reader already trusts, on data with
+planted ground truth.
+
+**Worst-case relative deviation: 9.155e-15 across 436 comparisons** against the
+fixtures, and 4.7e-13 across 152 comparisons re-deriving the fixtures
+independently — the larger figure being two different summation orders in two
+libraries, which is what that number should look like.
 
 | layer | comparisons | worst relative deviation |
 |---|---|---|
@@ -32,8 +56,8 @@ and `tail.conc` no longer tests anything that runs. What they still pin is the
 machinery *underneath* every statistic — normalization, the type-7 quantile
 grids, the permutation null, the GPD refinement and BH — which the current
 method uses unchanged, and which is exactly where a silent cross-language
-disagreement would do the most damage. Parity runs pin
-``alternative="greater"``, since the R oracle is one-sided and the port now
+disagreement would do the most damage. These runs pin
+``alternative="greater"``, since the reference was one-sided and WADE now
 defaults to two-sided.
 
 Interpretive threshold: **1e-12 relative is a real bug; 1e-14 is summation
@@ -194,14 +218,18 @@ qualitatively identical output. It passes every plausibility check and fails
 only an exact test. That is the argument for having one, and the reason the
 normalization layer carries the tightest tolerance in the suite.
 
-### 2.10 Where a correct port must DISAGREE with R
+### 2.10 Where a recorded value is not the right value
 
-A suite that enforces agreement here enforces a bug, so the divergence is
-asserted positively — stating what R does and what the port does instead —
-because an untested divergence is indistinguishable from an oversight.
+One fixture records a number WADE deliberately does not reproduce. A suite that
+enforced agreement would enforce a bug, so the divergence is asserted
+positively — stating what the reference did and what WADE does instead —
+because an untested divergence is indistinguishable from an oversight. It is
+also the reason a fixture can never be the *only* authority, and therefore the
+reason §1's independent half exists.
 
-**A one-sample group.** `rowQuantiles` drops the dimension attribute when the
-result has a single row *or* a single column, and R's guard assumes the former.
+**A one-sample group.** R's `rowQuantiles` drops the dimension attribute when
+the result has a single row *or* a single column, and its guard assumed the
+former.
 At `nprobs == 1` it means the latter, so a length-`g` vector is reshaped to
 `1 × g`, genes become probabilities, and the frame reports one recycled value
 for every gene — no error, right shape, wrong answer. The port refuses
@@ -212,51 +240,30 @@ retired, so there is no longer a ratio to disagree about.)
 
 ---
 
-## 3. Generating fixtures from the R
+## 3. The fixtures
 
-### The deterministic seam
-
-`tools/r/wade_seam.R` sources `wade.R` **unmodified** and makes its two sources
-of randomness injectable, without touching any namespace.
-
-`sample(cond)` is unqualified, so it resolves lexically and is easy to shadow.
-The jitter comes from `stats::runif`, and `::` bypasses lexical scoping — the
-usual escape being `assignInNamespace`, which mutates the `stats` namespace for
-the whole session. That is not needed: **base R's `` `::` `` is an ordinary
-closure**, so it can itself be shadowed in the enclosing environment chain.
-`wade.R` is sourced into an environment whose parent binds both `sample` and
-`` `::` ``; the shim returns the jitter stub for `stats::runif` when armed and
-delegates everything else to `getExportedValue()` unchanged.
-
-`seam_selftest()` proves transparency: a native run and a seam run injected with
-R's own realised draws agree **bitwise**.
+Twenty scenarios in `tests/fixtures/*.json`, each carrying the inputs (counts,
+jitter, permutations, normalizer, library sizes) and the expected value at
+every layer. They are **permanent committed data, not build output**: the
+generator that produced them was retired with the R reference, and their
+correctness is now established by re-derivation rather than by regeneration
+(§1). Restore one from git rather than trying to rebuild it.
 
 ### Why every number is written twice
 
-Fixtures carry each double as a 17-significant-digit decimal *and* as a C99 hex
-float. Both are needed because **R cannot verify its own decimal output**:
-measured, `sprintf("%.17g")` produces correctly rounded digits but R's
-`as.numeric` is not a correctly-rounded parser and reads 8 of 42 uniform draws
-back one ULP off — and still does at `%.20g`. So R checks the hex channel
-round-trips, and the Python loader asserts `float(dec) == float.fromhex(hex)` on
-every value it reads. Hex is authoritative.
+Each double is stored as a 17-significant-digit decimal *and* as a C99 hex
+float, and the loader asserts `float(dec) == float.fromhex(hex)` on every value
+it reads. The reason is worth keeping even though the writer is gone:
+**R could not verify its own decimal output.** Measured, `sprintf("%.17g")`
+produced correctly rounded digits but R's `as.numeric` is not a correctly
+rounded parser and read 8 of 42 uniform draws back one ULP off, and still did
+at `%.20g`. Hex is authoritative. Any future generator inherits the same
+obligation, because a fixture that cannot survive its own round trip is not a
+fixture.
 
-`NA` is kept distinct from `NaN`: `wade()` produces `NA` from its guard and from
-`nperms = 0`, so collapsing them would erase a distinction the port is tested on.
-
-### Regenerating
-
-```bash
-export PATH="/usr/local/bin:$PATH"
-cd reference/R
-RENV_CONFIG_SANDBOX_ENABLED=FALSE \
-RENV_PATHS_CACHE="$HOME/Library/Caches/org.R-project.R/R/renv/cache" \
-  Rscript ../../tools/r/generate_fixtures.R
-```
-
-The sandbox restores offline from a read-only cache; `renv::restore()` succeeds
-and then fails on a socket it cannot bind, so run it twice. Details in
-[`../reference/R/README.md`](../reference/R/README.md).
+`NA` is kept distinct from `NaN`: WADE produces a missing value from its guard
+and from `nperms = 0`, so collapsing them would erase a distinction the suite
+tests.
 
 ---
 

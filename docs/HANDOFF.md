@@ -367,13 +367,18 @@ Three assertions I wrote from theory turned out to be wrong when run:
 The pattern: build a planted-ground-truth simulation and check, before writing
 it down.
 
-### The R sandbox is fiddly
+### The fixtures cannot be regenerated, and do not need to be
 
-Only needed to regenerate `tests/fixtures/`. Three load-bearing details in
-[`../reference/R/README.md`](../reference/R/README.md): R 4.6.1 is not on the
-default `PATH`, you must run from `reference/R/`, and `renv::restore()` succeeds
-and *then* errors on a socket — run it twice. Fixtures are committed, so the
-suite runs with no R present.
+`reference/` and the R implementation were deleted on 2026-09-04 at the user's
+direction, with the reasoning that a frozen copy of a dead program is not
+provenance and that provenance belongs in benchmarks against other tools. The
+objection to deleting it — that `tests/fixtures/` would become unfalsifiable
+recorded numbers — was answered rather than waived: `test_independent_reference.py`
+re-derives every recorded quantity from `numpy.quantile`, `scipy`'s BH and the
+closed forms, and is forbidden from importing WADE. **Do that work first if you
+ever add a fixture**, because a fixture nothing can falsify is worse than no
+fixture. The files are permanent committed data now; restore from git, never
+rebuild.
 
 ### plotly has quiet failure modes
 

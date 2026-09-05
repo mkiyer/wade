@@ -1,13 +1,23 @@
-"""The one place a correct port must disagree with the R.
+"""The one place a golden fixture records a number WADE must NOT reproduce.
 
-``tail.conc`` used to be the other, but the statistic it guarded has been
+The fixtures came from the original R implementation, which had a reshape
+defect for a one-sample group. A suite that enforced agreement everywhere
+would enforce that bug, so the divergence is asserted **positively** — stating
+what the reference did and what WADE does instead — because an untested
+divergence is indistinguishable from an oversight.
+
+This file is also the standing argument for
+``test_independent_reference.py``. A recorded value is evidence, not truth,
+which is why the fixtures are re-derived from first principles and from
+independently maintained implementations rather than trusted because they were
+written down. Deleting the R reference (2026-09-04) changed nothing here: the
+defect is a property of the fixture, which is still on disk, not of a program
+that is gone.
+
+``tail.conc`` used to be the other case, but the statistic it guarded has been
 retired along with the whole tail window (``docs/method.md`` §7), so there is
 no longer a ratio to disagree about. What remains is the reshape defect, which
 is about the *shared* quantile machinery and therefore still live.
-
-The disagreement is asserted **positively** — stating what R does and what the
-port does instead — because an untested divergence is indistinguishable from an
-oversight.
 """
 
 from __future__ import annotations

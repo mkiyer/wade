@@ -448,9 +448,9 @@ that vanishes whenever the bulk cancels the tail. On a realistic simulation the
 largest $|$`tail.conc`$|$ among genes with *no signal at all* was 3,483. §4's
 `affected_fraction` has no pole and needs no guard.
 
-**What the parity fixtures still pin.** They were generated to validate the
-port against `reference/R/wade.R`, and parity on the retired statistics no
-longer tests anything that runs. What they still pin is the shared machinery
+**What the golden fixtures still pin.** They were generated to validate the
+port against the original R implementation, now retired, and agreement on the
+retired statistics no longer tests anything that runs. What they still pin is the shared machinery
 underneath — normalization, the type-7 quantile grids, the permutation null,
 the GPD refinement and BH — which §1–6 use unchanged and where a silent
 cross-language disagreement would do the most damage.

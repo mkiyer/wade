@@ -92,7 +92,7 @@ def test_mean_shift_equals_the_difference_of_grid_means(name):
 def test_mean_shift_is_not_the_difference_of_sample_means_on_unequal_groups():
     """``diff.mean = mean(case) - mean(ctrl)`` holds ONLY at n1 == n0.
 
-    Stated unqualified in ``wade.R``'s header and in three source
+    Stated unqualified in the R reference's header and in three source
     documents, and it is wrong: WADE evaluates the integral as an
     ``m``-node equal-weight average of a piecewise-linear interpolant, and
     when ``m < n`` the implied weights on the order statistics are not

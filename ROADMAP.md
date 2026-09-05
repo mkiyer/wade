@@ -242,12 +242,12 @@ Recorded so they stop resurfacing.
   from twenty donors is twenty samples. Either pseudobulk, or permute donor
   labels with cells kept together — the second is a genuine research direction,
   and `strata=` is already the machinery for it.
-- **What happens to the parity fixtures long-term.** They pin the machinery
-  underneath the statistic — normalization, the grids, the null, the GPD, BH —
-  rather than the statistic itself, which has been replaced. Still worth
-  pinning. Whether `reference/R/` and the renv sandbox stay once nothing new
-  will be generated from them is a separate call; deleting them would leave
-  `tests/fixtures/` unfalsifiable.
+- ~~**What happens to the parity fixtures long-term.**~~ **Answered
+  2026-09-04.** They still pin the machinery underneath the statistic —
+  normalization, the grids, the null, the GPD, BH — and are still worth
+  pinning. `reference/R/` is deleted; the worry recorded here, that this would
+  leave `tests/fixtures/` unfalsifiable, was the right worry and is what
+  `tests/test_independent_reference.py` exists to answer.
 - **Whether `w1` earns its place.** Reported and tested; nothing consumes it.
 - **What to do about composition.** Library-size normalization couples genes,
   so a signal-saturated matrix distorts `affected_fraction` and `direction`
