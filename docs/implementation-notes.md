@@ -240,6 +240,56 @@ retired, so there is no longer a ratio to disagree about.)
 
 ---
 
+### 2.11 `log2` is not the same function in two libraries
+
+The subset kernel is written to mirror the NumPy path term for term, and it
+does — except that `f64::log2` in Rust is the system libm while `np.log2` on
+x86_64 is **NumPy's own vectorized loop**. Both are correctly rounded to well
+under an ulp. They do not produce the same bits.
+
+On macOS/arm64 they happen to agree exactly, so `tests/test_subset_kernel.py`
+asserted a per-element relative tolerance of `1e-15`, passed for weeks, and
+produced **twenty failures on the first Linux CI run** (2026-09-05).
+
+Two separate mistakes, and the second is the instructive one.
+
+**The claim was too strong.** "Bitwise identical" is a promise about a libm,
+which is not ours to make. What the kernel can promise, and does, is that
+every `log2` gets an *identical input* — same guard, same interpolation, same
+order of operations. The output is the platform's business.
+
+**The measurement was of the wrong thing.** The CI log reported a worst
+relative deviation of 1.9e-12, which looks like the "real bug" side of this
+document's own threshold. It was not. The bridge statistic
+`B_k = S_k - (k/m) S_m` passes through zero by construction, so a per-element
+relative deviation divides an ulp-sized absolute error by an almost-zero
+value. In absolute terms the entire discrepancy across the matrix was
+**1.6e-14 on a statistic whose values are order 1** — about 70 ulps, from two
+logs, a cumulative sum over the grid and a subtraction. Confirmed locally by
+perturbing `np.log2` by exactly one ulp, which moves the null by 3.6e-15.
+
+The fix is `conftest.assert_close_scaled`: deviation measured against
+`max(|expected|)` rather than against each element. Verified by re-running the
+whole suite with `np.log2` shifted a full ulp upward on every value — harsher
+than any real libm pair, since real differences are sub-ulp and vary in sign —
+where the worst figure is 5.5e-15 against a 1e-12 tolerance and everything
+passes.
+
+**This is the second time a tolerance turned out to be pinned to one
+machine.** The first was stage 1, where the BLAS decides the summation order
+(`scaling.md` §3.1). The rule both produced: *a tolerance belongs in the units
+of the quantity's natural scale, and a quantity that crosses zero has no
+per-element relative precision to assert on.* A dev machine has one libm and
+one BLAS and cannot see either failure.
+
+`argmax_k` inherits the same problem in integer form. It cannot carry a
+tolerance, but it is *selected* by comparing floats, so where two widths tie
+to within libm noise the backends may name different ones. It is now compared
+exactly, and a difference is accepted only where the maxima it points at
+agree — the value is the assertion, the index is a diagnostic.
+
+---
+
 ## 3. The fixtures
 
 Twenty scenarios in `tests/fixtures/*.json`, each carrying the inputs (counts,

@@ -304,6 +304,20 @@ three measured facts, and breaking any of them breaks it silently:
 - **A column sum's association depends on blocking**, so library sizes are
   always one full-matrix pass, never chunked.
 
+### One machine has one libm too — the same lesson, twice
+
+**2026-09-05, the second instance.** The subset kernel's Rust `log2` is the
+system libm; NumPy's `log2` on x86_64 is NumPy's own vectorized loop. They
+agree bitwise on macOS/arm64 and not on Linux, so a `1e-15` per-element
+tolerance passed here and produced twenty CI failures. The log reported
+1.9e-12 *relative*, which reads like a real bug; it was 1.6e-14 *absolute* on
+a statistic of order 1, inflated because the bridge passes through zero. Fixed
+with `conftest.assert_close_scaled` and verified by re-running the whole suite
+with `np.log2` shifted an ulp. Full account in `implementation-notes.md`
+§2.11. **Before loosening any tolerance, check whether the quantity crosses
+zero** — if it does, the relative figure is measuring cancellation and tells
+you nothing.
+
 ### One machine has one BLAS, and a tolerance can be pinned to it
 
 `tests/test_stage1_gemm.py` asserted `rtol=1e-12` per element on `mean_shift`

@@ -5,15 +5,35 @@ Same discipline as ``test_kernel.py``: the NumPy loop in
 its own terms (``test_subset.py``), so it is the baseline, and a disagreement
 between it and the kernel has exactly one candidate cause.
 
-The kernel is designed to be **bitwise** identical, not merely close: it
-mirrors the NumPy path's arithmetic term for term — R's type-7 guard, two
-``log2`` calls then a subtraction, a sequential cumulative sum, the ``k/m``
-division before the multiplication, sequential accumulation of the moments
-over permutations, and the ``±0.0`` an excluded width contributes to the
-maximum. What it changes is only *how often* things are computed (one sort
-per gene, ``log2`` only where type 7 interpolates), never *what*. The
-tolerance below is ``1e-15`` as in ``test_kernel.py``; measured, every
-comparison comes out at exactly zero.
+The kernel mirrors the NumPy path's arithmetic term for term — R's type-7
+guard, two ``log2`` calls then a subtraction, a sequential cumulative sum, the
+``k/m`` division before the multiplication, sequential accumulation of the
+moments over permutations, and the ``±0.0`` an excluded width contributes to
+the maximum. What it changes is only *how often* things are computed (one sort
+per gene, ``log2`` only where type 7 interpolates), never *what*.
+
+**It is bitwise on some platforms and not on others, and this file used to
+claim it was bitwise everywhere.** The one operation not written out term for
+term is ``log2`` itself: the kernel calls Rust's ``f64::log2`` (the system
+libm) and the NumPy path calls ``np.log2``, which on x86_64 is NumPy's own
+vectorized loop rather than libm. Both are correctly rounded to well under an
+ulp, and they are not the same bits. On macOS/arm64 the two agree exactly, so
+a ``1e-15`` per-element relative tolerance passed here for weeks; the first
+Linux CI run produced twenty failures (2026-09-05).
+
+Measured, the whole discrepancy is **1.6e-14 in absolute terms on a statistic
+whose values are O(1)** — about 70 ulps, accumulated through two logs, a
+cumulative sum over the grid and a subtraction. Reproduced locally by
+perturbing ``log2`` by exactly one ulp, which moves the null by 3.6e-15. The
+alarming figure in the CI log was a *relative* deviation of 1.9e-12, and it
+was alarming only because the bridge statistic passes through zero: that
+comparison was measuring the cancellation, not the arithmetic.
+
+So the comparison here is on **the quantity's own scale**
+(``assert_close_scaled``), which is the same correction stage 1 needed when
+its tolerance turned out to be pinned to one machine's BLAS
+(``scaling.md`` §3.1). Anything a real algorithmic divergence would produce is
+orders of magnitude above this; ulp noise in a libm is not.
 """
 
 from __future__ import annotations
@@ -21,7 +41,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from conftest import assert_close
+from conftest import assert_close, assert_close_scaled
 
 import wade
 from wade.permutation import HAVE_RUST_KERNEL, subset_null_backend
@@ -32,7 +52,13 @@ from wade.subset import bridge, log_ratio_curve, subset_test
 pytestmark = pytest.mark.kernel
 
 LAYER = "subset kernel"
-TOL = 1e-15
+
+#: Of the quantity's own scale, not of each element — see the module docstring.
+#: Observed worst across the CI matrix: 1.6e-14. The project's standing
+#: interpretive threshold is that 1e-12 is a real bug and 1e-14 is summation
+#: order (``implementation-notes.md``), so this sits at the boundary and still
+#: leaves ~60x headroom over what libm noise produces.
+TOL = 1e-12
 
 
 def test_the_kernel_was_actually_built():
@@ -89,16 +115,34 @@ def _both(x, cond, perms, alternative):
     return rs, np_
 
 
+def _assert_argmax(got_k, want_k, got_v, want_v, label):
+    """`argmax_k` is an integer, so it cannot carry a tolerance -- but it is
+    *selected* by comparing floats. Where two widths tie to within libm noise
+    the two backends may legitimately name different ones, and demanding exact
+    equality makes that a coin flip. What must hold is that the maxima agree,
+    which the caller has already asserted; the index is a diagnostic. So a
+    differing index is accepted only where the values it points at match."""
+    got_k = np.asarray(got_k)
+    assert got_k.dtype.kind == "i", "argmax_k must be an integer array"
+    differ = np.flatnonzero(got_k.ravel() != np.asarray(want_k).ravel())
+    if not differ.size:
+        return
+    gv, wv = np.asarray(got_v).ravel(), np.asarray(want_v).ravel()
+    scale = max(float(np.max(np.abs(wv))), 1e-300)
+    tied = np.abs(gv[differ] - wv[differ]) <= TOL * scale
+    assert tied.all(), (
+        f"{label}: argmax_k differs at {differ[~tied].tolist()} where the "
+        f"maxima themselves do not agree -- that is a real divergence"
+    )
+
+
 def _assert_same(rs, np_, label):
     names = ("statistic", "null", "mu", "sd")
     for name, got, want in zip(names, rs[:4], np_[:4]):
         assert np.asarray(got).shape == np.asarray(want).shape, name
-        assert_close(got, want, TOL, f"{label}: {name}", LAYER)
-    got_k, want_k = rs[4], np_[4]
-    assert got_k.dtype.kind == "i", "argmax_k must be an integer array"
-    assert np.array_equal(got_k, want_k), (
-        f"{label}: argmax_k differs at {np.flatnonzero(got_k != want_k).tolist()}"
-    )
+        assert_close_scaled(got, want, TOL, f"{label}: {name}", LAYER)
+
+    _assert_argmax(rs[4], np_[4], rs[0], np_[0], label)
 
 
 # ---------------------------------------------------------------------
@@ -180,9 +224,11 @@ def test_subset_test_reaches_the_same_result_through_either_backend():
     for alt in wade.ALTERNATIVES:
         a = subset_test(x, cond, perms, alternative=alt, backend="rust")
         b = subset_test(x, cond, perms, alternative=alt, backend="numpy")
-        assert_close(a.statistic, b.statistic, TOL, f"subset_test {alt}: statistic", LAYER)
-        assert_close(a.null, b.null, TOL, f"subset_test {alt}: null", LAYER)
-        assert np.array_equal(a.argmax_k, b.argmax_k)
+        assert_close_scaled(a.statistic, b.statistic, TOL,
+                            f"subset_test {alt}: statistic", LAYER)
+        assert_close_scaled(a.null, b.null, TOL, f"subset_test {alt}: null", LAYER)
+        _assert_argmax(a.argmax_k, b.argmax_k, a.statistic, b.statistic,
+                       f"subset_test {alt}")
         # The observed-curve quantities never touch the kernel.
         assert np.array_equal(a.affected_fraction, b.affected_fraction)
         assert np.array_equal(a.direction, b.direction)
@@ -208,9 +254,11 @@ def test_wade_gives_identical_subset_pvalues_on_either_backend():
 
     assert_close(a.p_subset, b.p_subset, TOL, "wade: p_subset", LAYER)
     assert_close(a.padj_subset, b.padj_subset, TOL, "wade: padj_subset", LAYER)
-    assert_close(a.subset.statistic, b.subset.statistic, TOL, "wade: subset statistic", LAYER)
-    assert_close(a.subset.null, b.subset.null, TOL, "wade: subset null", LAYER)
-    assert np.array_equal(a.subset.argmax_k, b.subset.argmax_k)
+    assert_close_scaled(a.subset.statistic, b.subset.statistic, TOL,
+                        "wade: subset statistic", LAYER)
+    assert_close_scaled(a.subset.null, b.subset.null, TOL, "wade: subset null", LAYER)
+    _assert_argmax(a.subset.argmax_k, b.subset.argmax_k,
+                   a.subset.statistic, b.subset.statistic, "wade")
     assert np.array_equal(a.affected_fraction, b.affected_fraction)
     assert np.array_equal(a.direction, b.direction)
     # And the mean-shift side is unchanged by any of this.

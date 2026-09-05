@@ -21,6 +21,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from conftest import assert_close_scaled
+
 import wade
 from wade.permutation import HAVE_RUST_KERNEL, draw_perms, null_statistics, subset_null_backend
 from wade.quantiles import capped_nprobs, probability_grid
@@ -96,8 +98,13 @@ def test_subset_backends_agree_on_a_capped_grid():
     b_obs = bridge(r)
     out_np = subset_null_backend(x, b_obs, perms, q, backend="numpy")
     out_rs = subset_null_backend(x, b_obs, perms, q, backend="rust")
-    for a, b, name in zip(out_np, out_rs, ("statistic", "null", "mu", "sd", "argmax")):
-        np.testing.assert_allclose(a, b, rtol=1e-15, err_msg=name)
+    # On the quantity's own scale, not per element: the bridge statistic passes
+    # through zero, and the two backends' `log2` differ by an ulp on x86_64
+    # (`test_subset_kernel.py`'s docstring). `argmax` is an integer index and
+    # is compared exactly, not to a tolerance.
+    for a, b, name in zip(out_np[:4], out_rs[:4], ("statistic", "null", "mu", "sd")):
+        assert_close_scaled(b, a, 1e-12, f"capped grid: {name}", "subset kernel")
+    np.testing.assert_array_equal(out_np[4], out_rs[4], err_msg="argmax")
 
 
 # ---------------------------------------------------------------------------

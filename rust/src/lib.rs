@@ -90,8 +90,17 @@
 //!   groups, and on an unbalanced one only the larger group's nodes
 //!   interpolate. A grid capped below the design (`max_probs`,
 //!   `docs/method.md` §1) interpolates more nodes and saves fewer calls, but
-//!   either way the inputs to `log2` are the same as the NumPy path's, so
-//!   the outputs are the same bits.
+//!   either way **the inputs to `log2` are the same as the NumPy path's**.
+//!
+//!   The outputs are not always the same bits, and this comment used to
+//!   claim they were. `f64::log2` here is the system libm; `np.log2` on
+//!   x86_64 is NumPy's own vectorized loop. Both are correctly rounded to
+//!   well under an ulp and they disagree in the last bit. On macOS/arm64
+//!   they agree exactly, which is how a `1e-15` per-element tolerance passed
+//!   locally for weeks and produced twenty failures on the first Linux CI
+//!   run (2026-09-05). Measured, the whole effect is 1.6e-14 on a statistic
+//!   of order 1. Nothing here can fix that, and nothing should try: see
+//!   `docs/implementation-notes.md` §2.11.
 //!
 //! Everything else — the type-7 guard, the sequential cumulative sum, the
 //! `k/m` division before the multiplication, the `±0.0` that an unusable
@@ -393,8 +402,10 @@ impl Type7Plan {
 /// same input, made once per gene instead of once per permutation. Where
 /// the guard fires, the interpolated value is formed with R's
 /// `(1 - h) * a + h * b` and `log2` is called on it, which is what the NumPy
-/// path does. The results are therefore the same bits by construction, not
-/// by tolerance.
+/// path does. Every log therefore gets an identical input by construction,
+/// which is the strongest guarantee available here; whether the outputs are
+/// the same bits is the platform's libm's business, not this function's
+/// (see the module note on `log2`).
 ///
 /// On NumPy's `linspace` grid the nodes of the smaller group land within an
 /// ulp of integers rather than on them, so `h` is occasionally a few

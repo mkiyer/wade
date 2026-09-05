@@ -245,6 +245,57 @@ def assert_close(got, want, tol: float, label: str, layer: str = ""):
     return dev
 
 
+def max_scaled_dev(got, want) -> tuple[float, int]:
+    """Worst deviation **in the units of the quantity's own scale**.
+
+    The companion to :func:`max_rel_dev`, for quantities that pass near zero.
+    A per-element relative deviation divides by the element, so a statistic
+    that legitimately crosses zero reports an enormous relative error for an
+    absolute error of one ulp -- it measures the cancellation, not the
+    arithmetic. Dividing by ``max(|want|)`` instead asks the question that
+    means something: how large is this error compared with the values the
+    quantity actually takes?
+    """
+    got = np.asarray(got, dtype=np.float64).ravel()
+    want = np.asarray(want, dtype=np.float64).ravel()
+    if got.shape != want.shape:
+        raise AssertionError(f"shape mismatch: got {got.shape}, want {want.shape}")
+    ok = np.isfinite(got) & np.isfinite(want)
+    if not np.array_equal(np.isfinite(got), np.isfinite(want)):
+        raise AssertionError("non-finite values differ in position")
+    if not np.any(ok):
+        return 0.0, -1
+    scale = float(np.max(np.abs(want[ok])))
+    if scale == 0.0:
+        scale = 1.0
+    err = np.abs(got[ok] - want[ok]) / scale
+    i = int(np.argmax(err))
+    return float(err[i]), int(np.flatnonzero(ok)[i])
+
+
+def assert_close_scaled(got, want, tol: float, label: str, layer: str = ""):
+    """Compare on the quantity's own scale, record, and assert.
+
+    Use this instead of :func:`assert_close` wherever the quantity crosses
+    zero. Two places need it and both learned it the hard way: the stage-1
+    mean difference, where which BLAS numpy links decides the summation order
+    (``scaling.md`` §3.1), and the subset bridge, where NumPy's own vectorized
+    ``log2`` and the Rust kernel's libm ``log2`` differ by an ulp on x86_64
+    (``implementation-notes.md`` §2.11).
+    """
+    dev, idx = max_scaled_dev(got, want)
+    _LEDGER.append((layer, label, dev, tol, idx))
+    if dev > tol:
+        g = np.asarray(got, dtype=np.float64).ravel()
+        w = np.asarray(want, dtype=np.float64).ravel()
+        raise AssertionError(
+            f"{label}: worst deviation {dev:.3e} of the quantity's scale "
+            f"exceeds tolerance {tol:.1e} at flat index {idx} "
+            f"(got {g[idx]!r} vs expected {w[idx]!r})"
+        )
+    return dev
+
+
 def record(label: str, dev: float, tol: float, layer: str = ""):
     _LEDGER.append((layer, label, dev, tol, -1))
 
