@@ -7,6 +7,8 @@ passed down to the trace helpers for the same reason.
 
 from __future__ import annotations
 
+import textwrap
+
 import numpy as np
 
 from .data import DRIVER_PANELS, _interval_arms, _label_positions
@@ -21,12 +23,12 @@ def _plotly_layout(fig, theme, *, title, width, height, legend_below=False):
         margin=dict(l=70, r=30, t=70 if title else 50, b=60),
         hoverlabel=dict(font=dict(family=theme.font)),
     )
-    fig.update_xaxes(showgrid=True, gridcolor=theme.grid, gridwidth=1, zeroline=False,
-                     linecolor=theme.axis, ticks="outside", tickcolor=theme.axis, title_font=dict(color=theme.ink),
-                     tickfont=dict(color=theme.muted))
-    fig.update_yaxes(showgrid=True, gridcolor=theme.grid, gridwidth=1, zeroline=False,
-                     linecolor=theme.axis, ticks="outside", tickcolor=theme.axis, title_font=dict(color=theme.ink),
-                     tickfont=dict(color=theme.muted))
+    axis = dict(showgrid=True, gridcolor=theme.grid, gridwidth=1, zeroline=False,
+                linecolor=theme.axis, ticks="outside", tickcolor=theme.axis,
+                title_font=dict(color=theme.ink), tickfont=dict(color=theme.muted))
+    fig.update_xaxes(**axis)
+    fig.update_yaxes(**axis)
+
     if legend_below:
         fig.update_layout(legend=dict(orientation="h", yanchor="top", y=-0.12, x=0,
                                       font=dict(color=theme.ink)))
@@ -166,8 +168,7 @@ def _hover_plotly(data):
     for i, (k, _) in enumerate(meta):
         lines.append(f"{k} = %{{customdata[{i}]}}")
     for i, k in enumerate(names, start=len(meta)):
-        fmt = ".3g" if k.startswith("p") else ".3f"
-        lines.append(f"{k} = %{{customdata[{i}]:{fmt}}}")
+        lines.append(f"{k} = %{{customdata[{i}]:.4g}}")
     return cd, "<br>".join(lines) + "<extra></extra>"
 
 
@@ -280,9 +281,10 @@ def _stages_plotly(data, theme, *, title, width, height):
     fig.add_vline(x=data.cutoff_x, line=dict(color=theme.muted, width=1, dash="dash"))
     fig.add_hline(y=data.cutoff_y, line=dict(color=theme.muted, width=1, dash="dash"))
     # Headroom, so the upper quadrant labels do not sit on the genes they count.
-    finite = data.y[np.isfinite(data.y)]
-    if finite.size:
-        fig.update_yaxes(range=[-0.04 * finite.max(), finite.max() * 1.22])
+    top = np.nanmax(data.y[np.isfinite(data.y)]) if np.isfinite(data.y).any() else 1.0
+    if top > 0:
+        fig.update_yaxes(range=[-0.04 * top, top * 1.22])
+
     counts = data.counts()
     # Corner labels: the reading table, in place. Positions in paper fractions.
     corners = {
@@ -293,9 +295,9 @@ def _stages_plotly(data, theme, *, title, width, height):
     }
     for key, text in QUADRANTS.items():
         pos = corners[key]
-        n = counts[text.replace("\n", " ")]
         fig.add_annotation(xref="x domain", yref="y domain", showarrow=False,
-                           text=f"<b>{text.replace(chr(10), '<br>')}</b><br>{n} genes",
+                           text=f"<b>{textwrap.fill(text, 22).replace(chr(10), '<br>')}</b>"
+                                f"<br>{counts[text]} genes",
                            font=dict(size=11, color=theme.muted), align="left" if pos["xanchor"] == "left" else "right",
                            bgcolor=theme.box(), borderpad=3, **pos)
     _labels_plotly(data, go, fig, theme)

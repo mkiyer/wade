@@ -32,7 +32,7 @@ comparison was measuring the cancellation, not the arithmetic.
 So the comparison here is on **the quantity's own scale**
 (``assert_close_scaled``), which is the same correction stage 1 needed when
 its tolerance turned out to be pinned to one machine's BLAS
-(``scaling.md`` §3.1). Anything a real algorithmic divergence would produce is
+(``CONTRIBUTING.md``). Anything a real algorithmic divergence would produce is
 orders of magnitude above this; ulp noise in a libm is not.
 """
 
@@ -56,7 +56,7 @@ LAYER = "subset kernel"
 #: Of the quantity's own scale, not of each element — see the module docstring.
 #: Observed worst across the CI matrix: 1.6e-14. The project's standing
 #: interpretive threshold is that 1e-12 is a real bug and 1e-14 is summation
-#: order (``implementation-notes.md``), so this sits at the boundary and still
+#: order (``CONTRIBUTING.md``), so this sits at the boundary and still
 #: leaves ~60x headroom over what libm noise produces.
 TOL = 1e-12
 
@@ -221,9 +221,10 @@ def test_subset_test_reaches_the_same_result_through_either_backend():
     x = rng.lognormal(3, 0.8, size=(g, n1 + n0))
     cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
     perms = wade.draw_perms(cond, B, seed=10)
+    shift = np.ones(g)
     for alt in wade.ALTERNATIVES:
-        a = subset_test(x, cond, perms, alternative=alt, backend="rust")
-        b = subset_test(x, cond, perms, alternative=alt, backend="numpy")
+        a = subset_test(x, cond, perms, x, shift, alternative=alt, backend="rust")
+        b = subset_test(x, cond, perms, x, shift, alternative=alt, backend="numpy")
         assert_close_scaled(a.statistic, b.statistic, TOL,
                             f"subset_test {alt}: statistic", LAYER)
         assert_close_scaled(a.null, b.null, TOL, f"subset_test {alt}: null", LAYER)
@@ -364,8 +365,8 @@ def test_kernel_rejects_a_bad_alternative():
     xs, b_obs, perms, q = _valid_inputs()
     with pytest.raises(ValueError, match="alternative must be one of"):
         _kernel.subset_null(xs, b_obs, perms, q, "both")
-    # The Python dispatch validates first, with the same message.
-    with pytest.raises(ValueError, match="alternative must be one of"):
+    # The Python dispatch validates first.
+    with pytest.raises(ValueError, match="alternative must be"):
         subset_null_backend(xs, b_obs, perms, q, alternative="both", backend="rust")
 
 

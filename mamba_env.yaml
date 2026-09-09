@@ -1,72 +1,33 @@
+# The contributor environment: everything needed to build the kernel, run the
+# full test suite and render the notebooks. End users do not need this;
+# `pip install wade-rnaseq` is the install (README.md).
+#
+#   mamba env create -f mamba_env.yaml && conda activate wade
+#   pip install -e . --no-build-isolation
 name: wade
 channels:
   - conda-forge
 dependencies:
-  # Core Python. requires-python in pyproject.toml is >=3.10. Left
-  # unpinned: the full suite has been run green on both 3.12 and 3.14, and
-  # the worst-case numeric deviation was identical to the digit on both, so
-  # nothing here is version-sensitive.
   - python>=3.10
   - pip
-  # Runtime. Keep in sync with the `dependencies` list in pyproject.toml.
-  # NumPy 2.x is what the port is developed against; note that the suite
-  # uses np.ptp(arr, axis=...) rather than the ndarray method, which 2.0
-  # removed.
+  # Runtime: keep in step with pyproject.toml.
   - numpy>=1.24
-  # Build toolchain for the Rust permutation kernel (rust/src/lib.rs).
-  #
-  # The kernel is OPTIONAL: without cargo/rustc the package still installs
-  # and runs on the NumPy path, which is the correctness baseline the
-  # kernel is validated against — just 18-22x slower on the permutation
-  # loop. Drop these two lines if you want a pure-Python environment.
-  #
-  # Installed via conda rather than rustup on purpose, so the toolchain
-  # lives inside the environment like every other dependency.
-  # maturin is pinned to match the `requires` in pyproject.toml's
-  # build-system table; rust >=1.75 covers pyo3 0.27's MSRV with margin.
+  # Build toolchain for the Rust kernel, inside the environment.
   - rust>=1.75
   - maturin>=1.5,<2
-  # Optional. WadeResult.to_polars() uses it, and the I/O layer will; the
-  # statistic does not, so the package imports and runs without it.
+  # The optional extras (io, plot, saddlepoint).
   - polars
-  # Optional: the plotting backends (src/wade/plotting.py). Both are imported
-  # inside the plotting functions, never by `import wade`. plotly is the
-  # interactive default; matplotlib is the static/publication one. Either
-  # alone is enough. python-kaleido is only for plotly's static export
-  # (fig.write_image) and needs a Chrome/Chromium on the machine — drop it if
-  # you only need HTML/notebook output or use matplotlib for static figures.
   - plotly>=6
   - matplotlib-base>=3.8
-  - python-kaleido>=1.0
-  # Notebook rendering (notebooks/*.qmd). Quarto shells out to a Jupyter
-  # kernel, so the kernel machinery has to be in this environment; polars
-  # reads .xlsx through fastexcel. Quarto ITSELF is not a conda package here
-  # — install it separately (https://quarto.org) — and nothing in the package
-  # needs any of this, only the notebooks do.
-  - fastexcel
+  - anywidget
+  - scipy>=1.10
+  # Tests.
+  - pytest>=7
+  - pandas>=2.0
+  # Notebooks (notebooks/*.qmd). Quarto itself is installed separately
+  # (https://quarto.org); python-kaleido is plotly's static export and needs a
+  # Chrome/Chromium on the machine.
   - ipykernel
   - pyyaml
-  # Test-only. pandas is here because the frame path is duck-typed and must be
-  # exercised against both frame libraries, not just whichever is installed.
-  - pandas>=2.0
-  # scipy is used by ONE thing: the Kolmogorov-Smirnov test in
-  # the ported null-calibration simulation (tests/test_layer9_validation.py).
-  # It is not a runtime dependency of the package and the statistic does
-  # not need it.
-  - pytest>=7
-  - scipy>=1.10
-
-# NOT DECLARED HERE, DELIBERATELY: R.
-#
-# WADE needed R for exactly two things and now needs it for one. The R
-# implementation it was ported from was deleted on 2026-09-04, so nothing
-# regenerates tests/fixtures/*.json any more -- those files are permanent
-# committed data whose correctness is established by
-# tests/test_independent_reference.py, which uses numpy and scipy and never
-# runs R.
-#
-# The one remaining use is optional and belongs to the benchmark, not the
-# suite: tools/competitors.py can shell out to Rscript to run waddR as one
-# of the nine methods in notebooks/benchmark.qmd. It is skipped when Rscript
-# is absent. Declaring r-base here would pull a whole second toolchain into
-# every developer's environment to serve one optional row of one notebook.
+  - fastexcel
+  - python-kaleido>=1.0

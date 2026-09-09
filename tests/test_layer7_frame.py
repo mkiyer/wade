@@ -158,4 +158,4 @@ def test_named_genes_are_carried_through(name):
 def test_result_reports_the_design_without_running_anything():
     _, res = run_port("main")
     assert res.nprobs == 12
-    assert res.params["n1"] == 15 and res.params["n0"] == 12
+    assert res.params["n_case"] == 15 and res.params["n_ctrl"] == 12

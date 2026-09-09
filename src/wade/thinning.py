@@ -1,42 +1,23 @@
-"""The count-native shift correction for the subset stage — ``docs/method.md`` §10.3–10.4.
+"""The count-native shift correction for the subset stage — ``docs/method.md`` §9.3–9.4.
 
 Stage 2 tests "is a global fold change an adequate explanation?" by first
-making the two groups look identical *under that hypothesis*, then shuffling
-labels. For continuous data that was a division: divide the case values by the
-fitted fold change and the groups are exchangeable if the shift is the whole
-story. For counts at low expression a division does not do that — a zero does
-not divide, and a fold change in a negative-binomial mean is not a
-multiplicative shift of the negative-binomial distribution — and the result,
-measured, was a test that called genuine 2× shifts "not a global shift" most of
-the time below a few counts and most of the time at 20 counts with large
-cohorts.
+making the two groups exchangeable *under that hypothesis*, then shuffling
+labels. For counts the operation is **binomial thinning**: keep each read of
+the higher group with probability ``1/f``. That is what a sample would have
+looked like at ``1/f`` of its sequencing depth; it maps NB(``f·μ``, ``φ``) to
+NB(``μ``, ``φ``) exactly, zeros stay zeros and integers stay integers. A
+division cannot do this at low expression, which is why WADE takes raw counts.
 
-The count-native operation is **binomial thinning**: keep each read of the
-higher group with probability ``1/f``. That is what a sample would have looked
-like at ``1/f`` of its sequencing depth, it maps NB(``f·μ``, ``φ``) to
-NB(``μ``, ``φ``) exactly (Poisson–Gamma is closed under thinning), zeros stay
-zeros and integers stay integers. This module owns three pieces:
+This module owns three pieces:
 
 * :func:`fit_fold_change` — ``f`` as *the thinning factor that makes the two
-  groups' interquartile means agree*. It is unbiased under an NB fold change
-  by construction (it asks "after thinning, do the middles agree?", assuming
-  nothing about how the middle scales) and out of reach of any subset below
-  25%. Two simpler estimators were measured and rejected: the interquartile
-  mean ratio is biased for skewed counts (2.08 for a true 2), and the mean
-  ratio is moved to 1.35 by a 5% subset at 8×. Accuracy matters because an
-  inaccurate ``f`` on a true global shift is *anti*-conservative (30% off →
-  0.26–0.28 false subsets at 200 v 200).
+  groups' interquartile means agree*. Unbiased under an NB fold change by
+  construction, and out of reach of any subset below 25%. Accuracy matters
+  because an inaccurate ``f`` on a true global shift is *anti*-conservative.
 * :func:`thin_counts` — the thinning itself, drawn **once**, before any
   permutation, like the jitter; inference is conditional on the draw.
 * :func:`one_count` — the pseudocount for the log-ratio curve: one count,
-  expressed in each sample's normalized units. A count of zero means "less
-  than one"; without this the tie-breaking jitter turns it into a log-ratio
-  of 7–10 against any nonzero count, and one such node can halve
-  ``affected_fraction`` at any sample size.
-
-Everything here works on the **raw count matrix**, which is why WADE takes
-one. ``thin=False`` falls back to the division, which is kept only so
-``tests/test_scale.py`` can demonstrate why thinning replaced it.
+  expressed in each sample's normalized units.
 """
 
 from __future__ import annotations
@@ -45,23 +26,23 @@ import numpy as np
 
 from .stats import split_groups
 
-__all__ = ["midmean", "fit_fold_change", "thin_counts", "one_count"]
+__all__ = ["MAX_LOG_FOLD", "gene_chunks", "midmean", "fit_fold_change",
+           "thin_counts", "one_count"]
 
 
 def gene_chunks(g: int, gene_chunk: int | None) -> list[slice]:
     """Row slices of at most ``gene_chunk + 1`` genes; one slice when ``None``.
 
-    The chunked paths are **bit-identical** to the unchunked ones — chunking
-    is a memory layout, never a numerical choice (``docs/scaling.md`` §2.2) —
-    so this helper is shared to keep every consumer slicing the same way.
+    Chunking is a memory layout, never a numerical choice: every chunked path
+    is bit-identical to the unchunked one, and this helper is shared so every
+    consumer slices the same way.
 
     **No chunk is ever a single row.** NumPy's row reductions take a
     different code path for a ``(1, m)`` array than for the same row inside a
-    larger matrix, and the two can differ in the last ulp — measured on
-    ``D.sum(axis=1)`` at m = 40. Reductions over blocks of two or more rows
-    are layout-independent (verified 2026-08-20, ``tests/test_chunking.py``),
-    so ``gene_chunk`` must be at least 2 and a trailing one-row remainder is
-    folded into the last chunk.
+    larger matrix, and the two can differ in the last ulp. Reductions over
+    blocks of two or more rows are layout-independent, so ``gene_chunk`` must
+    be at least 2 and a trailing one-row remainder is folded into the last
+    chunk.
     """
     if gene_chunk is None or g <= 1:
         return [slice(0, g)]
@@ -95,8 +76,7 @@ def midmean(x: np.ndarray) -> np.ndarray:
     contiguous before reducing. That last part is load-bearing rather than
     tidy: the fold-change fit reduces per-side row *subsets* whose sizes depend
     on the chunk boundaries, and reductions over fresh C-contiguous rows are
-    independent of how many rows share the array where F-ordered ones are not
-    (``docs/scaling.md`` §2.2).
+    independent of how many rows share the array where F-ordered ones are not.
     """
     x = np.ascontiguousarray(x)
     n = x.shape[1]
@@ -122,8 +102,8 @@ def thin_counts(
     ``fold`` of exactly 1 leaves the gene untouched. Returns a new
     integer-valued float matrix of the same shape.
 
-    ``gene_chunk`` bounds the transient working set (``docs/scaling.md``
-    §2.2) and is **bit-identical** to the unchunked call: the case blocks of
+    ``gene_chunk`` bounds the transient working set and is **bit-identical**
+    to the unchunked call: the case blocks of
     every chunk are drawn first and the control blocks after, so the one
     generator's stream is consumed in exactly the order the single
     full-matrix call consumes it. ``out`` is an optional preallocated
@@ -163,30 +143,48 @@ def thin_counts(
     return out
 
 
-def _fit_fold_change_alpha(counts, cond, alpha, *, seed, iters, max_log_fold,
-                           gene_chunk, backend="numpy"):
-    """The fit on a per-cell affine scale — ``docs/scaling.md`` §3.3, fix 2.
+def fit_fold_change(
+    counts: np.ndarray,
+    cond: np.ndarray,
+    *,
+    alpha,
+    seed: int = 0,
+    iters: int = 16,
+    max_log_fold: float = MAX_LOG_FOLD,
+    gene_chunk: int | None = None,
+    backend: str = "numpy",
+) -> np.ndarray:
+    """Per gene, the thinning factor at which the two groups' interquartile
+    means agree — ``docs/method.md`` §9.3.
 
-    ``wade()``'s fold-change fit normalizes **without** the jitter, and
-    jitter-free ``tpm_like`` is exactly ``x[g, j] = counts[g, j] * alpha[g, j]``
-    with ``alpha = norm_factor / (normalizer * lib)`` fixed. So nothing needs
-    re-normalizing inside the bisection: the untouched group's interquartile
-    mean is computed once, and each step only redraws the thinned group and
-    multiplies by its alpha — half the binomial draws and no full-matrix
-    normalization, with the interquartile means read by selection rather than
-    a full sort.
+    Bisection on ``log f`` over ``[0, max_log_fold]``, thinning the higher
+    group inside the loop. The same ``seed`` is used at every evaluation —
+    common random numbers — so the objective is monotone in ``f`` up to the
+    thinning algorithm's own discreteness, which sixteen halvings of a 10-bit
+    range absorb.
 
-    Chunk-invariant like the general path: the two per-step streams are
-    consumed in gene order across chunks, each restricted to the genes whose
-    side it thins (a deterministic set, fixed before the loop).
+    ``alpha`` is a callable from a row slice to that block's
+    ``(rows, samples)`` **per-cell scale**, so the normalized matrix is
+    ``counts * alpha``. Jitter-free ``tpm_like`` is exactly that —
+    ``alpha = norm_factor / (normalizer * lib)`` — which is what lets the fit
+    re-normalize nothing: the untouched group's interquartile mean is computed
+    once and each step redraws only the group being thinned. The fit works on
+    the **jitter-free** scale deliberately: a hundredth of a count has no
+    business in a fold-change estimate, and on an all-zero gene it would decide
+    which group is "higher" and keep deciding it at every step.
 
-    ``backend="rust"`` runs the bisection in the compiled kernel — parallel
-    over genes, each gene's stream a function of ``(seed, global gene
-    index)`` alone, so equally chunk-invariant. **Not bitwise against the
-    NumPy path** (no two binomial samplers consume randomness alike), which
-    is why it is opt-in and never dispatched automatically: the realized
-    ``f`` for a given seed depends on the backend, and a backend must never
-    change an answer silently.
+    ``gene_chunk`` bounds the working set and is **bit-identical** to the
+    unchunked fit: the two per-step streams are consumed in gene order across
+    chunks, each restricted to the genes whose side it thins. ``backend =
+    "rust"`` runs the bisection in the kernel — deterministic and equally
+    chunk-invariant, but **not bitwise against NumPy** (no two binomial
+    samplers consume randomness alike), which is why it is opt-in and never
+    auto-dispatched.
+
+    Returns ``f`` with the convention of :func:`thin_counts`: ``f >= 1`` means
+    cases are higher and get thinned by ``1/f``; ``f < 1`` means controls are
+    higher and get thinned by ``f``. A gene whose two middles are both zero
+    returns ``1``: nothing to correct, and nothing to say.
     """
     counts = np.asarray(counts, dtype=np.float64)
     i1, i0 = split_groups(np.asarray(cond))
@@ -194,6 +192,10 @@ def _fit_fold_change_alpha(counts, cond, alpha, *, seed, iters, max_log_fold,
     chunks = gene_chunks(g, gene_chunk)
     if backend not in ("numpy", "rust"):
         raise ValueError(f"fit backend must be 'numpy' or 'rust'; got {backend!r}")
+    if not (np.isfinite(max_log_fold) and max_log_fold > 0):
+        raise ValueError(f"max_log_fold must be positive and finite, got {max_log_fold}")
+    if iters < 1:
+        raise ValueError(f"iters must be at least 1, got {iters}")
 
     up = np.empty(g, dtype=bool)
     nothing = np.empty(g, dtype=bool)
@@ -226,6 +228,8 @@ def _fit_fold_change_alpha(counts, cond, alpha, *, seed, iters, max_log_fold,
         case_mask[i1] = True
         ctrl_mask = np.zeros(n, dtype=bool)
         ctrl_mask[i0] = True
+        if not 0 <= int(seed) < 2**64:
+            raise ValueError(f"the kernel's seed must fit an unsigned 64-bit integer, got {seed}")
         half = np.empty(g)
         for ch in chunks:
             active = np.where(up[ch][:, None], case_mask[None, :], ctrl_mask[None, :])
@@ -233,6 +237,7 @@ def _fit_fold_change_alpha(counts, cond, alpha, *, seed, iters, max_log_fold,
                 np.ascontiguousarray(counts[ch]), np.ascontiguousarray(alpha(ch)),
                 active, m_static[ch], int(seed), int(ch.start), int(iters),
                 float(max_log_fold))
+
         f = np.exp(half)
         f = np.where(nothing, 1.0, f)
         return np.where(up, f, 1.0 / f)
@@ -272,53 +277,6 @@ def _fit_fold_change_alpha(counts, cond, alpha, *, seed, iters, max_log_fold,
     f = np.where(nothing, 1.0, f)
     return np.where(up, f, 1.0 / f)
 
-
-def fit_fold_change(
-    counts: np.ndarray,
-    cond: np.ndarray,
-    *,
-    alpha,
-    seed: int = 0,
-    iters: int = 16,
-    max_log_fold: float = MAX_LOG_FOLD,
-    gene_chunk: int | None = None,
-    backend: str = "numpy",
-) -> np.ndarray:
-    """Per gene, the thinning factor at which the two groups' interquartile
-    means agree — ``docs/method.md`` §10.3.
-
-    Bisection on ``log f`` over ``[0, max_log_fold]``, thinning the higher
-    group inside the loop. The same ``seed`` is used at every evaluation —
-    common random numbers — so the objective is monotone in ``f`` up to the
-    thinning algorithm's own discreteness, which sixteen halvings of a 10-bit
-    range absorb.
-
-    ``alpha`` is a callable from a row slice to that block's
-    ``(rows, samples)`` **per-cell scale**, so the normalized matrix is
-    ``counts * alpha``. Jitter-free ``tpm_like`` is exactly that —
-    ``alpha = norm_factor / (normalizer * lib)`` — which is what lets the fit
-    re-normalize nothing: the untouched group's interquartile mean is computed
-    once and each step redraws only the group being thinned. The fit works on
-    the **jitter-free** scale deliberately: a hundredth of a count has no
-    business in a fold-change estimate, and on an all-zero gene it would decide
-    which group is "higher" and keep deciding it at every step.
-
-    ``gene_chunk`` bounds the working set and is **bit-identical** to the
-    unchunked fit: the two per-step streams are consumed in gene order across
-    chunks, each restricted to the genes whose side it thins. ``backend =
-    "rust"`` runs the bisection in the kernel — deterministic and equally
-    chunk-invariant, but **not bitwise against NumPy** (no two binomial
-    samplers consume randomness alike), which is why it is opt-in and never
-    auto-dispatched.
-
-    Returns ``f`` with the convention of :func:`thin_counts`: ``f >= 1`` means
-    cases are higher and get thinned by ``1/f``; ``f < 1`` means controls are
-    higher and get thinned by ``f``. A gene whose two middles are both zero
-    returns ``1``: nothing to correct, and nothing to say.
-    """
-    return _fit_fold_change_alpha(counts, cond, alpha, seed=seed, iters=iters,
-                                  max_log_fold=max_log_fold,
-                                  gene_chunk=gene_chunk, backend=backend)
 
 
 def one_count(

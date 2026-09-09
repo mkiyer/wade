@@ -23,55 +23,46 @@ about using it.
 ## 1. Install
 
 WADE is a Python package with a compiled Rust core. Its only hard dependency
-is NumPy.
+is NumPy. The distribution is named `wade-rnaseq` (the name `wade` on PyPI
+belongs to an unrelated project); the import name is `wade`.
 
 ```bash
-pip install wade
+pip install wade-rnaseq
 ```
 
 That is all most people need. The wheels carry the compiled kernel for Linux
 (x86-64 and ARM64), macOS (Apple silicon and Intel) and Windows (x64), and one
-wheel covers every Python from 3.10 up.
+wheel covers every Python from 3.10 up (GIL-enabled builds; a free-threaded
+build compiles from source).
 
 > **Not on PyPI yet.** Until the first upload, install from a wheel built by
-> CI (the `wheel-*` artifacts on any green run) or from source below. The
-> wheel needs no Rust toolchain; building from source does.
+> CI (the `wheel-*` artifacts on any green run) or from source, which needs
+> a Rust toolchain: `pip install git+https://github.com/mkiyer/wade`.
 
 **Optional extras**, each additive:
 
 | extra | what it adds |
 |---|---|
-| `wade[io]` | `to_frame()` and `write_results()` (polars) |
-| `wade[plot]` | the five figures (plotly and matplotlib) |
-| `pip install scipy` | `stage1="saddlepoint"`, the exact stage-1 p-value |
+| `wade-rnaseq[io]` | `to_frame()` and `write_results()` (polars) |
+| `wade-rnaseq[plot]` | the five figures (plotly and matplotlib; either alone works) |
+| `wade-rnaseq[saddlepoint]` | `stage1="saddlepoint"`, the exact stage-1 p-value (SciPy) |
+| `wade-rnaseq[all]` | all of the above |
 
 Nothing in the statistic imports any of them. `import wade` on a bare NumPy
 install works and stays fast.
 
-### From source
-
-Only needed to develop WADE or to build on a platform with no wheel.
-**Building needs a Rust toolchain**, because the build backend is maturin and
-even metadata generation calls cargo.
-
-```bash
-mamba env create -f mamba_env.yaml
-conda activate wade
-pip install -e . --no-build-isolation
-pytest                       # ~18 s
-```
-
-The compiled kernels are optional *at run time*. Without them WADE falls back
-to the NumPy path, which is the correctness baseline the kernels are checked
-against, about 80× slower on the subset test. Run `pytest -m "not kernel"` if
-you built without a toolchain.
-
-To confirm you got the fast build:
+On a platform with no wheel, pip builds from source, which needs a Rust
+toolchain ([rustup](https://rustup.rs), or `conda install rust`; on Windows
+also the MSVC Build Tools). Without the compiled kernel WADE still runs, on
+the NumPy path the kernels are checked against, about 80× slower on the
+subset test. To confirm you got the fast build:
 
 ```python
 import wade
 assert wade.permutation.HAVE_RUST_KERNEL
 ```
+
+To develop WADE, see [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ---
 
@@ -86,7 +77,7 @@ from wade import wade
 # cond:       1 = case, 0 = control, one entry per column
 res = wade(counts, normalizer=1.0, cond=cond, nperms=2000, seed=1)
 
-df = res.to_frame()                    # needs wade[io]
+df = res.to_frame()                    # needs wade-rnaseq[io]
 hits = df.filter(df["padj_subset"] < 0.05)
 ```
 
@@ -115,8 +106,13 @@ thinning of reads. Handing it a pre-normalized matrix silently breaks both.
 
 Accepted: a NumPy array, a polars or pandas DataFrame, a SciPy sparse matrix,
 or a `wade.Counts`. **WADE reads no files.** Your reader reads them, which
-keeps file formats out of the statistic. For a transposed matrix or an unusual
-column layout, call `wade.as_counts(obj, genes="columns")` yourself first.
+keeps file formats out of the statistic. From a frame, the first column is
+the gene id when it is non-numeric (or the pandas index, when it is
+labelled), and every other numeric column is a sample; a non-numeric
+leftover raises. For a transposed matrix, an integer id column, or a
+featureCounts layout with annotation columns in the middle, call
+`wade.as_counts(obj, genes="columns")`, `as_counts(obj, id_column="Geneid")`
+or `as_counts(obj, sample_columns=[...])` yourself first.
 
 WADE is for **discrete count data**. Continuous input is not a target and is
 neither tested nor tuned for.
@@ -160,7 +156,7 @@ takes two groups by name or index instead.
 | `subset_log2_fc` | how large the change is *within* the affected subset |
 | `log2_fc` | the global fold change |
 | `z_mean_shift`, `z_subset` | ranking scores, see below |
-| `refined_*` | whether that p-value came from the tail model rather than a permutation count |
+| `nexc_*`, `refined_*` | how many null draws reached the observed statistic, and whether the p-value came from the tail model rather than that count |
 
 Benjamini-Hochberg is applied **within each stage separately**. There is no
 multiplicity correction across the two stages, because they answer different
@@ -280,7 +276,7 @@ Two things that are *not* true and are worth knowing:
 If you are tight on memory, `subset=False` is the real lever: it drops the
 peak by a third, at the cost of the stage that makes WADE worth running.
 
-Three knobs, all in [`scaling.md`](scaling.md):
+Three knobs:
 
 * **`gene_chunk`** processes genes in blocks. Results are **bit-identical** to
   the one-pass run, asserted rather than assumed, so this is purely a memory
@@ -288,19 +284,23 @@ Three knobs, all in [`scaling.md`](scaling.md):
 * **`max_probs`** (default 2,000) caps the quantile grid. This is the one
   default that changes an answer, and it is recorded in the result and the
   manifest. Above the cap, `affected_fraction` resolves to `1/max_probs`; the
-  rule is `m >= 2.5/pi_min` for the smallest subset fraction you care about.
-* **`fit_backend="rust"`** moves the fold-change fit into the kernel. Opt-in
-  because it is not bitwise identical to the NumPy path.
+  rule is `m >= 2.5/pi_min` for the smallest subset fraction you care about
+  ([`method.md`](method.md) §1).
+* **`fit_backend="rust"`** moves the fold-change fit into the kernel, several
+  times faster. Opt-in because the two backends draw their thinning
+  differently and fit slightly different fold changes for the same seed.
 
-Both permutation loops are already compiled and threaded. You do not need to
-opt into that.
+On a balanced design `stage1="gemm"` computes stage 1 as one matrix product,
+which is much faster at large `n`; it changes `mean_shift` from the grid
+quadrature to the exact mean difference, so it is opt-in too. Both permutation
+loops are already compiled and threaded. You do not need to opt into that.
 
 ---
 
 ## 7. Before you trust a result
 
-Read [`limits.md`](limits.md). Two things decide whether WADE can answer your
-question at all, and neither is about the software.
+Read [`method.md`](method.md) §10. Two things decide whether WADE can answer
+your question at all, and neither is about the software.
 
 ### The detectability floor
 
@@ -351,6 +351,28 @@ the direction that loses discoveries rather than manufacturing them. Treat a
 `p_subset` near your threshold as a lower bound on the evidence. The full
 account is in [`pvalue-review.md`](pvalue-review.md).
 
+### Checklist: when not to use WADE
+
+Work down this list before running. Any "yes" is a reason to stop.
+
+1. **Is the smaller group under 10?** The grid has fewer than 10 points. Stop.
+2. **Is the detectability floor above your threshold** for the smallest
+   subset you care about? Nothing in this family can find it. Stop, or
+   rebalance.
+3. **Do you have a covariate or batch effect** that tracks the contrast?
+   Detect and refuse, or stratify with `strata=`.
+4. **Do you have repeated measures?** Aggregate to one value per subject
+   first; `strata=` does not solve this.
+5. **Do you need a fraction estimate** and have fewer than ~50 per group?
+   `affected_fraction` will separate global from concentrated but will not
+   tell you 2% from 5%.
+6. **Is a large share of your genes strongly differential?** The
+   characterization will be distorted by composition. The subset test's
+   significance is not.
+7. **Do you actually have a location shift?** If the question is "is the
+   mean different", an ordinary DE method answers it and is better understood.
+   WADE's value is the second question, not the first.
+
 ---
 
 ## 8. Diagnostics and figures
@@ -366,17 +388,38 @@ libraries can top the subset ranking across thousands of genes. **Check the
 drivers before believing a hit.** If one gene's subset is the same three
 libraries as everyone else's, you have found a technical artefact.
 
-Figures need `wade[plot]`:
+### Figures
+
+Figures need `wade-rnaseq[plot]`. Four of them, each answering one question, and
+a fifth that wires two of the views together in a live notebook:
+
+| function | the question it answers |
+|---|---|
+| `plot_gene(res, gene="MYC")` | *What does this gene's difference look like?* The log-ratio curve, with the two quantile functions beneath it. A flat curve is a global fold change; a curve at zero that climbs is a subset. The dashed line is the fitted global shift the subset test argues against. |
+| `plot_volcano(res, stage="subset")` | *Which genes?* Effect size against significance, coloured by `affected_fraction`. `stage="both"` puts the two stages side by side. |
+| `plot_stages(res)` | *What kind of difference?* Stage 1 against stage 2: the reading table of §2, drawn, with a count per quadrant. |
+| `plot_drivers(res, "MYC", counts)` | *Should I believe this one?* The driving samples against the cohort's median and interquartile range: the gene's share of each library, complexity, depth. Needs the raw counts passed back, because the result does not carry them. |
+| `plot_linked(res, "subset", label=8)` | The volcano and the gene panel in one widget: click a point. Needs a live Jupyter kernel and does not survive export to HTML. |
+
+Every figure takes `backend="plotly"` (interactive, the default when
+installed) or `"matplotlib"` (static, for a manuscript), `theme="light"` /
+`"dark"` / `"high-contrast"`, `title=`, `width=` and `height=`. Either axis of
+a cloud takes any result column, so on a large cohort where p-values saturate:
 
 ```python
-wade.plot_volcano(res)     # log2 fold change against significance
-wade.plot_gene(res, gene="MYC")   # its quantile curves and bridge
-wade.plot_stages(res)      # stage 1 against stage 2
-wade.plot_drivers(res, "MYC", counts)
+wade.plot_volcano(res, stage="subset", x="subset_log2_fc", y="z_subset", label=8)
 ```
 
-`plot_drivers` needs the raw counts passed back, because the result
-deliberately does not carry them. [`plotting.md`](plotting.md) has the rest.
+`label=n` names the top *n* genes (placed so they do not overlap);
+`label=["MYC", ...]` names specific ones. `meta="gene_name"` names points by a
+column carried from the input frame instead of the gene id. `n_boot > 0`
+draws the bootstrap intervals as error bars on the labelled points.
+
+The figures are a convenience layer: every number a figure draws is in
+`res.columns()` or in `wade.subset_drivers` / `wade.library_qc`, and every
+figure's arrays are available as a table (`wade.plotting.volcano_data(res,
+"subset").table()`), so exporting and plotting in another tool loses you
+nothing.
 
 ---
 
@@ -391,7 +434,7 @@ input error that would otherwise produce plausible wrong numbers.
 
 **`wade.permutation.HAVE_RUST_KERNEL` is `False`.** You are on the NumPy
 fallback, correct but about 80 times slower on the subset test. Install a
-published wheel rather than building from source.
+published wheel, or build from source with a Rust toolchain on the path.
 
 **Everything is significant.** On large cohorts significance saturates, and it
 is not a bug: with tens of thousands of samples a tiny real difference is
@@ -411,9 +454,7 @@ permutations come from ambient state.
 
 | document | what it covers | for whom |
 |---|---|---|
-| [`method.md`](method.md) | the statistic, both stages, normalization, why each choice | anyone evaluating WADE |
-| [`limits.md`](limits.md) | what WADE cannot do, and the constraints that decide it | **read before your first run** |
-| [`scaling.md`](scaling.md) | large-cohort measurements and the research record | large cohorts |
-| [`plotting.md`](plotting.md) | the figure layer | making figures |
+| [`method.md`](method.md) | the statistic, both stages, normalization, why each choice, and what it cannot do (§10, **read before your first run**) | anyone evaluating WADE |
 | [`pvalue-review.md`](pvalue-review.md) | the p-value estimators and the open problem | statisticians |
-| [`implementation-notes.md`](implementation-notes.md) | what a second implementation must know | porters |
+| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | building, testing, layout, and the traps | developers |
+| [`../ISSUES.md`](../ISSUES.md) | the work queue | everyone |

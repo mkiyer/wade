@@ -1,10 +1,10 @@
 """The data layer: one pure-NumPy dataclass per figure, and nothing else.
 
-Each of :func:`gene_panels`, :func:`volcano_data` and :func:`stages_data`
-turns a :class:`~wade.api.WadeResult` into exactly the arrays a figure draws,
-and each dataclass has a ``table()`` — the chart's table-view twin, and the
-seam a third renderer would be written against. **This module imports no
-plotting backend**, which is what makes that promise checkable.
+Each of :func:`gene_panels`, :func:`volcano_data`, :func:`stages_data` and
+:func:`driver_panel` turns a :class:`~wade.api.WadeResult` into exactly the
+arrays a figure draws, and each dataclass has a ``table()`` — the chart's
+table-view twin, and the seam a third renderer would be written against.
+**This module imports no plotting backend.**
 
 ``res.columns()`` is the single namespace for the axes, the colour and the
 hover, so a new statistic is plottable the day it exists.
@@ -31,10 +31,7 @@ def _column_array(res: WadeResult, name: str) -> np.ndarray:
             f"{name!r} is not a column of this result; available: "
             f"{sorted(k for k in cols if k != 'gene')}"
         )
-    vals = cols[name]
-    if vals is None:
-        raise ValueError(f"column {name!r} was not computed for this result")
-    return np.asarray(vals, dtype=np.float64)
+    return np.asarray(cols[name], dtype=np.float64)
 
 
 # ---------------------------------------------------------------------------
@@ -252,14 +249,10 @@ class DriverPanel:
 
     A distributional test faithfully reports a subset in every gene that a
     low-complexity library detects, so "which samples" is only half the
-    question; the other half is whether those samples are unremarkable. On real
-    plasma cfRNA a handful of libraries topped the subset ranking of thousands
-    of genes at once and produced a thoroughly convincing false story
-    (``docs/scaling.md`` §7.2). What separated the artefact from the genuine
-    ``ETV4`` finding was **the gene's share of each driver's library** —
-    :attr:`share` — together with those libraries' complexity and depth read
-    *against the cohort*, which is what :attr:`cohort` is for. A driver's
-    complexity in isolation says nothing.
+    question; the other half is whether those samples are unremarkable. What
+    separates an artefact from a finding is **the gene's share of each
+    driver's library** (:attr:`share`), together with those libraries'
+    complexity and depth read *against the cohort* (:attr:`cohort`).
     """
 
     gene: str
@@ -277,13 +270,11 @@ class DriverPanel:
     #: Complexity and depth, from :func:`wade.library_qc` on the raw counts.
     detected_fraction: np.ndarray
     depth: np.ndarray
-    #: Concentration — the library's top-``top_n`` share. Carried but not
-    #: drawn; ``36% against a cohort median of 15%`` was §7.2's other number.
+    #: Concentration — the library's top-``top_n`` share. Carried, not drawn.
     top_share: np.ndarray
-    #: ``(q25, median, q75)`` over **all** samples for each quantity above. The
-    #: cohort, not the group: a library's complexity has nothing to do with
-    #: which arm it is in, and "5,563 genes detected" only means something
-    #: beside "11,114 elsewhere".
+    #: ``(q25, median, q75)`` over **all** samples for each quantity above.
+    #: The cohort, not the group: a library's complexity has nothing to do
+    #: with which arm it is in.
     cohort: dict
     direction: float
     affected_fraction: float
@@ -325,11 +316,9 @@ class DriverPanel:
 def driver_panel(res: WadeResult, gene, counts, *, k=None, top_n: int = 10) -> DriverPanel:
     """The arrays behind :func:`wade.plot_drivers`.
 
-    ``counts`` is the **raw count matrix the run was given**. A
-    :class:`WadeResult` does not carry it — ``res.tpm`` is normalized *and*
-    jittered, so it has no exact zeros left and cannot be asked how many genes
-    a library detected — and WADE does not read files, so the caller who has
-    the counts passes them.
+    ``counts`` is the **raw count matrix the run was given**; a
+    :class:`WadeResult` does not carry it, and a library's complexity needs
+    the exact zeros the normalized matrix no longer has.
 
     ``k`` overrides the number of drivers, which otherwise is the gene's own
     ``affected_fraction`` of the case samples and so introduces no threshold.
@@ -434,10 +423,15 @@ def _color_arrays(res: WadeResult, color):
                 f"{res.gene.shape[0]}, got {vals.shape}")
         key = "colour"
     finite = vals[np.isfinite(vals)]
-    spans_zero = finite.size > 0 and finite.min() < 0.0 < finite.max()
-    return vals, dict(label=_axis_label(key),
-                      role="diverging" if spans_zero else "sequential",
-                      range=None, key=key)
+    if finite.size == 0:
+        return None, None
+    lo, hi = float(finite.min()), float(finite.max())
+    if lo < 0.0 < hi:
+        # Diverging: symmetric about zero, so the neutral colour means zero.
+        half = max(-lo, hi)
+        return vals, dict(label=_axis_label(key), role="diverging", range=(-half, half), key=key)
+    return vals, dict(label=_axis_label(key), role="sequential",
+                      range=(lo, hi if hi > lo else lo + 1.0), key=key)
 
 
 def _column_ci(res: WadeResult, name: str | None) -> np.ndarray | None:
@@ -458,16 +452,10 @@ def _interval_arms(v: np.ndarray, ci, idx: np.ndarray):
     """One axis's error-bar arms for the labelled points, as ``(minus, plus)``
     non-negative distances — or ``None`` when there is no interval.
 
-    Clamped at zero, because **a percentile bootstrap interval need not bracket
-    its own point estimate**: a nonlinear statistic's bootstrap distribution can
-    sit to one side of it, and both backends refuse a negative arm outright.
-    Measured over 200 genes at ``n_boot=100``, only ``affected_fraction`` does
-    it — 8 of them, by at most 0.029 against intervals up to 0.73 wide. The bar
-    is then drawn over ``[min(lo, v), max(hi, v)]``: never narrower than the
-    interval, so it can only ever understate precision, never overstate it.
-
-    Computed here rather than in each renderer so the two cannot disagree about
-    what a bar spans.
+    Clamped at zero, because a percentile bootstrap interval need not bracket
+    its own point estimate and both backends refuse a negative arm. The bar
+    is then drawn over ``[min(lo, v), max(hi, v)]``, never narrower than the
+    interval. Computed here so the two renderers cannot disagree.
     """
     if ci is None:
         return None
@@ -479,11 +467,8 @@ def _meta_columns(res: WadeResult, meta) -> dict[str, np.ndarray]:
     """The per-gene metadata columns a figure was asked to show.
 
     ``meta`` names columns of :attr:`WadeResult.gene_meta` — one name or
-    several. The **first** names the points, because a ranked cloud of
-    ``ENSG…`` accessions is unreadable and one of symbols is biology; every
-    named column joins the hover and the table. WADE's core needs one gene id
-    and nothing more, so **no statistic reads any of this** and a test asserts
-    that adding metadata moves no number (``tests/test_core_completion.py``).
+    several. The **first** names the points; every named column joins the
+    hover and the table. No statistic reads any of it.
     """
     if meta is None:
         return {}
@@ -493,8 +478,7 @@ def _meta_columns(res: WadeResult, meta) -> dict[str, np.ndarray]:
         raise ValueError(
             f"{missing} not in this result's gene metadata; available: "
             f"{sorted(res.gene_meta) or 'none'}. Per-gene columns are carried "
-            f"from the input frame and read by no statistic — see "
-            f"docs/plotting.md.")
+            f"from the input frame.")
     return {n: np.asarray(res.gene_meta[n], dtype=object) for n in names}
 
 
@@ -502,13 +486,6 @@ def _display_names(gene: np.ndarray, meta: dict) -> np.ndarray:
     """What the points are called: the first metadata column when one was asked
     for, the gene id otherwise."""
     return gene if not meta else next(iter(meta.values()))
-
-
-def _result_columns(res: WadeResult) -> dict[str, np.ndarray]:
-    """Every column the result carries, for the hover. ``res.columns()`` is the
-    single namespace for the axes, the colour and the hover, which is what
-    keeps a new statistic from having to be wired into three places."""
-    return {k: v for k, v in res.columns().items() if v is not None}
 
 
 def _label_mask(y: np.ndarray, gene: np.ndarray, label, tiebreak=None) -> np.ndarray:
@@ -534,8 +511,8 @@ def _label_mask(y: np.ndarray, gene: np.ndarray, label, tiebreak=None) -> np.nda
                 order = np.lexsort((secondary, primary))
             mask[order[:n]] = True
         return mask
-    wanted = set(np.asarray(label, dtype=object).tolist())
-    return np.isin(gene, list(wanted))
+    wanted = [label] if isinstance(label, str) else list(label)
+    return np.isin(gene, wanted)
 
 
 #: A label's assumed extent as a fraction of the axis range — roughly ten
@@ -571,18 +548,13 @@ def _axis_span(v: np.ndarray) -> tuple[float, float]:
 def _label_positions(data) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Labelled indices and each label's offset, in **data coordinates**.
 
-    Selective labelling still collides. On a real cohort thousands of genes tie
-    at the p-value floor, so the labelled ones land in a tight cluster and their
-    text stacks into an unreadable smear; drawing the bootstrap intervals (C2)
-    made it worse by putting bars through it. Alternating above and below — what
-    this did before — only ever separates two.
+    Selective labelling still collides: on a real cohort thousands of genes
+    tie at the p-value floor, so the labelled ones land in a tight cluster.
+    A greedy slot assignment places labels **most significant first**, each
+    taking the first candidate in :data:`_LABEL_SLOTS` whose box clears every
+    box already placed, and falling back to the last slot when nothing is
+    free. Priority matches :func:`_label_mask`'s own ranking.
 
-    A greedy slot assignment instead: labels are placed **most significant
-    first**, each taking the first candidate in :data:`_LABEL_SLOTS` whose box
-    clears every box already placed, and falling back to the last slot when
-    nothing is free, because a displaced overlap still reads better than a
-    centred one. Priority matches :func:`_label_mask`'s own ranking, so the gene
-    a reader most wants named gets the best position.
 
     The arithmetic is in normalized axis units and is converted back on the way
     out, so **both backends place text identically** and neither needs font
@@ -742,7 +714,7 @@ def volcano_data(res: WadeResult, stage: str = "mean_shift", *, alpha: float = 0
         # Matched against what the points are *called*: name what you see.
         labelled=_label_mask(yv, _display_names(res.gene, meta_cols), label, tiebreak=xv),
         alternative=str(res.params.get("alternative", "two-sided")),
-        hover=_result_columns(res), x_name=x, y_name=y,
+        hover=res.columns(), x_name=x, y_name=y,
         x_ci=_column_ci(res, x), y_ci=_column_ci(res, y), meta=meta_cols,
     )
 
@@ -784,12 +756,14 @@ class StagesData:
 
     def quadrant(self) -> np.ndarray:
         """The reading-table label of every gene, as an object array."""
-        return np.array([QUADRANTS[(bool(a), bool(b))].replace("\n", " ")
+        return np.array([QUADRANTS[(bool(a), bool(b))]
                          for a, b in zip(self.sig_mean, self.sig_subset)], dtype=object)
 
     def counts(self) -> dict[str, int]:
+        """Genes per quadrant, keyed by the quadrant's label."""
         q = self.quadrant()
-        return {k.replace("\n", " "): int((q == k.replace("\n", " ")).sum()) for k in QUADRANTS.values()}
+        return {k: int((q == k).sum()) for k in QUADRANTS.values()}
+
 
     def table(self) -> dict[str, np.ndarray]:
         cols = {"gene": self.gene, "p_mean_shift": 10.0 ** -self.x, "p_subset": 10.0 ** -self.y,
@@ -827,5 +801,5 @@ def stages_data(res: WadeResult, *, alpha: float = 0.05,
         cutoff_subset=_bh_cutoff(np.asarray(p_s, float), np.asarray(padj_s, float), alpha),
         color=colors, color_spec=spec,
         labelled=_label_mask(score, _display_names(res.gene, meta_cols), label),
-        hover=_result_columns(res),
+        hover=res.columns(),
     )

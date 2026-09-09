@@ -13,17 +13,14 @@ first-moment test cannot tell them apart. Nothing here requires the user to
 declare in advance which they are looking for.
 
 > **Scope.** WADE is for **discrete count data**. The entry point takes raw
-> counts, the continuity jitter is applied at count precision (§8), the subset
-> stage's null is built by thinning reads (§10.3) and the log-ratio curve
-> carries a one-count pseudocount (§10.4) — none of which means anything for a
+> counts, the continuity jitter is applied at count precision (§7), the subset
+> stage's null is built by thinning reads (§9.3) and the log-ratio curve
+> carries a one-count pseudocount (§9.4) — none of which means anything for a
 > continuous measurement. Continuous input is neither tested nor tuned for.
 
-> **Status.** All of this is implemented. Sections 1–2 and 6, 8 are
-> additionally verified against the R reference; sections 3–5 and 10 are new
-> work with no R counterpart, validated against planted ground truth in
-> `tests/test_subset.py`, `tests/test_scale.py` and `tests/test_thinning.py`.
-> Section 10 supersedes §3's division correction for the raw-count entry
-> point. `ROADMAP.md` tracks what remains.
+Sections 1–8 define the statistic and its inference; §9 is the derivation
+of why stage 2 works on counts the way it does; §10 is what the method cannot
+do. Every number here was measured, not reasoned.
 
 ---
 
@@ -60,7 +57,7 @@ $$m = \min(n_0,\; n_1,\; \texttt{max\_probs})$$
 with `max_probs = 2000` by default, so **every design at or under 2,000 per
 group — including everything this document's measurements were made on — is
 untouched.** Above it, the grid is capped and two things change, both
-measured (`docs/scaling.md` §2.1):
+measured:
 
 * `affected_fraction`'s resolution becomes $1/\texttt{max\_probs}$. The
   fidelity rule is $m \gtrsim 2.5 / \pi_{\min}$ for the smallest fraction of
@@ -112,7 +109,7 @@ buys an exact p-value with no permutations and no floor (§6). The two are not
 interchangeable: off balance the quadrature is a *trimmed* summary and is the
 more powerful statistic — measured at 2–4× when $n_1 > n_0$ — while the
 saddlepoint still wins end to end because the floor costs more than the
-trimming buys (`scaling.md` §4.10). Under `stage1="saddlepoint"` this
+trimming buys (`pvalue-review.md` §5.5). Under `stage1="saddlepoint"` this
 paragraph's quadrature is not computed at all.
 
 **This is the ordinary test**, and naming it plainly matters: it is what any
@@ -122,13 +119,9 @@ cases at 2×: power 0.700, against 0.295 for the shape test). WADE's claim is
 that it adds sensitivity the mean test lacks for strong concentrated effects
 (2% of cases at 8×: 0.700 against 0.935).
 
-> Formerly `diff.mean`, described as the "bulk axis". Renamed: "bulk" told a reader nothing.
-
 ---
 
 ## 3. Stage 2 — the shape test
-
-Replaces the fixed tail window described in §7.
 
 If the difference were a pure global shift, the running total of $R$ would grow
 *proportionally* — the top 20% of quantiles would carry 20% of it. Measure the
@@ -172,25 +165,19 @@ the standardization's denominator comes out too small.
 Measured, that error is large: scanning $B$ against an ordinary permutation null
 fires on **14–19%** of genuine global fold changes.
 
-The fix uses the fact that $B$ is **exactly invariant** to a global fold change
-— $R \to R - c$ sends $S_k \to S_k - kc$ and leaves $B_k$ unchanged. So the
-observed statistic needs no adjustment; only the null does. Divide the case
-columns by the estimated fold change, which makes the two groups exchangeable
-under $H_0$, and permute *that*.
+The fix is to make the two groups exchangeable **under the fitted global
+shift** and permute *that*. For continuous data the operation would be a
+division: $B$ is exactly invariant to a global fold change ($R \to R - c$
+sends $S_k \to S_k - kc$ and leaves $B_k$ unchanged), so the observed
+statistic needs no adjustment and only the null does. For counts a division
+does not make the groups exchangeable at low expression, and §9.3 replaces
+it with binomial thinning of the raw counts, which is what `wade()` does; the
+observed statistic is then read off the thinned matrix too. The reasoning is
+the same either way, and it is the whole point: stage 2's null is a fitted
+global shift, not no-difference.
 
-> **This division is the correction for continuous data**, and it is what
-> `thin=False` selects. For raw counts it is superseded: a division does not
-> make count groups exchangeable at low expression, and §10.3 replaces it with
-> binomial thinning, which `wade()` does by default. The reasoning below —
-> that stage 2's null is a fitted global shift rather than no-difference — is
-> unchanged and is the whole point; only the operation that realizes it
-> changes.
-
-The shift is estimated by the **median** of $R$, not the mean: a subset signal
-moves the top quantiles and leaves the median alone, so estimating the shift
-this way does not quietly remove the signal being tested for.
-
-Measured effect of the correction, 500 v 500:
+Measured effect of the correction on continuous data (lognormal, 500 v 500),
+with the shift estimated by the median of $R$:
 
 | | ordinary permutation null | shift-corrected null |
 |---|---|---|
@@ -299,8 +286,7 @@ acquire a small consistent fold change, so their `affected_fraction` drifts towa
 `direction` collapses toward 0 or 1. **The shape test itself is unaffected** —
 the bridge is invariant to exactly this kind of global offset — but the two
 descriptive statistics are not. This is a property of normalized data that
-affects any differential method, not something WADE introduces, and it is
-asserted in `tests/test_shape.py` so it cannot be forgotten.
+affects any differential method, not something WADE introduces.
 
 ### Resolution limit, stated rather than hidden
 
@@ -316,8 +302,8 @@ concentrated (0.12–0.27), but 2% and 5% become indistinguishable.
 | 100 v 100 | 100 | 0.080 | 0.080 | 0.121 | 0.279 | 0.957 |
 | 77 v 18 | 18 | 0.131 | 0.117 | 0.146 | 0.269 | 0.890 |
 
-This is the same grid resolution `limits.md` documents, surfacing honestly
-instead of being absorbed by a rounding rule.
+This is the resolution limit §10 states, surfacing honestly instead of
+being absorbed by a rounding rule.
 
 ---
 
@@ -344,7 +330,7 @@ removed. The table is how to read them, not a function the package provides.
   applies to every gene, so the null preserves the gene–gene correlation
   structure. Drawing an independent shuffle per gene would give a different and,
   across correlated genes, anti-conservative null.
-- **The continuity jitter is drawn once, before any permutation** (§8), so
+- **The continuity jitter is drawn once, before any permutation** (§7), so
   inference is *conditional* on one realised noise draw. That is what makes a
   seed reproduce a result exactly. It must never be re-drawn inside the loop.
 
@@ -356,7 +342,7 @@ unrestricted, the space is $\binom{n}{n_1}$; restricted, it is
 $\prod_s \binom{n_s}{k_s}$, and any stratum holding a single class
 contributes a factor of one. `wade.permutation_space()` returns the realized
 space and the p-value floor it implies, and the manifest records both
-(`docs/limits.md` §2.1).
+(§10.2).
 
 **The empirical p-value** is $(1 + \#\{t^{(b)} \ge t\})/(B+1)$ — the add-one
 form, which counts the observed labelling among the exchangeable outcomes,
@@ -408,7 +394,8 @@ magnitude, and the z keeps ordering them at no extra cost, since the null
 matrix is already in hand. They are *not* calibrated tail probabilities and
 must not be pushed through a normal CDF — the null of a maximum statistic is
 not normal, and honesty about the tail is the floor's job. Calibrated
-resolution beyond the floor is the `scaling.md` §4 agenda.
+resolution beyond the floor is the open problem of `pvalue-review.md` and
+`ISSUES.md` item 1.
 
 ### The combinatorial floor
 
@@ -417,45 +404,14 @@ group with probability $\binom{n_1}{k}/\binom{n_1+n_0}{k}$. **That is the
 scale of the smallest p-value a label-permutation test can resolve**, whatever
 the effect size, the detector, or the permutation count — exact in the
 noise-free limit, and within a factor of about two of the median gene in
-measured count data (`limits.md` §4.1). At 77 cases vs 18 controls it is
+measured count data (§10.4). At 77 cases vs 18 controls it is
 0.173 at 10% affected — so nothing below roughly 25% is detectable at
 $\alpha = 0.05$, by any method in this family. This dominates detector choice at
 small $n$ and is the single most important thing to check before running.
 
 ---
 
-## 7. What was retired, and why
-
-The subset machinery used to be a fixed tail window,
-``k = max(1, ceil(q_tail * m))`` with ``q_tail = 0.10``, giving `tail.mean` and `tail.conc`. It is gone, along with `q_tail`, the guard factor `F`, and
-the rank scores that consumed it.
-
-Three stacked heuristics — a fraction, a rounding rule and a floor — plus a
-fourth to guard the ratio they produced. It forced the user to declare what
-they were looking for, which is the defect that made COPA require re-running
-at every percentile cutoff. And `k` was an integer window on a grid whose size
-is set by the design, so the realized tail fraction sawtoothed between 0.100
-and 0.182 as group size varied and jumped discontinuously ($m = 20 \to 21$
-moved it from 10.0% to 14.3% on one extra sample) — making `tail.mean`
-incomparable across contrasts of different sizes.
-
-Measured, the replacement matches it in power and beats it wherever the signal
-is not concentrated near 10%: at 77 v 18 with a weak global change, 0.975
-against 0.830.
-
-`tail.conc` additionally had a **pole**, its denominator being a signed sum
-that vanishes whenever the bulk cancels the tail. On a realistic simulation the
-largest $|$`tail.conc`$|$ among genes with *no signal at all* was 3,483. §4's
-`affected_fraction` has no pole and needs no guard.
-
-**What the golden fixtures still pin.** They were generated to validate the
-port against the original R implementation, now retired, and agreement on the
-retired statistics no longer tests anything that runs. What they still pin is the shared machinery
-underneath — normalization, the type-7 quantile grids, the permutation null,
-the GPD refinement and BH — which §1–6 use unchanged and where a silent
-cross-language disagreement would do the most damage.
-
-## 8. Normalization
+## 7. Normalization
 
 The entry point takes **raw counts**, because the continuity jitter is applied
 at count precision *before* division and a pre-normalized matrix cannot
@@ -469,52 +425,41 @@ The jitter breaks ties in zero-heavy data, where many samples share a count of
 zero and the quantile grid would degenerate into flat runs; it also makes every
 value strictly positive, so fold changes stay finite.
 
-**The per-cell denominator is a quirk, reproduced for parity rather than
-endorsed.** It adds only *this gene's* jitter contribution to the library size,
-not the whole column's, so it is the library size in a counterfactual where gene
-$g$ alone received jitter. The origin is historical: WADE's ancestor normalized
-one gene at a time, where `lib_sizes + noise/length` is the natural expression,
-and matrixizing it preserved a per-gene correction. Consequences: column sums
-are not exactly $\kappa$ (the output is TPM-*like*), and any gene that
-constitutes an entire library normalizes to exactly $\kappa$ — including every
-gene in an all-zero sample, which is an artefact rather than a sensible value.
+**The per-cell denominator** adds only *this gene's* jitter contribution to
+the library size, not the whole column's, so it is the library size in a
+counterfactual where gene $g$ alone received jitter. Consequences: column
+sums are not exactly $\kappa$ (the output is TPM-*like*), and any gene that
+constitutes an entire library normalizes to exactly $\kappa$ — including
+every gene in an all-zero sample, which is why `wade()` refuses a sample with
+a zero library size rather than analysing that constant.
 
-`tpm_like` is the only normalizer the package ships, and the quirk is why: it
-is reproduced for parity with the reference, not because it is a design worth
-propagating. A caller who wants a consistent library size supplies one through
-`lib_sizes=`; CPM is `normalizer=1.0`. (Standalone `cpm` and `rle` functions
-existed briefly and were deleted — neither was reachable from `wade()`, whose
-whole point is that the jitter is applied at count precision, so their output
-could only enter through a pre-normalized matrix, for which there is no
-entry point.)
+`tpm_like` is the only normalizer the package ships, and it is the definition
+the golden fixtures pin. A caller who wants a consistent library size supplies
+one through `lib_sizes=`; CPM is `normalizer=1.0`; any other size factors go
+in the same way.
 
 ---
 
-## 9. Defaults
+## 8. Defaults
 
 | parameter | default | role |
 |---|---|---|
-| $B$ (permutations) | 2000 | null resolution; sets both p-value floors |
+| $B$ (`nperms`) | 2000 | null resolution; sets both p-value floors, $1/(B+1)$ and $1/(B\,n_{\text{tail}})$ |
 | `alternative` | `two-sided` | detect differences in either direction; `greater` / `less` restrict it |
-| $\nu$ (jitter) | 0.01 | continuity jitter width, at count precision |
-| $\kappa$ | 1e6 | TPM-like scale factor |
-| seed | 1 | jitter and permutations on separate streams |
-| $n_{\text{exc,min}}$ | 10 | exceedance count below which GPD refinement fires |
-| $n_{\text{tail}}$ | 250 | null draws entering the GPD fit |
+| $\nu$ (`noise`) | 0.01 | continuity jitter width, in counts |
+| $\kappa$ (`norm_factor`) | 1e6 | TPM-like scale factor |
+| `pseudocount` | 1 | one count, in each sample's normalized units, before the log (§9.4) |
+| `max_probs` | 2000 | cap on the quantile grid (§1) |
+| `seed` | 1 | jitter, permutations, thinning and bootstrap on four streams |
+| $n_{\text{exc,min}}$ (`n_exc_min`) | 10 | exceedance count below which GPD refinement fires |
+| $n_{\text{tail}}$ (`n_tail`) | 250 | null draws entering the GPD fit |
 
-The R reference had two different permutation defaults (1000 in the driver,
-2000 in the wrapper). One is picked here and stated, because $B$ sets both the
-empirical floor $1/(B+1)$ and the extrapolation floor $1/(B n_{\text{tail}})$ —
-it changes every small p-value, not just the runtime.
-
-$q_{\text{tail}}$ and the `tail.conc` guard factor appear nowhere in §3–4.
 **No parameter in the shape test or the characterization asks the user what
-shape of difference to look for.** They survive only in the superseded
-machinery of §7, which the parity fixtures pin.
+shape of difference to look for.**
 
 ---
 
-## 10. Scale — and what counts at low expression do to stage 2
+## 9. Scale — and what counts at low expression do to stage 2
 
 Everything above is a functional of two quantile functions, and quantiles
 commute with any monotone transform: $Q_{g(X)}(p) = g(Q_X(p))$. A transform
@@ -529,7 +474,7 @@ the difference of means) and **stage 2 and the characterization are
 $\lambda = 0$** (the curve $R$). This section says why, with numbers, and
 what breaks at low counts.
 
-### 10.1 Stage 1: the transform is a power choice, never a level choice
+### 9.1 Stage 1: the transform is a power choice, never a level choice
 
 Under label permutation the test is exact for *any* statistic, so $g$ cannot
 change the false-positive rate. Measured, null rejection at $\alpha = 0.05$
@@ -573,7 +518,7 @@ linear scale.** The pseudocount family is strictly intermediate, and the
 "subsets are much more pronounced in linear space" experience that motivated
 this section is the small-$\rho$ regime above, measured.
 
-### 10.2 Stage 2 needs the log scale — and why that is not enough for counts
+### 9.2 Stage 2 needs the log scale — and why that is not enough for counts
 
 $g(fx) - g(x)$ is constant in $x$ only for $g = a\log x + b$. That uniqueness
 is why §3 reads the bridge off $R$: it is the one scale on which a global fold
@@ -621,7 +566,7 @@ premise holds; this one was not exercised. The fix is not a transform. It is a
 noise-model choice, and it was prototyped and measured before being written
 here.
 
-### 10.3 The correction for counts: binomial thinning
+### 9.3 The correction for counts: binomial thinning
 
 The division trick of §3 worked because the bridge is *exactly invariant* to
 division, so only the null needed correcting. The analogue for counts is
@@ -697,16 +642,11 @@ shifts.
 
 **The cost.** The fit is sixteen thinning-and-renormalizing passes, so at
 20,000 genes, 100 v 100 and $B = 2000$ the run goes from 9.7 s to 16.6 s.
-Speed is a later problem than behaviour and is deferred to `ROADMAP.md`.
 
-**Where it does not apply.** `thin=False` has no counts to thin: it keeps
-the division and inherits the low-expression caveat that `docs/limits.md`
-states. `thin=False` does the same on the raw-count path. On genuinely
-continuous data — which is **out of WADE's scope**, see the note at the head of
-this document — the division is already exact under a multiplicative model and
-thinning would add Poisson noise the data does not have; that is the one
-situation where `thin=False` is the better choice, and it is untested
-territory.
+**Where it does not apply.** Genuinely continuous data, which is out of
+WADE's scope: there the division is exact under a multiplicative model and
+thinning would add Poisson noise the data does not have. There is no switch
+for it; the package takes counts.
 
 Two implementation points worth stating, both pinned by tests. The fold-change
 fit runs on the **jitter-free** normalized scale — a hundredth of a count has
@@ -716,7 +656,7 @@ bisection step. And non-integer counts (salmon, kallisto) are **rounded for
 the thinning only**; the observed matrix and the characterization use the
 values as given.
 
-### 10.4 One zero is enough: the pseudocount for the log
+### 9.4 One zero is enough: the pseudocount for the log
 
 The characterization's failure at low counts has a sharper cause than "the
 floor", and it reaches far above low counts. At 20,000 v 20,000 and a mean of
@@ -764,7 +704,7 @@ a deterministic transform applied to observed and permuted thinned data alike
 cannot move the level — and its power at the extreme floor rises a lot,
 because those spikes were noise in the bridge too.
 
-Two consequences for §8. The jitter is **irrelevant to stage 2 once there is
+Two consequences for §7. The jitter is **irrelevant to stage 2 once there is
 a pseudocount** (`log₂(0.005 + 1) ≈ 0.007`; measured, the $R$ curve with and
 without jitter gives the same numbers), so it stays where it is needed — the
 continuity of stage 1's null for the GPD tail fit — and stops being read as a
@@ -777,13 +717,13 @@ the log scale a Poisson count of 2 carries noise of about $\pm 0.7$ per node,
 so the characterization is **noise-dominated** there — a 5% subset at 8× reads
 0.10 rather than 0.05, the null reads 0.08, and a subset has to be roughly 16×
 to stand clear. That is a resolution limit, to be reported with its
-confidence interval (§10.5) rather than hidden, not an artifact to be fixed.
+confidence interval (§9.5) rather than hidden, not an artifact to be fixed.
 The "global reads 1.0" anchor of §4 is therefore *approximate below ~5 counts
 and exact above*, and the measured table at the end of §4 — all at
 lognormal(3, 0.6), i.e. around 20 units with no zeros — should be read with
 that qualifier.
 
-### 10.5 Confidence intervals for the descriptors
+### 9.5 Confidence intervals for the descriptors
 
 `affected_fraction`, `direction` and `log2_fc` are estimates and should carry
 intervals.
@@ -800,12 +740,11 @@ with replacement rather than a chosen fraction. Groups are resampled
 independently so the group sizes — and therefore the grid $m$ — never move.
 
 Two variants exist for cases this one is known to fail — the $m$-out-of-$n$
-bootstrap and subsampling without replacement, both of which draw fewer than
-$n$ — and neither is used here. If narrow intervals ever look untrustworthy,
-`docs/scaling.md` §6 records the specific reason to suspect this estimator:
-resampling with replacement duplicates samples, which puts flat runs into the
-quantile function, and that is the degeneracy §8's jitter exists to break. `wade(..., n_boot=300)` computes them (opt-in: 200 replicates cost
-about as much as the whole rest of a 20,000-gene run) and reports them as
+bootstrap and subsampling without replacement — and neither is used here;
+Poisson and hybrid resampling schemes were measured miscalibrated against
+it, and $m$-out-of-$n$ under-covers. `wade(..., n_boot=300)` computes the
+intervals (opt-in: 200 replicates cost about as much as the whole rest of a
+20,000-gene run) and reports them as
 `ci_affected_fraction`, `ci_direction`, `ci_log2_fc`, and as `*_lo` / `*_hi`
 columns. The bootstrap — resample samples within each group with
 replacement, recompute the curve, read the three numbers; percentile
@@ -828,3 +767,141 @@ at 8×" reads 0.43, which is neither number — it is the effective fraction of
 the curve's energy. Both are true today and belong beside §4's table. The
 permutation p-values need no interval beyond their Monte Carlo error,
 $\sqrt{p(1-p)/B}$, and the resolution floors of §6.
+
+---
+
+## 10. Limits and failure modes
+
+What WADE cannot do, and the two constraints that decide whether it can
+answer a question at all. The first two are arithmetic on the **design**, not
+properties of the implementation, and no amount of data or computation moves
+them.
+
+### 10.1 The two hard constraints
+
+**Resolution.** The quantile grid has $m = \min(n_1, n_0, \texttt{max\_probs})$
+points. Nothing finer than $1/m$ is estimable, so `affected_fraction` is a
+quantitative estimate only above roughly 100 samples in the smaller group,
+degrades through about 50, and below that distinguishes "global" from
+"concentrated" without quantifying which fraction (the table in §4). **The
+smaller group governs.** Adding cases to a study with 18 controls buys nothing
+here.
+
+**Detectability.** If $k$ samples carry a signal, label shuffling puts all of
+them in one group with probability $\binom{n_1}{k}/\binom{n_1+n_0}{k}$, and
+that sets the scale of the smallest p-value the design can support, whatever
+the effect size, the statistic or the permutation count. It is driven by
+**imbalance**, not by $k$ alone: the floor is roughly $(n_1/n)^k$.
+
+```python
+>>> wade.detectability_floor(77, 18, 15)      # 15 affected of 77 cases
+0.031963032251420324
+>>> wade.detectability_floor(48, 47, 15)      # the same 95 samples, balanced
+9.904929906140583e-06
+```
+
+Balancing the groups buys far more than adding cases. Measured at 60 v 60
+with the subset stage, planted effect 8× in every row:
+
+| affected | $k$ | floor | power |
+|---|---|---|---|
+| 2% | 1 | 0.5 | 0.033 |
+| 5% | 3 | 0.122 | 0.050 |
+| 10% | 6 | 0.0137 | 0.467 |
+| 25% | 15 | 1.1e-05 | 1.000 |
+
+Power tracks the floor, not the effect size.
+
+**A worked case: 100 cases against 10 controls.** The grid has 10 points, so
+`affected_fraction` is qualitative at best. Five affected cases of 100 floor
+at 0.62, 10 at 0.37, 25 at 0.067, and only 50 reach 1.6e-3: stage 2 cannot
+work at that geometry unless roughly half the cases share the change. A
+*global* shift is different — all 100 affected floors at 2.1e-14 — so stage 1
+is usable; run it with `stage1="saddlepoint"` and read stage 2 as a screen.
+Ten more controls would buy more than a hundred more cases.
+
+### 10.2 What WADE does not do
+
+**No covariate or batch adjustment.** The test takes a binary condition
+vector and nothing else. A confound that tracks the case/control split is
+indistinguishable from signal, and this is not an oversight to be patched:
+the permutation null is built by exchanging labels, and a covariate makes
+labels non-exchangeable. For a *categorical* confounder `strata=` shuffles
+labels only within each stratum, holding study, batch or protocol fixed
+instead of testing it as biology. It is not covariate adjustment and it is
+not free: the permutation space becomes $\prod_s \binom{n_s}{k_s}$, a
+stratum containing only one class contributes no freedom, and
+`wade.permutation_space()` reports what is left. Otherwise detect the
+confound and refuse, or run within each level and combine afterwards.
+
+**No repeated-measures handling.** Two libraries from the same subject are
+not exchangeable; feeding them in inflates the effective sample size and
+biases every p-value anti-conservatively, silently. Aggregate to one value
+per subject first. `strata=` does not solve this: it exchanges labels *within*
+a stratum, whereas repeated measures need whole subjects exchanged *between*
+groups, and a per-subject stratum has only one class in it.
+`permutation_space()` will say so.
+
+**Below about five counts per sample the characterization is
+noise-dominated.** On the log scale a Poisson count of 2 carries roughly
+±0.7 per node, so `affected_fraction` reads a global 2× as 0.70 rather than
+1.0, a 5% subset at 8× as 0.10 rather than 0.05, and a null gene as 0.08
+(§9.4). The ordering survives; the numbers are not quantitative. The *test*
+is unaffected, because thinning is exact at every expression level. Run with
+`n_boot=300` and read the interval, which is wide exactly there.
+
+**Normalization lives inside the test, and couples genes** (§4). One gene's
+normalized values depend on every other gene through the library size, so a
+matrix in which a large share of genes carry strong signal distorts the
+characterization of every null gene. The subset test is immune; the
+descriptors and `mean_shift` are not. This affects every differential method
+on normalized data.
+
+**`mean_shift` is a grid quadrature, not a difference of means, on unequal
+groups** (§2). Inference is unaffected; read it as "signed quantile area"
+when the groups are unbalanced, or use `stage1="saddlepoint"`, which computes
+the mean difference exactly.
+
+### 10.3 A p-value at the extrapolation floor is not a small number
+
+The GPD refinement floors its output at $1/(B \cdot n_{\text{tail}})$, 2.0e-6
+at the defaults. A gene sitting *at* the floor has not been measured there; it
+has been measured as "beyond what this many permutations can resolve", and the
+floor is the most extreme claim the evidence supports. Two genes both at the
+floor are not tied in strength; they are both unresolved.
+
+**The reading rule.** Treat the floor as a censoring point. Break ties among
+genes at the floor with `subset_log2_fc`, `log2_fc` and the permutation
+z-scores, never by pretending the p-values differ. On a large cohort those
+are the operative outputs rather than a fallback: a real 83,000-sample
+contrast put 18.8% of genes at the floor. Resolving *below* it costs
+permutations linearly. `refined_mean_shift` and `refined_subset` say which
+p-values were read off the tail fit rather than counted, and refinement can
+move a p-value in either direction.
+
+Measured on 40 planted genes at 300 v 300, the shipped refinement at
+$B = 2{,}000$ against the empirical p-value at $B = 50{,}000$: median ratio
+1.19, worst under-statement 0.53, worst over-statement 17.2. Over the range
+$p \approx 10^{-2}$ to $10^{-3}$ it errs high. Its behaviour further out, at
+$10^{-6}$ and below, is the open problem of `pvalue-review.md`: 3–4,906×
+conservative on stage 1 (solved by the saddlepoint) and 4–80× conservative
+or anti-conservative to 0.019 on stage 2 (open).
+
+### 10.4 The combinatorial floor is a scale, not a bound
+
+The floor of §9.1 is exactly the p-value in the noise-free limit. Real data
+is not noise-free: the unaffected samples are random too, so relabellings
+that put all $k$ affected samples in the case group scatter above and below
+the observed rather than tying it, and $k$ itself is not well defined in
+count data. Measured on planted NB counts at 300 v 300, $B = 40{,}000$ so
+that no refinement fires:
+
+| planted $k$ | floor | $p$ / floor, q10 – median – q90 | fell **below** the floor |
+|---|---|---|---|
+| 3 | 1.24e-01 | 0.48 – 1.96 – 3.23 | 21% |
+| 6 | 1.52e-02 | 0.26 – 1.10 – 1.71 | 42% |
+
+The floor predicts the **order of magnitude** of the smallest p-value the
+design can support; the median lands within a factor of two of it and a
+substantial minority of genes come in under it. Use it to decide whether a
+design can find a subtype at all. Never clamp a gene's p-value to it.

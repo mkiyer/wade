@@ -1,26 +1,11 @@
-"""Normalizers: raw counts to a comparable scale, with the continuity jitter.
+"""Normalization: raw counts to a comparable scale, with the continuity jitter
+(``docs/method.md`` §7).
 
-These are separate, individually callable functions rather than part of
-the statistic (``ROADMAP.md`` S3): a normalizer produces a
-matrix, the statistic consumes one, and :func:`wade.wade` composes them.
-A new normalizer can be added without touching the test.
-
-Why the entry point takes raw counts (``ROADMAP.md`` S2)
------------------------------------------------------------------------
-The continuity jitter is applied **at count precision, before division**.
-In :func:`tpm_like` the jitter is added to the counts and a matching
-per-cell correction appears in the denominator, so a pre-normalized
-matrix cannot reproduce it: once counts have been divided by a normalizer
-and a library size, you no longer know what one count was worth in that
-cell. A caller who supplies an already-normalized matrix is running a
-variant of the test whose ties were never broken and whose zeros are
-still exactly equal. That is why there is no entry point for a
-pre-normalized matrix: the test it could run is not the test WADE claims.
-
-The jitter is drawn **once**, before any permutation. Inference is then
-conditional on that one realised draw, which is what makes a given seed
-reproduce a given result exactly (``docs/method.md`` section 4.4). It
-must never be re-drawn inside the permutation loop.
+The jitter is applied **at count precision, before division**: it is added
+to the counts and a matching per-cell correction appears in the denominator,
+so a pre-normalized matrix cannot reproduce it. It is drawn **once**, before
+any permutation, so inference is conditional on that one draw and a seed
+reproduces a result exactly. It must never be re-drawn inside the loop.
 """
 
 from __future__ import annotations
@@ -47,15 +32,10 @@ def _as_counts(counts: np.ndarray) -> np.ndarray:
 
 
 def _broadcast_normalizer(normalizer, shape: tuple[int, int]) -> np.ndarray:
-    """Accept the two forms R accepts, but check the shape rather than recycle.
-
-    R divides ``counts / normalizer`` and relies on recycling, which has no
-    length check: passing a per-*sample* vector where a per-*gene* vector
-    belongs recycles cleanly whenever ``g * n`` is divisible by ``n`` and
-    returns wrong numbers with no diagnostic (``docs/implementation-notes.md``
-    section 1). That is the one input error in the R file that produces
-    plausible output, so this raises instead.
-    """
+    """A per-gene vector or a genes x samples matrix, as ``(g, 1)`` or
+    ``(g, n)``. The shape is checked rather than recycled: a per-*sample*
+    vector where a per-*gene* one belongs is the one input error that would
+    otherwise produce plausible wrong numbers."""
     g, n = shape
     normalizer = np.asarray(normalizer, dtype=np.float64)
     if normalizer.ndim == 1:
@@ -63,8 +43,7 @@ def _broadcast_normalizer(normalizer, shape: tuple[int, int]) -> np.ndarray:
             raise ValueError(
                 f"a vector normalizer must have one value per gene: expected "
                 f"length {g}, got {normalizer.shape[0]}. (A length-{n} vector "
-                f"would be per-sample, which is the wrong axis; R recycles it "
-                f"silently, this does not.)"
+                f"would be per-sample, which is the wrong axis.)"
             )
         normalizer = normalizer[:, None]
     elif normalizer.ndim == 2:
@@ -90,20 +69,11 @@ def draw_jitter(
 ) -> np.ndarray:
     """Draw the continuity jitter: ``Uniform(0, noise)``, genes x samples.
 
-    The jitter serves three purposes. It breaks ties in sparse, zero-heavy
-    data, where many samples share a count of zero and the quantile grid
-    would otherwise degenerate into flat runs. It makes every entry
-    strictly positive, so ``fc`` and ``log2(fc)`` stay finite even for a
-    gene with all-zero counts in one group. And it gives a defined value
-    where the library size is zero.
-
-    ``seed=None`` draws from ambient state without touching any global RNG,
-    mirroring R's ``seed = NULL`` mode.
-
-    Note this cannot reproduce R's draw for the same integer seed, and is
-    not meant to: R's Mersenne-Twister and NumPy's PCG64 are different
-    algorithms (``docs/implementation-notes.md`` hazard 2). Exact cross-language
-    agreement requires passing the realised matrix in as ``jitter=``.
+    It breaks ties in sparse, zero-heavy data, where many samples share a
+    count of zero and the quantile grid would otherwise degenerate into flat
+    runs, and it makes every entry strictly positive, so fold changes stay
+    finite. ``rng`` takes precedence over ``seed``; ``seed=None`` draws from
+    ambient state.
     """
     if noise < 0:
         raise ValueError(f"noise must be non-negative, got {noise}")
@@ -118,10 +88,7 @@ def _resolve_jitter(jitter, shape, noise, seed, rng) -> np.ndarray:
     jitter = np.asarray(jitter, dtype=np.float64)
     if jitter.shape != shape:
         raise ValueError(
-            f"supplied jitter must be genes x samples {shape}, got {jitter.shape}. "
-            f"Pass a 2-D array, never a flat vector plus dimensions — the two "
-            f"languages fill a flat vector in opposite orders "
-            f"(docs/implementation-notes.md hazard 8)."
+            f"supplied jitter must be genes x samples {shape}, got {jitter.shape}"
         )
     if not np.all(np.isfinite(jitter)):
         raise ValueError("supplied jitter must be finite")
@@ -131,17 +98,9 @@ def _resolve_jitter(jitter, shape, noise, seed, rng) -> np.ndarray:
 def library_sizes(counts: np.ndarray, normalizer) -> np.ndarray:
     """Per-sample size factors: ``sum_g counts[g, j] / normalizer[g, j]``.
 
-    R's ``wade_lib_size()``. This is *not* a read count and is not on any
-    interpretable scale — its units depend entirely on what the normalizer
-    is.
-
-    Computed from the **unjittered** counts, which is what makes
-    :func:`tpm_like`'s per-cell denominator correction necessary.
-
-    Note this depends on which genes are in the matrix: change the gene set
-    and every normalized value changes. That is a real reproducibility
-    surface, matching R's ``wade_run()``, which sizes libraries on the
-    subset matrix (``ROADMAP.md`` S2).
+    Computed from the **unjittered** counts. Not on any interpretable scale:
+    the units depend on the normalizer, and the value depends on which genes
+    are in the matrix.
     """
     counts = _as_counts(counts)
     norm = _broadcast_normalizer(normalizer, counts.shape)
@@ -159,50 +118,27 @@ def tpm_like(
     jitter: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
 ) -> np.ndarray:
-    """Normalizer- and library-scaled TPM-like units. Port of ``wade_normalize()``.
+    """Normalizer- and library-scaled TPM-like units.
 
-    Takes a **count** measure and a **normalizer** measure per gene; the
-    arithmetic is identical and only the pair changes. Splice-junction
-    counts over intron count gives "sjTPM"; total counts over effective
-    length gives standard TPM.
+    Takes a count measure and a normalizer measure per gene: total counts
+    over effective length gives TPM, a constant normalizer gives CPM.
 
     .. math::
         X_{gj} = \\kappa \\,
           \\frac{(C_{gj} + \\eta_{gj}) / L_{gj}}
                 {\\ell_j + \\eta_{gj} / L_{gj}}
 
-    **The denominator is per-cell, and this is the subtlest arithmetic in
-    the method.** The naive reading is that it should be ``lib_sizes[j]``,
-    giving ordinary TPM. It is not. ``lib_sizes`` was computed from the
-    *unjittered* counts while the numerator uses jittered ones, so the two
-    are inconsistent; the consistent library size would add the *whole
-    column's* jitter contribution, but what is added is only **this gene's
-    own**. The denominator is therefore the library size in the
-    counterfactual where gene ``g`` alone received jitter.
+    **The denominator is per-cell.** ``lib_sizes`` is computed from the
+    unjittered counts while the numerator uses jittered ones, and what is
+    added to the library size is only *this gene's* jitter contribution, so
+    the denominator is the library size in a counterfactual where gene ``g``
+    alone received jitter. Consequences: column sums are not exactly
+    ``norm_factor`` (the output is TPM-*like*), and a gene that is an entire
+    library — every gene of an all-zero sample — normalizes to exactly
+    ``norm_factor``, which is why :func:`wade.wade` refuses empty libraries.
 
-    Three consequences, all real and all documented rather than fixed:
-
-    * **Column sums are not exactly** ``norm_factor``. The output is
-      TPM-*like*, not TPM. A port that "fixes" this to restore the constant
-      has changed every number.
-    * Substituting ``lib_sizes[j]`` for the per-cell denominator changes
-      values by around one part in 10^6 and leaves within-row rank ordering
-      untouched — the dangerous shape of error, since the quantile grid
-      reads within-row order. It passes every plausibility check and fails
-      an exact parity test.
-    * **A gene that is the entire library normalizes to exactly**
-      ``norm_factor``, and so does every gene in an all-zero sample, where
-      numerator and denominator are equal. That is an artefact of the
-      algebra, not a sensible value for an empty library; see
-      ``docs/implementation-notes.md`` section 2.
-
-    Parameters
-    ----------
-    jitter
-        A genes x samples array used **in place of** the internal draw.
-        This is the production argument path, not a test-only branch: the
-        parity fixtures and real calls go through the same code, or the
-        parity suite would be validating code nobody runs.
+    ``jitter`` supplies the draw in place of ``seed`` / ``rng``, on the same
+    argument path :func:`wade.wade` uses.
     """
     counts = _as_counts(counts)
     norm = _broadcast_normalizer(normalizer, counts.shape)

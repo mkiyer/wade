@@ -1,4 +1,4 @@
-"""`docs/scaling.md` §4.5–§4.11 — how far into the tail can each method be trusted?
+"""How far into the tail can each p-value estimator be trusted? (`docs/pvalue-review.md`)
 
 Pick a design small enough that **brute force is the ground truth**, then hold
 every candidate to it at true p-values spanning 1e-3 to 1e-8. A study, not part
@@ -175,7 +175,7 @@ def brute2(d: Design, counts, n_perms, block=BLOCK, seed=7, report=None):
 def gpd_mle_p(obs, null, n_tail=250):
     """`gpd_tail_p`'s refinement with the shape fitted by ML.
 
-    `ROADMAP.md` §2 wanted this because moments are poorly behaved for
+    Wanted because moments are poorly behaved for
     `xi > 0.5`. §4.5 then found the opposite failure — a *negative* fitted
     shape on every deep-tail stage-1 gene, sending all of them down the
     `xi <= 0` exponential branch, which is a far heavier tail than a bounded
@@ -228,8 +228,7 @@ def saddlepoint_applies(d: Design) -> bool:
     saddlepoint requirement. What is required is that `mean_shift` *be* that
     quantity: unbalanced it is the grid quadrature over `m = min(n1, n0)`
     nodes, a weighted sum of the larger group's order statistics — an
-    L-statistic with no reduction to a subset sum (`limits.md` §2.5,
-    `scaling.md` §3.1).
+    L-statistic with no reduction to a subset sum (`docs/method.md` §2).
     """
     return d.n1 == d.n0
 
@@ -401,7 +400,7 @@ def frozen_moments(d: Design, xs, b_obs, q, n_ref=200_000, seed=3):
 
 
 def frozen_T(xs, q, mu, safe, labels, gene=None):
-    from wade.subset import _bridge_from
+    from wade.permutation import _bridge_from
 
     sl = slice(None) if gene is None else slice(gene, gene + 1)
     return np.max((_bridge_from(xs[sl], labels, q) - mu[sl]) / safe[sl], axis=1)
@@ -443,7 +442,7 @@ def multilevel2(d: Design, xs, q, mu, safe, t_obs, genes,
 
 
 # ---------------------------------------------------------------------------
-# stage 2 endpoints (scaling.md 4.11)
+# stage 2 endpoints (pvalue-review.md §8, question 2)
 
 
 def reviewer_xmax(d: Design, xs, q, mu, safe, g):
@@ -480,7 +479,7 @@ def valid_xmax(d: Design, xs, q, mu, safe, g):
 
     Valid and useless: stage 2's endpoint lands at about twice the largest of
     2e6 null draws, so a fit anchored there is anti-conservative to 0.007 on a
-    gene whose true tail shape is +0.31. See `scaling.md` 4.11.
+    gene whose true tail shape is +0.31. See `pvalue-review.md` §8.
     """
     from wade.quantiles import type7_quantiles
 

@@ -100,10 +100,8 @@ def test_new_columns_are_reported_and_written(res_and_blocks):
     res, _ = res_and_blocks
     for name in ("z_mean_shift", "z_subset", "subset_log2_fc"):
         assert name in res.columns(), name
-        assert name in res.report(), name
         assert name in wade.RESULT_COLUMNS, name
-    rep = res.report()
-    np.testing.assert_array_equal(rep["subset_log2_fc"], res.subset_log2_fc)
+    np.testing.assert_array_equal(res.columns()["subset_log2_fc"], res.subset_log2_fc)
 
 
 def test_without_permutations_the_z_scores_say_so():

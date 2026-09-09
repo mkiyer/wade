@@ -1,4 +1,4 @@
-"""Stage 1 as one matrix product (``stage1="gemm"``) — ``docs/scaling.md`` §3.1.
+"""Stage 1 as one matrix product (``stage1="gemm"``).
 
 On a balanced design ``mean_shift`` computed through the quantile grid is the
 difference of the two group means, exactly (measured 2.1e-13 relative). The
@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 import wade
-from wade.permutation import draw_perms, mean_diff_null, mean_diff_stat, null_statistics
+from wade.permutation import draw_perms, mean_diff_null, mean_diff_weights, null_statistics
 
 G, N = 40, 150
 COND = np.r_[np.ones(N, int), np.zeros(N, int)]
@@ -43,7 +43,7 @@ def assert_scaled(actual, desired, tol=1e-12):
     Measured across both, at all five sites below: 1.2e-14 to 1.8e-14 of the
     scale, steady; per-element it ranges from exactly 0 to 2.7e-12, which is
     how this file passed for a fortnight on one machine and would have failed
-    on the first CI run (``docs/scaling.md`` 3.1).
+    on the first CI run.
     """
     desired = np.asarray(desired, dtype=float)
     np.testing.assert_allclose(actual, desired, rtol=tol,
@@ -52,7 +52,7 @@ def assert_scaled(actual, desired, tol=1e-12):
 
 def test_gemm_statistic_is_the_exact_mean_difference():
     x = _counts() + np.random.default_rng(1).uniform(0, 0.01, (G, 2 * N))
-    stat = mean_diff_stat(x, COND)
+    stat = x @ mean_diff_weights(COND)
     literal = x[:, :N].mean(axis=1) - x[:, N:].mean(axis=1)
     assert_scaled(stat, literal)
     # ... and the grid quadrature is the same number on a balanced, uncapped design

@@ -1,7 +1,7 @@
 """The quantile grid and the mean-shift statistic — ``docs/method.md`` §1–2.
 
 WADE compares two groups on a shared grid of ``min(n_case, n_ctrl)``
-probabilities and reads two curves off it: the absolute difference ``D``,
+probabilities and reads two curves off it: the signed difference ``D``,
 which is what detection is powerful on, and the log-ratio ``R``, which is
 where the difference's *shape* is legible. This module owns the grid and
 the first; :mod:`wade.subset` owns the second.
@@ -22,10 +22,8 @@ def split_groups(cond: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Case and control column indices from a binary condition vector.
 
     ``1`` marks a case, ``0`` a control, and both groups must be non-empty.
-
-    R assigns membership by exact equality to 1 and 0, so a sample labelled
-    anything else is silently dropped from *both* groups — which changes the
-    grid size, which changes every number, with no diagnostic. This raises.
+    Any other label raises rather than being dropped: a dropped sample
+    changes the grid size, which changes every number.
     """
     cond = np.asarray(cond)
     if cond.ndim != 1:
@@ -86,10 +84,10 @@ def wade_stats(
     ``max_probs`` caps the grid at large cohorts (``docs/method.md`` §1): the
     realized grid is ``min(n0, n1, max_probs)`` and is reported as ``nprobs``.
     On a capped grid the balanced-design identity above holds only
-    approximately, and ``mean_shift`` drifts upward for concentrated signals —
-    the quadrature change is documented there, and inference is unaffected
-    because the null uses the same grid. ``None`` (the default here; the
-    ``wade()`` entry points default to 2,000) means the design's full grid.
+    approximately; inference is unaffected because the null uses the same
+    grid. ``None`` (the default here; :func:`wade.wade` defaults to 2,000)
+    means the design's full grid.
+
 
     On ``min(n0, n1) == 1`` the grid collapses to the single probability 1, so
     every statistic reduces to the difference of group maxima. Refused by

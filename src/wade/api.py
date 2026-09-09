@@ -1,30 +1,26 @@
 """The driver: normalize, observe, permute, refine, adjust.
 
-**WADE takes raw counts, and only raw counts.** The continuity jitter is
-applied at count precision before division and the subset stage's null is
-built by thinning reads, so a pre-normalized matrix can reproduce neither:
-its ties are never broken and its stage-2 null falls back to a division
-correction measured wrong at low expression (``docs/method.md`` §10.2). There
-was once a ``wade_from_matrix`` entry point for callers who had only a
-normalized matrix; it was removed 2026-08-21 because what it offered was a
-stage-2 test known to be broken in the regime this package exists for, and
-because deleting it leaves exactly one driver here instead of two.
+WADE takes raw counts, and only raw counts. The continuity jitter is applied
+at count precision before division and the subset stage's null is built by
+thinning reads, so a pre-normalized matrix can reproduce neither, and there is
+no entry point for one.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
 from . import normalize as _normalize
 from .io import Condition, as_counts, result_columns
-from .permutation import draw_perms, null_statistics, validate_perms
+from .permutation import draw_perms, mean_diff_weights, null_statistics, validate_perms
 from .pvalues import (ALTERNATIVES, DEFAULT_N_EXC_MIN, DEFAULT_N_TAIL, bh_adjust,
                       exceedance_counts, perm_pvalues)
+from .quantiles import capped_nprobs
 from .stats import WadeStats, split_groups, wade_stats
 from .subset import SubsetResult, characterization_ci, subset_test
-from .thinning import fit_fold_change, one_count, thin_counts
+from .thinning import fit_fold_change, gene_chunks, one_count, thin_counts
 
 __all__ = ["WadeResult", "wade", "wade_contrast",
            "DEFAULT_NPERMS", "DEFAULT_MAX_PROBS"]
@@ -35,10 +31,8 @@ __all__ = ["WadeResult", "wade", "wade_contrast",
 DEFAULT_NPERMS = 2000
 
 #: Cap on the quantile grid (``docs/method.md`` §1). Designs at or under
-#: 2,000 per group — every design the method was developed on — are
-#: untouched; above it the grid stops growing with the cohort and
-#: ``affected_fraction``'s resolution is ``1/max_probs``, faithful to a 0.1%
-#: subset at half this value (``docs/scaling.md`` §2.1).
+#: 2,000 per group are untouched; above it the grid stops growing with the
+#: cohort and ``affected_fraction``'s resolution is ``1/max_probs``.
 DEFAULT_MAX_PROBS = 2000
 
 
@@ -79,13 +73,11 @@ class WadeResult:
 
     stats: WadeStats
     tpm: np.ndarray
-    #: Storage for the two derived matrices below. Both are `genes x samples`
-    #: and both are *reconstructible*, so a result normally keeps neither and
-    #: rebuilds them on access — see the `jitter` and `pseudocount` properties.
-    #: Carrying them cost 2x the count matrix on top of `tpm`, which set the
-    #: peak of a large run (`docs/scaling.md` 2.3).
+    #: The jitter and the pseudocount are both ``genes x samples`` and both
+    #: reconstructible, so a result keeps the small inputs and rebuilds them
+    #: on access — see the ``jitter`` and ``pseudocount`` properties.
     _jitter: np.ndarray | None
-    _pc: tuple | np.ndarray | None
+    _pc: tuple | None
     perms: np.ndarray | None
     params: dict = field(default_factory=dict)
 
@@ -100,12 +92,9 @@ class WadeResult:
     p_subset: np.ndarray | None = None
     padj_subset: np.ndarray | None = None
 
-    #: Stage 2's exceedance count and GPD-refinement flag — the stage-1 pair
-    #: (``nexc_mean_shift`` / ``refined_mean_shift``) computed for the subset
-    #: test too. ``docs/limits.md`` §5 makes a reading rule out of these: a
-    #: gene *at* the resolution floor has not been measured there, it has been
-    #: censored there, and until now that rule could only be applied to
-    #: stage 1.
+    #: Stage 2's exceedance count and GPD-refinement flag, the stage-1 pair
+    #: for the subset test. A gene *at* the resolution floor has not been
+    #: measured there; it has been censored there.
     nexc_subset: np.ndarray | None = None
     refined_subset: np.ndarray | None = None
 
@@ -126,8 +115,7 @@ class WadeResult:
     sample_names: np.ndarray | None = None
 
     #: Per-gene metadata the input carried — a symbol, a biotype, coordinates.
-    #: **Read by nothing here.** It exists so figures and tables can optionally
-    #: show it (``docs/plotting.md``); dropping it would change no number.
+    #: Read by no statistic; figures and tables can show it.
     gene_meta: dict = field(default_factory=dict)
 
     #: Bootstrap 95% intervals, ``(2, genes)`` each, when ``n_boot > 0``.
@@ -155,9 +143,7 @@ class WadeResult:
 
     @property
     def fitted_fold_change(self) -> np.ndarray | None:
-        """The global fold change the subset stage's null was built under —
-        by thinning by default, by division under ``thin=False``
-        (``subset.correction`` says which)."""
+        """The global fold change the subset stage's null was built under."""
         return None if self.subset is None else self.subset.shift
 
     @property
@@ -205,46 +191,35 @@ class WadeResult:
                              "pass the row and cond to wade_gene() directly")
         from .diagnostics import wade_gene
         i = self.gene_index(gene)
-        pc = self.pseudocount_row(i)
-        return wade_gene(self.tpm[i], self.cond, pseudocount=pc,
+        return wade_gene(self.tpm[i], self.cond, pseudocount=self.pseudocount_row(i),
                          max_probs=self.params.get("max_probs"))
 
     @property
     def jitter(self) -> np.ndarray:
-        """The continuity jitter the run used, `genes x samples`.
+        """The continuity jitter the run used, ``genes x samples``.
 
-        Rebuilt from the seed rather than stored. The four RNG streams are
-        spawned deterministically from one `SeedSequence`, so regenerating the
-        first reproduces the draw exactly -- asserted bit-for-bit in
-        `tests/test_layer2_normalization.py`. A result keeps the array only
-        when it cannot be rebuilt: `seed=None`, or a caller-supplied jitter.
+        Rebuilt from the seed rather than stored: the RNG streams are spawned
+        deterministically from one ``SeedSequence``, so regenerating the first
+        reproduces the draw exactly. A result keeps the array only when it
+        cannot be rebuilt (``seed=None``, or a caller-supplied jitter).
         """
         if self._jitter is not None:
             return self._jitter
-        from . import normalize as _normalize
-
         js = np.random.SeedSequence(self.params["seed"]).spawn(4)[0]
         return _normalize.draw_jitter(self.tpm.shape, noise=self.params["noise"],
                                       rng=np.random.default_rng(js))
 
     @property
     def pseudocount(self) -> np.ndarray | None:
-        """One count in each sample's normalized units, `genes x samples`.
+        """One count in each sample's normalized units, ``genes x samples``;
+        ``None`` when the pseudocount is switched off.
 
-        `None` when the pseudocount is switched off. Rebuilt on access from
-        the normalizer and library sizes rather than stored; the normalizer is
-        held by reference, so a matrix normalizer costs nothing extra because
-        the caller already has that array.
-
-        **Rebuilding is `O(genes x samples)`, so bind it once rather than
-        indexing it in a loop** -- `res.pseudocount[i]` in a loop over genes
-        rebuilds the whole matrix every time. `pseudocount_row()` is the
-        cheap way to get one gene.
+        Rebuilt on access from the normalizer and library sizes rather than
+        stored, so bind it once rather than indexing it in a loop;
+        :meth:`pseudocount_row` is the cheap way to get one gene.
         """
-        if self._pc is None or isinstance(self._pc, np.ndarray):
-            return self._pc
-        from .thinning import one_count
-
+        if self._pc is None:
+            return None
         normalizer, lib, norm_factor, scale = self._pc
         return one_count(normalizer, lib, self.tpm.shape,
                          norm_factor=norm_factor) * scale
@@ -253,69 +228,22 @@ class WadeResult:
         """One gene's pseudocount, without building the whole matrix."""
         if self._pc is None:
             return None
-        if isinstance(self._pc, np.ndarray):
-            return self._pc[i]
-        from .thinning import one_count
-
         normalizer, lib, norm_factor, scale = self._pc
-        norm = normalizer if np.ndim(normalizer) == 0 else np.asarray(normalizer)[i]
-        row = one_count(np.atleast_1d(norm), lib, (1, self.tpm.shape[1]),
-                        norm_factor=norm_factor) * scale
-        return row[0]
+        norm = normalizer[i][None, :] if normalizer.ndim == 2 else normalizer[i:i + 1]
+        return one_count(norm, lib, (1, self.tpm.shape[1]),
+                         norm_factor=norm_factor)[0] * scale
 
     def columns(self) -> dict[str, np.ndarray]:
-        """The result frame as a plain dict of equal-length arrays."""
-        cols = {
-            "gene": self.gene,
-            "mean_shift": self.mean_shift,
-            "log2_fc": self.log2_fc,
-            "w1": self.w1,
-            "case_mean": self.case_mean,
-            "ctrl_mean": self.ctrl_mean,
-            "p_mean_shift": self.p_mean_shift,
-            "padj_mean_shift": self.padj_mean_shift,
-        }
-        if self.z_mean_shift is not None:
-            cols["z_mean_shift"] = self.z_mean_shift
-        cols["nexc_mean_shift"] = self.nexc_mean_shift
-        cols["refined_mean_shift"] = self.refined_mean_shift
-        if self.subset is not None:
-            cols.update({
-                "subset_stat": self.subset.statistic,
-                "p_subset": self.p_subset,
-                "padj_subset": self.padj_subset,
-                "affected_fraction": self.subset.affected_fraction,
-                "subset_log2_fc": self.subset.subset_log2_fc,
-                "direction": self.subset.direction,
-            })
-            if self.z_subset is not None:
-                cols["z_subset"] = self.z_subset
-            if self.nexc_subset is not None:
-                cols["nexc_subset"] = self.nexc_subset
-                cols["refined_subset"] = self.refined_subset
-        for name, ci in (("affected_fraction", self.ci_affected_fraction),
-                         ("direction", self.ci_direction),
-                         ("subset_log2_fc", self.ci_subset_log2_fc),
-                         ("log2_fc", self.ci_log2_fc),
-                         ("mean_shift", self.ci_mean_shift)):
-            if ci is not None:
-                cols[f"{name}_lo"] = ci[0]
-                cols[f"{name}_hi"] = ci[1]
-        return cols
+        """The result table as a dict of equal-length arrays, in the written
+        column order (:data:`wade.RESULT_COLUMNS`), with the bootstrap
+        intervals as ``*_lo`` / ``*_hi`` pairs at the end."""
+        return result_columns(self)
 
     def to_frame(self):
-        """The result as a polars DataFrame in the written column order — the
-        same table :func:`wade.write_results` writes; see
-        :data:`wade.io.RESULT_COLUMNS`. polars is not a dependency of this
-        package and is imported here.
-        """
-        from .io import to_frame
+        """:meth:`columns` as a polars DataFrame (polars is imported here)."""
+        import polars as pl
 
-        return to_frame(self)
-
-    def report(self) -> dict:
-        """The written column order as a plain dict of arrays. No polars."""
-        return result_columns(self)
+        return pl.DataFrame(self.columns())
 
 
 def _describe_normalizer(normalizer) -> str:
@@ -343,22 +271,17 @@ def _fit_alpha(normalizer, lib, norm_factor, n_samples):
     return alpha
 
 
-def _check_libraries(lib: np.ndarray, sample_names, allow: bool) -> None:
+def _check_libraries(lib: np.ndarray, sample_names, n_genes: int, allow: bool) -> None:
     """Refuse a library with nothing in it, by name.
 
-    An all-zero column — a failed sample left in the matrix, which is routine
-    — has no count scale, so ``tpm_like``'s numerator and denominator are both
-    the jitter and **every gene in it normalizes to exactly** ``norm_factor``
-    (``docs/method.md`` §8 names the artefact). Those values are not small or
-    noisy, they are a constant, and they take part in every quantile the
-    contrast reads. Left undetected this is the silent-wrong-answer shape of
-    error, so it raises and says which samples: dropping a sample is the
-    caller's decision to make, not a default to be applied quietly.
+    An all-zero column has no count scale: every gene in it normalizes to
+    exactly ``norm_factor`` (``docs/method.md`` §7), and that constant takes
+    part in every quantile the contrast reads. Dropping the sample is the
+    caller's decision, so this raises rather than deciding quietly. An empty
+    matrix (no genes) has no libraries to judge and passes.
     """
     lib = np.asarray(lib, dtype=np.float64)
-    if allow or lib.size == 0 or np.all(lib == 0.0):
-        # All-zero across the board means there are no genes at all (a
-        # degenerate but well-defined empty matrix), not a failed sample.
+    if allow or n_genes == 0:
         return
     empty = np.flatnonzero(~(lib > 0))
     if empty.size == 0:
@@ -404,62 +327,28 @@ def _validate_stage1(stage1: str, cond, fit_backend: str = "numpy") -> None:
                 f"stage1='gemm' needs a balanced design: the mean-difference "
                 f"statistic equals the grid statistic only when the groups are "
                 f"equal-sized, and this design is {n1} v {n0}. Use the default "
-                f"stage1='grid' (docs/scaling.md §3.1)."
+                f"stage1='grid' or stage1='saddlepoint', which works at any balance."
             )
 
 
-def _resolve_gene_names(gene_names, g: int) -> np.ndarray:
-    """Synthesize positional identifiers rather than drop the column."""
-    if gene_names is None:
-        return np.array([f"gene{i}" for i in range(g)], dtype=object)
-    gene_names = np.asarray(gene_names, dtype=object)
-    if gene_names.shape != (g,):
-        raise ValueError(
-            f"gene_names must have one entry per gene: expected {g}, got {gene_names.shape}"
-        )
-    return gene_names
-
-
-def _resolve_input(counts, normalizer, cond, gene_names, sample_names):
-    """Accept whatever the caller brought, and return arrays the statistic can use.
-
-    ``counts`` goes through :func:`wade.as_counts` (array, polars/pandas frame,
-    sparse, or an existing ``Counts``); ``normalizer`` may additionally be the
-    name of a numeric column carried alongside the counts, or a scalar; ``cond``
-    may be a :class:`wade.Condition`, which is aligned to the sample labels by
-    name and raises on any mismatch.
-    """
+def _resolve_counts(counts, normalizer, gene_names, sample_names):
+    """``counts`` through :func:`wade.as_counts`; ``normalizer`` may be the name
+    of a numeric column carried alongside the counts, a scalar, a per-gene
+    vector or a genes x samples matrix."""
     c = as_counts(counts, gene_names=gene_names, sample_names=sample_names,
                   exclude=(normalizer,) if isinstance(normalizer, str) else ())
-    g = c.values.shape[0]
-
     if isinstance(normalizer, str):
         normalizer = c.normalizer(normalizer)
     elif np.isscalar(normalizer):
-        normalizer = np.full(g, float(normalizer), dtype=np.float64)
-
-    meta = {}
-    if isinstance(cond, Condition):
-        meta = dict(condition_column=cond.column,
-                    case_label=str(cond.case), control_label=str(cond.control))
-        cond = cond.vector(c.sample_names)
-    return c, np.asarray(normalizer, dtype=np.float64), np.asarray(cond), meta
+        normalizer = np.full(c.values.shape[0], float(normalizer), dtype=np.float64)
+    return c, np.asarray(normalizer, dtype=np.float64)
 
 
 def _perm_z(stat: np.ndarray, null: np.ndarray) -> np.ndarray:
-    """The permutation z-score: ``(observed - mean(null)) / sd(null)``,
-    per gene, against the gene's own permutation null.
-
-    The analogue of GSEA's normalized enrichment score, in z form because
-    WADE's stage-1 statistic is signed (its null mean is ~0, so a ratio to
-    the mean would be unstable where NES's ratio to the positive-ES mean is
-    not). It exists for **ranking**: the empirical p-value floors at
-    ``1/(B+1)`` (GPD-refined, ``1/(B * n_tail)``), so on large cohorts
-    thousands of genes tie at the floor while their separations from the
-    null differ by orders of magnitude — this number keeps ordering them,
-    at no extra cost, because the null matrix is already in hand. It is
-    not a calibrated tail probability and must not be converted into one
-    via the normal CDF; calibrated resolution is ``docs/scaling.md`` §4.
+    """The permutation z-score, ``(observed - mean(null)) / sd(null)`` per
+    gene: the analogue of GSEA's normalized enrichment score, for ranking
+    past the p-value floor. Not a calibrated tail probability
+    (``docs/method.md`` §6).
     """
     mu = null.mean(axis=1)
     sd = null.std(axis=1)
@@ -474,25 +363,18 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
             fit_backend="numpy", strata=None, gene_meta=None) -> WadeResult:
     """P-values, BH and the result object, from assembled per-gene arrays.
 
-    Shared by the one-pass path (:func:`_run`) and the gene-chunked driver
-    (:func:`_wade_chunked`), so the two cannot drift on anything downstream
-    of the per-gene statistics.
-
     ``stage1_stat`` is the observed stage-1 vector when it is not the grid
-    quadrature — the ``stage1="gemm"`` exact mean difference — and it is then
-    both what the p-value compares against the null and what the result
-    reports as ``mean_shift``, because the two must be one statistic.
+    quadrature — the exact mean difference of ``stage1="gemm"`` and
+    ``"saddlepoint"`` — and is then both what the p-value compares against
+    the null and what the result reports as ``mean_shift``.
     """
     g = obs.mean_shift.shape[0]
     stat = obs.mean_shift if stage1_stat is None else stage1_stat
     if stage1 == "saddlepoint":
-        # No permutation enters the p-value: the exact permutation tail is
-        # computed from the values themselves (`wade.saddlepoint`,
-        # `scaling.md` §4.9). The null is still built when permutations were
-        # drawn for stage 2 -- it is one matrix product -- so `z_mean_shift`
-        # and `nexc_mean_shift` keep their meaning as ranking and diagnostic
-        # columns. `refined_mean_shift` is False everywhere by construction:
-        # there is nothing to refine when there is no floor.
+        # No permutation enters the p-value. The null is still built when
+        # permutations were drawn for stage 2, so `z_mean_shift` and
+        # `nexc_mean_shift` keep their meaning; `refined_mean_shift` is False
+        # throughout, there being no floor to refine past.
         from .saddlepoint import mean_diff_saddlepoint_p
 
         p_mean = mean_diff_saddlepoint_p(tpm, cond, stat, alternative=alternative)
@@ -527,11 +409,10 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
         padj_subset = bh_adjust(p_subset)
         z_subset = _perm_z(sub.statistic, sub.null)
         if not keep_null:
-            from dataclasses import replace
             sub = replace(sub, null=None)
 
     return WadeResult(
-        gene=_resolve_gene_names(gene_names, g),
+        gene=gene_names,
         mean_shift=stat, w1=obs.w1, fc=obs.fc, log2_fc=obs.log2_fc,
         case_mean=obs.case_mean, ctrl_mean=obs.ctrl_mean,
         p_mean_shift=p_mean, padj_mean_shift=bh_adjust(p_mean),
@@ -549,11 +430,10 @@ def _finish(*, obs, null, perms, sub, ci, cond, nperms, seed, n_exc_min, n_tail,
         ci_mean_shift=ci.get("mean_shift"),
         params=dict(nperms=nperms, seed=seed, alternative=alternative,
                     n_exc_min=n_exc_min, n_tail=n_tail,
-                    nprobs=obs.nprobs, max_probs=max_probs, n1=obs.n1, n0=obs.n0,
+                    max_probs=max_probs, n_case=obs.n1, n_ctrl=obs.n0,
                     n_boot=n_boot, gene_chunk=gene_chunk, stage1=stage1,
                     fit_backend=fit_backend,
                     strata=None if strata is None else np.asarray(strata),
-                    correction=None if sub is None else sub.correction,
                     **(condition_meta or {})),
     )
 
@@ -577,43 +457,26 @@ def _concat_subsets(parts: list[SubsetResult]) -> SubsetResult:
         return first
     cat = lambda name: np.concatenate([getattr(p, name) for p in parts], axis=0)  # noqa: E731
     return SubsetResult(
-        statistic=cat("statistic"), null=cat("null"), r=cat("r"), b=cat("b"),
+        statistic=cat("statistic"), null=cat("null"), r=cat("r"),
         affected_fraction=cat("affected_fraction"), direction=cat("direction"),
-        argmax_k=cat("argmax_k"), shift=cat("shift"), r_test=cat("r_test"),
-        correction=first.correction,
+        argmax_k=cat("argmax_k"), shift=cat("shift"),
     )
 
 
-def _wade_chunked(*, counts, normalizer, cond, lib, jitter, retain_jitter,
-                  noise, norm_factor,
-                  nperms, perms, seed, perm_rng, thin_rng, boot_rng,
-                  n_exc_min, n_tail, alternative, allow_single_sample_group,
-                  keep_null, gene_names, backend, subset, thin, pseudocount,
-                  n_boot, sample_names, condition_meta, max_probs,
-                  gene_chunk, stage1="grid", fit_backend="numpy",
-                  strata=None, boot_level=0.95, gene_meta=None) -> WadeResult:
-    """The gene-chunked driver — ``docs/scaling.md`` §2.2.
-
-    **Bit-identical to the unchunked path**, by construction rather than by
-    tolerance, and pinned by ``tests/test_chunking.py``:
-
-    * the jitter is drawn once for the whole matrix and *indexed* per chunk;
-    * library sizes are one full-matrix pass, fixed before any chunking;
-    * the fold-change fit and the thinning consume their random streams in
-      gene order across chunks (see :func:`wade.thinning.fit_fold_change` and
-      :func:`wade.thinning.thin_counts` for how);
-    * everything else — normalization, the observed statistics, both
-      permutation nulls, the bootstrap — is per-gene arithmetic on shared
-      permutations, so chunk boundaries cannot reach it.
-
-    Peak memory is the handful of full ``genes x samples`` residents (counts,
-    jitter, ``tpm``, the pseudocount, the thinned counts as int32) plus a few
-    chunk-sized transients, instead of the ~8 full-matrix transients of the
-    one-pass path.
+def _run(*, counts, normalizer, cond, lib, jitter, retain_jitter,
+         noise, norm_factor,
+         nperms, perms, seed, perm_rng, thin_rng, boot_rng,
+         n_exc_min, n_tail, alternative, allow_single_sample_group,
+         keep_null, gene_names, backend, subset, pseudocount,
+         n_boot, sample_names, condition_meta, max_probs,
+         gene_chunk, stage1, fit_backend, strata, boot_level, gene_meta) -> WadeResult:
+    """The driver proper, over gene chunks (one chunk when ``gene_chunk`` is
+    ``None``). The block size is a memory layout, never a numerical choice:
+    the jitter is drawn once and indexed per chunk, library sizes are one
+    full-matrix pass, and the fold-change fit and the thinning consume their
+    random streams in gene order across chunks, so the result is bit-identical
+    whatever the block size (``tests/test_chunking.py``).
     """
-    from .quantiles import capped_nprobs
-    from .thinning import gene_chunks
-
     g, n = counts.shape
     chunks = gene_chunks(g, gene_chunk)
     i1, i0 = split_groups(cond)
@@ -623,12 +486,14 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, retain_jitter,
         return _normalize.tpm_like(c, normalizer[rows], lib, noise=noise,
                                    norm_factor=norm_factor, jitter=jit)
 
+    do_subset = nperms > 0 and subset and m_real >= 3
+
     # The count-native shift correction runs before the chunk loop: its two
     # random streams are consumed in gene order across chunks, and the
     # thinned matrix is held as int32 (counts are integers, so the values
     # are exact) at half the footprint of a float64 resident.
     shift = thinned = None
-    if thin and nperms > 0 and subset and min(i1.size, i0.size) >= 3:
+    if do_subset:
         c_int = np.round(counts)
         shift = fit_fold_change(c_int, cond,
                                 alpha=_fit_alpha(normalizer, lib, norm_factor, n),
@@ -644,10 +509,9 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, retain_jitter,
                     out=thinned)
         del c_int
 
-    # The pseudocount is not materialized here: it is `norm_factor / (norm *
-    # lib)` scaled, so the result keeps the three small inputs and rebuilds it
-    # on access. `normalizer` is held by reference, so a matrix normalizer
-    # costs nothing extra -- the caller already has that array.
+    # The pseudocount is not retained by the result: it is `norm_factor /
+    # (norm * lib)` scaled, so the result keeps the small inputs and rebuilds
+    # it on access. It is materialized once here for the run itself.
     pc = ((normalizer, lib, norm_factor, float(pseudocount))
           if pseudocount > 0 else None)
     pc_full = (one_count(normalizer, lib, counts.shape, norm_factor=norm_factor)
@@ -659,15 +523,13 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, retain_jitter,
         perms = validate_perms(perms, cond, nperms, strata=strata)
     else:
         perms = None
-    do_subset = nperms > 0 and subset and m_real >= 3
 
     W_null = w_obs = stage1_stat = None
     if stage1 in ("gemm", "saddlepoint"):
-        from .permutation import _mean_diff_weights
-        w_obs = _mean_diff_weights(cond)
+        w_obs = mean_diff_weights(cond)
         stage1_stat = np.empty(g, dtype=np.float64)
         if perms is not None:
-            W_null = np.ascontiguousarray(_mean_diff_weights(perms).T)
+            W_null = np.ascontiguousarray(mean_diff_weights(perms).T)
 
     tpm = np.empty((g, n), dtype=np.float64)
     null = np.empty((g, nperms), dtype=np.float64) if nperms > 0 else None
@@ -688,26 +550,25 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, retain_jitter,
             null[ch] = null_statistics(x_ch, perms, backend=backend,
                                        max_probs=max_probs)
         if do_subset:
-            pc_ch = None if pc_full is None else pc_full[ch]
-            corrected_ch = shift_ch = None
-            if thinned is not None:
-                corrected_ch = normalize_chunk(
-                    np.asarray(thinned[ch], dtype=np.float64), ch, jit)
-                shift_ch = shift[ch]
+            corrected_ch = normalize_chunk(
+                np.asarray(thinned[ch], dtype=np.float64), ch, jit)
             sub_parts.append(subset_test(
-                x_ch, cond, perms, alternative=alternative, backend=backend,
-                pseudocount=pc_ch, corrected=corrected_ch, shift=shift_ch,
+                x_ch, cond, perms, corrected_ch, shift[ch],
+                alternative=alternative, backend=backend,
+                pseudocount=None if pc_full is None else pc_full[ch],
                 max_probs=max_probs))
     obs = _concat_stats(stats_parts)
     sub = _concat_subsets(sub_parts) if do_subset else None
 
     ci = {}
-    # Gated on the subset stage, not merely on n_boot: an interval for a
-    # statistic the same table does not contain reads as a corrupt table.
-    if n_boot > 0 and sub is not None:
+    if n_boot > 0:
         ci = characterization_ci(tpm, cond, pseudocount=pc_full, n_boot=n_boot,
                                  rng=boot_rng, max_probs=max_probs,
                                  gene_chunk=gene_chunk, level=boot_level)
+        if sub is None:
+            # No interval for a statistic the table does not contain.
+            ci = {k: ci[k] for k in ("log2_fc", "mean_shift")}
+
 
     return _finish(
         obs=obs, null=null, perms=perms, sub=sub, ci=ci, cond=cond,
@@ -722,177 +583,145 @@ def _wade_chunked(*, counts, normalizer, cond, lib, jitter, retain_jitter,
 
 
 def wade(
-    counts: np.ndarray,
+    counts,
     normalizer,
-    cond: np.ndarray,
+    cond,
     *,
-    lib_sizes: np.ndarray | None = None,
     nperms: int = DEFAULT_NPERMS,
-    noise: float = _normalize.DEFAULT_NOISE,
-    norm_factor: float = _normalize.DEFAULT_NORM_FACTOR,
     seed: int | None = 1,
-    jitter: np.ndarray | None = None,
-    perms: np.ndarray | None = None,
-    gene_names=None,
-    n_exc_min: int = DEFAULT_N_EXC_MIN,
-    n_tail: int = DEFAULT_N_TAIL,
     alternative: str = "two-sided",
-    allow_single_sample_group: bool = False,
-    keep_null: bool = False,
-    backend: str = "auto",
-    subset: bool = True,
-    thin: bool = True,
-    pseudocount: float = 1.0,
+    lib_sizes: np.ndarray | None = None,
+    strata=None,
     n_boot: int = 0,
-    sample_names=None,
+    boot_level: float = 0.95,
+    subset: bool = True,
+    pseudocount: float = 1.0,
     max_probs: int | None = DEFAULT_MAX_PROBS,
     gene_chunk: int | None = None,
     stage1: str = "grid",
     fit_backend: str = "numpy",
-    strata=None,
+    backend: str = "auto",
+    gene_names=None,
+    sample_names=None,
+    noise: float = _normalize.DEFAULT_NOISE,
+    norm_factor: float = _normalize.DEFAULT_NORM_FACTOR,
+    n_exc_min: int = DEFAULT_N_EXC_MIN,
+    n_tail: int = DEFAULT_N_TAIL,
+    jitter: np.ndarray | None = None,
+    perms: np.ndarray | None = None,
+    keep_null: bool = False,
+    allow_single_sample_group: bool = False,
     allow_empty_samples: bool = False,
-    boot_level: float = 0.95,
 ) -> WadeResult:
-    """Run WADE on a raw count matrix. The primary entry point.
+    """Run WADE on a raw count matrix.
 
     Parameters
     ----------
     counts
-        Genes x samples raw counts: a NumPy array, a polars or pandas
-        DataFrame, a sparse matrix, or a :class:`wade.Counts`. Anything but an
-        array goes through :func:`wade.as_counts` with its defaults — call that
-        yourself for a transposed matrix (``genes="columns"``) or an unusual
-        column layout. **WADE reads no files**; your reader does that
-        (``ROADMAP.md`` §1).
+        Genes x samples **raw counts**: a NumPy array, a polars or pandas
+        DataFrame, a SciPy sparse matrix, or a :class:`wade.Counts`. Anything
+        but an array goes through :func:`wade.as_counts` with its defaults;
+        call that yourself for a transposed matrix or an unusual column
+        layout. WADE reads no files.
     normalizer
-        A per-gene vector, a full genes x samples matrix, a scalar, or the
-        **name of a numeric column** carried alongside the counts (a
-        featureCounts ``"Length"``).
+        A per-gene vector (gene length gives TPM-like values), a genes x
+        samples matrix, a scalar (``1.0`` gives CPM), or the name of a
+        numeric column carried alongside the counts.
     cond
-        Binary vector, 1 = case and 0 = control, one entry per column — or a
-        :class:`wade.Condition` from :func:`wade.condition`, which is aligned
-        to the sample labels **by name** and raises on any mismatch.
+        ``1`` for case and ``0`` for control, one entry per sample, or a
+        :class:`wade.Condition` from :func:`wade.condition`, aligned to the
+        sample labels by name.
+    nperms
+        Permutations. Sets the p-value floors: ``1/(nperms+1)`` empirical,
+        ``1/(nperms * n_tail)`` after GPD refinement. ``0`` skips inference.
+    seed
+        Seeds the jitter, the permutations, the thinning and the bootstrap;
+        a seed reproduces a result exactly. ``None`` is not reproducible.
     alternative
-        ``"two-sided"`` (default) detects differences in either direction;
-        ``"greater"`` only elevation in cases, ``"less"`` only reduction.
-        Applies to both stages, so they cannot disagree about what counts as
-        a finding. Direction is carried by ``mean_shift``'s sign and by
-        ``direction``.
-    jitter, perms
-        Supplied randomness, **on the production argument path**, because R's
-        Mersenne-Twister and NumPy's PCG64 cannot agree on a shared seed and a
-        fixture path that bypassed production code would validate code nobody
-        runs.
-    n_exc_min, n_tail
-        The GPD tail refinement (``docs/method.md`` §6). Refinement fires for
-        a gene with fewer than ``n_exc_min`` exceedances, fitting the top
-        ``n_tail`` null draws — **so together with** ``nperms`` **these set
-        the smallest p-value the run can report**, ``1/(nperms * n_tail)``.
-        That floor is an honesty constraint, not a numerical guard; raising
-        resolution means more permutations, not a smaller floor.
+        ``"two-sided"`` (default), ``"greater"`` (elevation in cases only) or
+        ``"less"``. Applies to both stages.
+    lib_sizes
+        Per-sample library sizes; computed from the counts and the
+        normalizer when omitted. Use it to pass RLE or other size factors.
+    strata
+        Per-sample stratum labels (study, batch, protocol). Labels are then
+        permuted only within each stratum, and the manifest records the
+        permutation space that leaves (:func:`wade.permutation_space`).
+    n_boot, boot_level
+        Bootstrap replicates for intervals on the descriptors, resampled
+        within groups; ``0`` (default) skips them. ``boot_level`` is the
+        interval's coverage.
     subset
-        Run the subset test and the characterization. Requires
-        ``min(n_case, n_ctrl) >= 3``.
-    thin
-        Build the subset stage's null by **binomial thinning** of the raw
-        counts under the fitted global fold change (``docs/method.md``
-        §10.3), which is exact for counts where the division it replaces is
-        not. ``False`` falls back to that division — kept as the comparison
-        that shows why thinning exists, not as an analysis option.
+        Run the subset stage and the characterization. Needs at least 3
+        grid points, so it is skipped when ``min(n_case, n_ctrl) < 3``.
     pseudocount
-        In **counts**. Added to every cell, in that sample's normalized
-        units, before the log-ratio curve is taken (``§10.4``): a zero means
-        "less than one", and without this the tie-breaking jitter turns it
-        into a log-ratio of 7–10. Default one count; ``0`` disables.
-    boot_level
-        Coverage of the bootstrap intervals; ``0.95`` by default.
-    n_boot
-        Bootstrap replicates for intervals on ``affected_fraction``,
-        ``direction``, ``subset_log2_fc``, ``log2_fc`` and ``mean_shift``
-        (``§10.5``); ``0`` (default) skips them.
-        Resampled within groups. A few hundred is enough; the cost is a few
-        quantile grids per replicate.
+        In counts, added to every cell in that sample's normalized units
+        before the log-ratio curve is taken (``docs/method.md`` §9.4).
+        ``0`` disables.
     max_probs
-        Cap on the quantile grid (``docs/method.md`` §1). The realized grid is
-        ``min(n_case, n_ctrl, max_probs)``, reported as ``result.nprobs`` and
-        recorded in the manifest. Designs at or under the default 2,000 per
-        group are untouched; above it the cap bounds every per-gene array and
-        sets ``affected_fraction``'s resolution to ``1/max_probs`` — keep
-        ``max_probs >= 2.5 / (smallest fraction of interest)``. ``None``
-        removes the cap.
+        Cap on the quantile grid, ``min(n_case, n_ctrl, max_probs)``
+        (``docs/method.md`` §1). The realized grid is ``result.nprobs``.
+        Keep it at or above ``2.5 / (smallest fraction of interest)``;
+        ``None`` removes the cap.
     gene_chunk
-        Process the genes in blocks of this many, so peak memory stops
-        depending on the number of genes (``docs/scaling.md`` §2.2). **Not a
-        numerical choice**: the jitter is indexed rather than redrawn and
-        every random stream is consumed in gene order, so the block size
-        cannot change a number — ``None`` (the default) is simply one block
-        over the whole matrix, and it is the *same* code path. A few thousand
-        genes is a good block on a large cohort.
+        Process genes in blocks of this many to bound peak memory. Purely a
+        memory layout: the result is bit-identical whatever the block size.
     stage1
-        How the stage-1 statistic and its null are computed. ``"grid"`` (the
-        default) is the quantile-grid quadrature, parity-pinned against the R
-        reference. ``"gemm"`` — **balanced designs only** — computes the
-        statistic as the exact difference of group means and the entire null
-        as one matrix product (``docs/scaling.md`` §3.1; measured 139–185×
-        faster at large n). On a balanced, uncapped design the two agree to
-        ~1e-9 relative — not bitwise, because BLAS reassociates — and under a
-        ``max_probs`` cap the GEMM statistic is arguably the better number:
-        it is the exact mean difference where the capped quadrature drifts.
-        ``result.mean_shift`` then reports the statistic the p-value actually
-        tested; the grid quadrature stays available as
-        ``result.stats.mean_shift``. Stage 2 is unaffected either way.
-
-        ``"saddlepoint"`` — **any geometry** — is the same exact mean
-        difference with its p-value computed rather than sampled: the
-        permutation tail of a subset sum has a double-saddlepoint form
-        (:mod:`wade.saddlepoint`, ``docs/scaling.md`` §4.9), so stage 1 gets
-        **no resolution floor at all**. That is the point of it. The empirical
-        p-value stops at ``1/(B+1)`` and the GPD refinement that fills the gap
-        was measured 3–4,906× conservative on stage 1, which costs power
-        exactly where BH decides; the saddlepoint agrees with 1e8-permutation
-        brute force to 0.99–1.00 in the median and is never worse than 0.61
-        anti-conservative. It is **opt-in and changes reported numbers**, so
-        it is named rather than inferred. ``z_mean_shift`` and
-        ``nexc_mean_shift`` still come from the permutation null when one was
-        drawn for stage 2; ``refined_mean_shift`` is False throughout, there
-        being no floor to refine past. Needs SciPy, imported only when used.
-
-        **Cost scales with the cohort, not the gene count**: for 20,000 genes,
-        0.7 min at 40 v 40, 4.6 at 300 v 300, 17.6 at 1,000 v 1,000 and 50 at
-        3,000 v 3,000 — about 60× the stage-1 permutation loop it replaces, at
-        every size, since both are ``O(n)`` per gene. Worth it where the
-        permutation floor is what limits you; at tens of thousands of samples
-        it is not, and there the floor is not the binding constraint anyway.
+        ``"grid"`` (default): the quantile-grid quadrature and its
+        permutation p-value. ``"gemm"``: on a balanced design, the exact
+        mean difference with its null as one matrix product, much faster on
+        large cohorts. ``"saddlepoint"``: the exact mean difference with its
+        permutation p-value computed in closed form, no floor, any balance;
+        needs SciPy and costs about 60x the stage-1 permutation loop
+        (``docs/method.md`` §6). Both alternatives change the reported
+        ``mean_shift`` off the grid quadrature, so they are opt-in.
     fit_backend
         ``"numpy"`` (default) or ``"rust"`` for the fold-change fit's
-        bisection (``docs/scaling.md`` §3.3). **Opt-in, and unlike**
-        ``backend`` **it changes the realized fit**: no two binomial samplers
-        consume randomness alike, so the fitted fold changes for a given seed
-        differ between the two at the resolution of the bisection — which is
-        why the kernel is never dispatched automatically. Both are
-        deterministic given the seed and chunk-invariant; the kernel is
-        parallel over genes and several times faster.
-    strata
-        Per-sample stratum labels (study, batch, protocol, donor). When
-        given, the permutation null is **restricted**: labels are shuffled
-        only *within* each stratum, so batch structure is held fixed instead
-        of being tested as if it were biology (``docs/limits.md`` §2.2). The
-        price is permutation space — a stratum with only one class present
-        contributes no freedom at all — so the realized space and its
-        implied p-value floor are computed and recorded
-        (:func:`wade.permutation_space`, and the manifest's
-        ``design.permutation_space``). Supplying your own ``perms`` alongside
-        ``strata`` validates them against the stratum counts.
+        bisection. Opt-in because the two backends draw their thinning
+        differently and so fit slightly different fold changes for the same
+        seed; both are deterministic.
+    backend
+        ``"auto"`` (default), ``"rust"`` or ``"numpy"`` for the two
+        permutation loops. The kernels are bitwise-checked against NumPy, so
+        this never changes an answer.
+    gene_names, sample_names
+        Labels, when ``counts`` is a bare array; otherwise positional.
+    noise, norm_factor
+        The continuity jitter's width (in counts) and the normalization's
+        scale factor (``docs/method.md`` §7).
+    n_exc_min, n_tail
+        The GPD tail refinement fires for a gene with fewer than
+        ``n_exc_min`` exceedances and fits the top ``n_tail`` null draws
+        (``docs/method.md`` §6).
+    jitter, perms
+        Supplied randomness in place of the seeded draws. ``perms`` is a
+        ``(nperms, samples)`` matrix of permuted labels.
+    keep_null
+        Retain the two ``genes x nperms`` null matrices on the result.
+    allow_single_sample_group
+        Allow a group of one sample (stage 1 only).
     allow_empty_samples
-        Run even though some library has a zero size. Refused by default:
-        every gene in such a sample normalizes to the ``norm_factor``
-        constant, which then takes part in every quantile the contrast reads
-        (:func:`wade.library_qc` reports per-library depth and complexity).
+        Run even though some library has a zero size; refused by default,
+        naming the samples.
+
+    Returns
+    -------
+    WadeResult
+        Per-gene arrays. The headline columns are ``p_mean_shift`` and
+        ``padj_mean_shift`` (stage 1), ``p_subset`` and ``padj_subset``
+        (stage 2), and the descriptors ``affected_fraction``, ``direction``
+        and ``subset_log2_fc``; :meth:`WadeResult.columns` has the full
+        table.
     """
-    data, normalizer, cond, cond_meta = _resolve_input(
-        counts, normalizer, cond, gene_names, sample_names)
-    cond_meta.update(entry_point="wade", noise=noise, norm_factor=norm_factor,
-                     thin=thin, subset=subset,
+    data, normalizer = _resolve_counts(counts, normalizer, gene_names, sample_names)
+    cond_meta = {}
+    if isinstance(cond, Condition):
+        cond_meta = dict(condition_column=cond.column,
+                        case_label=str(cond.case), control_label=str(cond.control))
+        cond = cond.vector(data.sample_names)
+    cond = np.asarray(cond)
+    cond_meta.update(noise=noise, norm_factor=norm_factor, subset=subset,
+                     pseudocount=pseudocount,
                      normalizer=_describe_normalizer(normalizer),
                      lib_sizes_supplied=lib_sizes is not None,
                      perms_supplied=perms is not None)
@@ -906,6 +735,13 @@ def wade(
         raise ValueError(f"alternative must be one of {ALTERNATIVES}; got {alternative!r}")
     if pseudocount < 0:
         raise ValueError(f"pseudocount must be non-negative, got {pseudocount}")
+    if perms is not None:
+        perms = np.asarray(perms)
+        if perms.ndim != 2:
+            raise ValueError(f"perms must be a (nperms, samples) matrix, got shape {perms.shape}")
+        nperms = perms.shape[0]
+    if nperms < 0:
+        raise ValueError(f"nperms must be non-negative, got {nperms}")
     split_groups(cond)
     _validate_stage1(stage1, cond, fit_backend)
     if strata is not None:
@@ -913,39 +749,32 @@ def wade(
         strata_indices(strata, counts.shape[1])          # shape/length check
 
     # Four independent streams from one seed: jitter, permutations, thinning,
-    # bootstrap. Spawned children are deterministic by index, so adding the
-    # third and fourth left the first two — and every stage-1 number — as they
-    # were.
+    # bootstrap.
     if seed is None:
         jitter_rng, perm_rng, thin_rng, boot_rng = (np.random.default_rng() for _ in range(4))
     else:
-        js, ps, ts, bs = np.random.SeedSequence(seed).spawn(4)
-        jitter_rng, perm_rng, thin_rng, boot_rng = (np.random.default_rng(s_) for s_ in (js, ps, ts, bs))
+        streams = np.random.SeedSequence(seed).spawn(4)
+        jitter_rng, perm_rng, thin_rng, boot_rng = (np.random.default_rng(s) for s in streams)
 
     user_jitter = jitter is not None
     if jitter is None:
         jitter = _normalize.draw_jitter(counts.shape, noise=noise, rng=jitter_rng)
     else:
-        # Validated here, against the full matrix, so both drivers refuse a
-        # mis-shaped jitter identically — the chunked driver only ever hands
-        # tpm_like row slices, which would let a wrong shape through.
         jitter = _normalize._resolve_jitter(jitter, counts.shape, noise, None, None)
 
     # Library sizes are fixed from the original counts and reused for every
     # thinned matrix: thinning one gene is a counterfactual about that gene,
-    # not about the library. Computed on the full matrix in both drivers —
-    # a column sum's association depends on how it is blocked, so chunking
-    # it would move every normalized value by an ulp.
+    # not about the library. Always a full-matrix pass: a column sum's
+    # association depends on how it is blocked.
     lib = (_normalize.library_sizes(counts, normalizer) if lib_sizes is None
            else np.asarray(lib_sizes, dtype=np.float64))
-    _check_libraries(lib, sample_names, allow_empty_samples)
+    _check_libraries(lib, sample_names, counts.shape[0], allow_empty_samples)
 
-    # The result rebuilds the jitter from the seed rather than carrying it
-    # (a full genes x samples matrix). It can only do that when the draw is
-    # reproducible, so keep the array when it is not.
+    # The result rebuilds the jitter from the seed rather than carrying it,
+    # so keep the array only when the draw is not reproducible.
     retain_jitter = jitter if (user_jitter or seed is None) else None
 
-    return _wade_chunked(
+    return _run(
         counts=counts, normalizer=normalizer, cond=cond, lib=lib,
         jitter=jitter, retain_jitter=retain_jitter,
         noise=noise, norm_factor=norm_factor,
@@ -954,11 +783,12 @@ def wade(
         n_tail=n_tail, alternative=alternative,
         allow_single_sample_group=allow_single_sample_group,
         keep_null=keep_null, gene_names=gene_names, backend=backend,
-        subset=subset, thin=thin, pseudocount=pseudocount, n_boot=n_boot,
+        subset=subset, pseudocount=pseudocount, n_boot=n_boot,
         sample_names=sample_names, condition_meta=cond_meta,
         max_probs=max_probs, gene_chunk=gene_chunk, stage1=stage1,
         fit_backend=fit_backend, strata=strata, boot_level=boot_level,
         gene_meta=data.meta)
+
 
 def wade_contrast(
     counts,
@@ -968,22 +798,19 @@ def wade_contrast(
     *,
     gene_names=None,
     sample_names=None,
-    nperms: int = DEFAULT_NPERMS,
     **kwargs,
 ) -> WadeResult:
     """Run one contrast from two groups of samples, **by name or by index**.
 
     ``case_samples`` and ``ctrl_samples`` may be sample labels (matched against
     the matrix's sample names, which a DataFrame input supplies) or integer
-    column positions. Names are the point: integer positions are what the
-    caller almost never has.
+    column positions. Every other keyword is passed to :func:`wade`.
 
     Sizes libraries **on the subset**, not on the full matrix, so a library's
     size factor depends only on the genes and samples handed in — change the
     sample set and every normalized value changes.
     """
-    data = as_counts(counts, gene_names=gene_names, sample_names=sample_names,
-                     exclude=(normalizer,) if isinstance(normalizer, str) else ())
+    data, normalizer = _resolve_counts(counts, normalizer, gene_names, sample_names)
     case_idx = _resolve_samples(case_samples, data.sample_names, "case_samples")
     ctrl_idx = _resolve_samples(ctrl_samples, data.sample_names, "ctrl_samples")
 
@@ -995,29 +822,23 @@ def wade_contrast(
     cols = np.concatenate([case_idx, ctrl_idx])
     cond = np.concatenate([np.ones(case_idx.size, dtype=int),
                            np.zeros(ctrl_idx.size, dtype=int)])
-    if isinstance(normalizer, str):
-        normalizer = data.normalizer(normalizer)
-    elif np.isscalar(normalizer):
-        normalizer = np.full(data.values.shape[0], float(normalizer), dtype=np.float64)
-    normalizer = np.asarray(normalizer, dtype=np.float64)
     sub_norm = normalizer[:, cols] if normalizer.ndim == 2 else normalizer
     kwargs = _reindex_sample_kwargs(kwargs, cols, data.values.shape[1])
 
-    result = wade(data.values[:, cols], sub_norm, cond, nperms=nperms,
+    result = wade(data.values[:, cols], sub_norm, cond,
                   gene_names=data.gene_names,
                   sample_names=data.sample_names[cols], **kwargs)
-    result.params.update(n_case=int(case_idx.size),
-                         n_ctrl=int(ctrl_idx.size), columns=cols)
+    result.params.update(columns=cols)
     return result
 
 
-#: Arguments of :func:`wade` whose values are indexed by **sample**, and which
-#: axis of the value the samples run along. :func:`wade_contrast` reorders the
-#: matrix into ``[cases..., controls...]``, so each of these has to be carried
-#: through the same reordering — passing them positionally onto the reordered
+#: Arguments of :func:`wade` whose values are indexed by **sample** along
+#: their last axis. :func:`wade_contrast` reorders the matrix into
+#: ``[cases..., controls...]``, so each of these has to be carried through
+#: the same reordering — passing them positionally onto the reordered
 #: columns applies them to the wrong samples, and when the lengths happen to
 #: match it does so *silently*.
-_SAMPLE_AXIS_KWARGS = {"strata": -1, "lib_sizes": -1, "jitter": 1, "perms": 1}
+_SAMPLE_AXIS_KWARGS = ("strata", "lib_sizes", "jitter", "perms")
 
 
 def _reindex_sample_kwargs(kwargs: dict, cols: np.ndarray, n_samples: int) -> dict:
@@ -1028,21 +849,20 @@ def _reindex_sample_kwargs(kwargs: dict, cols: np.ndarray, n_samples: int) -> di
     error this function exists to prevent.
     """
     out = dict(kwargs)
-    for name, axis in _SAMPLE_AXIS_KWARGS.items():
+    for name in _SAMPLE_AXIS_KWARGS:
         val = out.get(name)
         if val is None:
             continue
         arr = np.asarray(val)
-        got = arr.shape[axis] if arr.ndim > (axis if axis >= 0 else 0) else arr.shape[-1]
-        if got != n_samples:
+        if arr.shape[-1] != n_samples:
             raise ValueError(
                 f"{name}= must cover every sample of the matrix handed to "
                 f"wade_contrast ({n_samples}), because the contrast reorders the "
-                f"columns and {name} has to be reordered with them; got {got}. "
-                f"Pass the full-length {name}, not one already subset to the "
-                f"contrast."
+                f"columns and {name} has to be reordered with them; got "
+                f"{arr.shape[-1]}. Pass the full-length {name}, not one already "
+                f"subset to the contrast."
             )
-        out[name] = arr[..., cols] if axis != -1 or arr.ndim > 1 else arr[cols]
+        out[name] = arr[..., cols]
     return out
 
 

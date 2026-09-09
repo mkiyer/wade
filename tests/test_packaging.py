@@ -19,26 +19,15 @@ ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
-def test_version_is_declared_once_and_agrees():
-    """``wade.__version__`` is what the manifest records, pyproject is what pip
-    reports, and Cargo.toml is what the crate calls itself. A drift mislabels
-    every written result.
-
-    Cargo's was found at 0.1.0 against pyproject's 0.2.0.dev0 on 2026-09-02,
-    because nothing compared them. It is compared on the **release segment**
-    only: Cargo takes semver, which cannot spell a PEP 440 ``.dev0``, so a
-    pre-release suffix on the Python side is allowed to have no counterpart.
-    """
+def test_version_comes_from_pyproject():
+    """``wade.__version__`` is read from the installed metadata, so pyproject
+    is the one place the version is declared. A stale editable install is the
+    only way for them to disagree, and the fix is to reinstall."""
     declared = re.search(r'^version = "([^"]+)"', PYPROJECT, re.M)
     assert declared, "pyproject.toml has no static version"
     assert declared.group(1) == wade.__version__, (
-        f"pyproject {declared.group(1)!r} != wade.__version__ {wade.__version__!r}")
-
-    crate = re.search(r'^version = "([^"]+)"', (ROOT / "Cargo.toml").read_text(encoding="utf-8"), re.M)
-    assert crate, "Cargo.toml has no version"
-    release = re.match(r"\d+\.\d+\.\d+", declared.group(1)).group(0)
-    assert crate.group(1) == release, (
-        f"Cargo.toml {crate.group(1)!r} != pyproject's release segment {release!r}")
+        f"pyproject {declared.group(1)!r} != wade.__version__ {wade.__version__!r}; "
+        f"reinstall with `pip install -e .`")
 
 
 def test_every_declared_marker_is_used_and_every_used_marker_declared():
@@ -58,7 +47,7 @@ def test_all_is_sorted_and_complete():
     missing = [n for n in wade.__all__ if not hasattr(wade, n)]
     assert not missing, f"__all__ names that do not exist: {missing}"
     public = {n for n in vars(wade)
-              if not n.startswith("_") and n not in ("annotations",)
+              if not n.startswith("_") and n not in ("annotations", "PackageNotFoundError")
               and not isinstance(getattr(wade, n), type(wade))}
     unlisted = public - set(wade.__all__)
     assert not unlisted, f"public names missing from __all__: {sorted(unlisted)}"
@@ -78,6 +67,6 @@ def test_importing_wade_costs_only_numpy():
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-@pytest.mark.parametrize("extra", ["test", "plot", "io"])
+@pytest.mark.parametrize("extra", ["test", "plot", "io", "saddlepoint", "all"])
 def test_optional_extras_are_declared(extra):
     assert re.search(rf"^{extra} = \[", PYPROJECT, re.M), f"extra {extra!r} not declared"

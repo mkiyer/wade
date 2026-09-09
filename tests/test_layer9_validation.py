@@ -38,7 +38,7 @@ def comb_floor(n1: int, n: int, k: int) -> float:
 
     The scale of the smallest p-value a label-permutation test can resolve for
     a k-sample subset. A property of the design, not of the implementation —
-    and a scale rather than a bound: see ``docs/limits.md`` §4.1, where 21-42%
+    and a scale rather than a bound: see ``docs/method.md`` §10.4, where 21-42%
     of planted genes came in under it.
     """
     if k < 1 or k > n1:

@@ -1,31 +1,23 @@
 """Type-7 empirical quantiles, on WADE's descending probability grid.
 
 Every WADE statistic is a function of two quantile grids, so the quantile
-convention is part of the specification and not an implementation detail:
-a different type changes every number the method returns and raises
-nothing (``docs/implementation-notes.md`` hazard 1).
+convention is part of the specification: a different type changes every
+number the method returns and raises nothing. Type 7 is pinned here
+explicitly, and implemented directly rather than delegated to
+:func:`numpy.quantile`, so that two details are fixed:
 
-Type 7 is pinned here explicitly rather than inherited from a library
-default. It is also implemented directly rather than delegated to
-:func:`numpy.quantile`, for two reasons:
+1. The interpolation is the one-sided ``(1 - h) * x[lo] + h * x[hi]``.
+   NumPy's ``method="linear"`` uses a two-sided lerp that switches formula
+   at ``t >= 0.5``; both are correct type 7 and they differ in the last bits.
+2. **Interpolation is skipped where it cannot matter**: only where
+   ``h > 0`` *and* ``x[hi] != x[lo]``. On a run of equal values
+   ``(1 - h) * a + h * a`` is not guaranteed to be exactly ``a`` in floating
+   point, and WADE's target regime is zero-heavy count data, which is
+   nothing but ties.
 
-1. **R's arithmetic is not NumPy's.** R's ``quantile.default`` evaluates
-   the interpolation as ``(1 - h) * x[lo] + h * x[hi]``, while NumPy's
-   ``method="linear"`` uses a two-sided lerp that switches formula at
-   ``t >= 0.5``. Both are correct type 7; they differ in the last bits.
-   Reproducing R's form removes that difference at the source instead of
-   absorbing it into a tolerance.
-
-2. **R skips the interpolation when it cannot matter, and that is
-   load-bearing on tied data.** ``quantile.default`` only interpolates
-   where ``index > lo`` *and* ``x[hi] != x[lo]``, returning ``x[lo]``
-   untouched otherwise. On a run of equal values ``(1 - h) * a + h * a``
-   is not guaranteed to be exactly ``a`` in floating point, so without
-   the guard a tie could shift by an ulp. WADE's target regime is
-   zero-heavy count data, which is nothing but ties.
-
-There is one definition here and both the observed path and the
-permutation null call it, so the two cannot drift apart.
+The compiled kernel reimplements the same definition term for term and is
+held to it bitwise. There is one Python definition here, and both the
+observed path and the permutation null call it.
 """
 
 from __future__ import annotations
@@ -56,15 +48,11 @@ def capped_nprobs(n1: int, n0: int, max_probs: int | None) -> int:
 def probability_grid(nprobs: int) -> np.ndarray:
     """The ``nprobs`` probabilities WADE compares the two groups on.
 
-    Descending, from 1 down to 0 — R's ``seq(1, 0, length.out = nprobs)``.
-    **The order is load-bearing.** Position 0 is the group maximum, so the
-    first ``k`` positions are the upper tail where a rare high-expressing
-    subset lives. An ascending grid with the same ``[:k]`` slice computes a
-    lower-tail statistic and calls it ``tail_mean``, with no error
-    (``docs/implementation-notes.md`` hazard 9).
-
-    ``nprobs = 1`` gives the single probability 1.0, matching R, which
-    ``seq(1, 0, length.out = 1)`` returns.
+    Descending, from 1 down to 0. **The order is load-bearing**: position 0
+    is the group maximum, so the first ``k`` positions are the upper tail
+    where a rare high-expressing subset lives, and an ascending grid would
+    silently compute a lower-tail statistic. ``nprobs = 1`` gives the single
+    probability 1.0.
     """
     if nprobs < 1:
         raise ValueError(f"nprobs must be >= 1, got {nprobs}")
@@ -76,9 +64,7 @@ def probability_grid(nprobs: int) -> np.ndarray:
 def type7_quantiles(x: np.ndarray, probs: np.ndarray) -> np.ndarray:
     """Row-wise type-7 quantiles of ``x`` (genes x samples) at ``probs``.
 
-    Returns a ``(genes, len(probs))`` array. Mirrors R's
-    ``quantile.default(type = 7)`` term for term, including its
-    no-interpolation guard.
+    Returns a ``(genes, len(probs))`` array.
     """
     x = np.asarray(x, dtype=np.float64)
     if x.ndim != 2:
@@ -90,9 +76,8 @@ def type7_quantiles(x: np.ndarray, probs: np.ndarray) -> np.ndarray:
 
     xs = np.sort(x, axis=1)
 
-    # R: index <- 1 + (n - 1) * probs, with lo/hi as 1-based positions.
-    # Kept 1-based through the floor/ceil so the arithmetic matches R's
-    # exactly, then shifted to 0-based only for the actual indexing.
+    # 1-based positions through the floor/ceil (the type-7 definition),
+    # shifted to 0-based only for the indexing.
     index = 1.0 + (n - 1) * probs
     lo = np.floor(index)
     hi = np.ceil(index)
@@ -103,6 +88,7 @@ def type7_quantiles(x: np.ndarray, probs: np.ndarray) -> np.ndarray:
     hi_val = xs[:, hi_i]
     h = index - lo
 
-    # R interpolates only where it can change the answer.
+    # Interpolate only where it can change the answer.
     interp = (h > 0.0) & (hi_val != lo_val)
+
     return np.where(interp, (1.0 - h) * lo_val + h * hi_val, lo_val)

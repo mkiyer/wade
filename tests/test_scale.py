@@ -6,10 +6,10 @@
   This is why stage 1 is linear.
 * Stage 2 is silent on a genuine global fold change in NB counts at every
   expression level — low counts included — now that its null is built by
-  binomial thinning (10.3), and the log-ratio curve carries a one-count
-  pseudocount (10.4) so a single zero cannot halve ``affected_fraction``.
+  binomial thinning (9.3), and the log-ratio curve carries a one-count
+  pseudocount (9.4) so a single zero cannot halve ``affected_fraction``.
   Before these landed the false-subset rate was 0.95 at 2 counts and a global
-  2x read 0.16; those numbers are in 10.2 and the tests below were strict
+  2x read 0.16; those numbers are in 9.2 and the tests below were strict
   xfails.
 
 Counts are NB, and the matrices are run with **unit library sizes** on
@@ -99,7 +99,7 @@ def test_stage1_level_is_exact_under_any_transform(perms, g):
 
 
 def test_stage1_linear_is_far_more_powerful_than_log_for_a_rare_subset_at_low_counts(perms):
-    """The reason stage 1 is linear (method.md 10.1). Measured 0.73 vs 0.07 at
+    """The reason stage 1 is linear (method.md 9.1). Measured 0.73 vs 0.07 at
     200 v 200, B = 500; asserted with margin at B = 200."""
     rng = np.random.default_rng(32)
     x = _counts(rng, 2.0, "subset", fold=8.0, frac=0.05)
@@ -119,12 +119,11 @@ def test_stage2_is_silent_on_a_global_nb_fold_change_at_high_counts():
     rate, res = _stage2_rate(_raw_counts(rng, 500.0, "global"))
     assert rate <= 0.12, f"false-subset rate at 500 counts {rate:.2f}"
     assert np.median(res.affected_fraction) >= 0.9
-    assert res.subset.correction == "thinning"
 
 
 @pytest.mark.parametrize("mu", [2.0, 20.0])
 def test_stage2_is_silent_on_a_global_nb_fold_change_at_low_counts(mu):
-    """method.md 10.2-10.3. Before thinning: 0.95 at 2 counts (the zero floor)
+    """method.md 9.2-9.3. Before thinning: 0.95 at 2 counts (the zero floor)
     and 0.17 at 20 counts (NB's Poisson component). Measured after: 0.05 at both."""
     rng = np.random.default_rng(34)
     rate, res = _stage2_rate(_raw_counts(rng, mu, "global"))
@@ -133,19 +132,31 @@ def test_stage2_is_silent_on_a_global_nb_fold_change_at_low_counts(mu):
     assert abs(np.median(res.fitted_fold_change) - 2.0) < 0.15
 
 
-def test_stage2_division_correction_is_what_it_was_and_still_fires_at_low_counts():
-    """The division correction is reachable through thin=False;
-    on counts at 2 it fires on genuine global shifts (10.2). Pinned so the
-    difference between the two corrections stays visible."""
+def test_stage2_division_correction_fires_at_low_counts():
+    """Why thinning exists (method.md 9.2): the continuous-data correction,
+    dividing the case columns by the fitted fold change, fires on genuine
+    global shifts at 2 counts. Built here from the pieces, so the difference
+    between the two corrections stays visible after the division left the
+    package."""
+    from wade.quantiles import probability_grid
+    from wade.subset import bridge, log_ratio_curve, subset_test
+
     rng = np.random.default_rng(34)
     counts = _raw_counts(rng, 2.0, "global")
-    rate_div, res = _stage2_rate(counts, thin=False)
-    assert res.subset.correction == "division"
+    x = wade.tpm_like(counts, np.ones(counts.shape[0]), np.ones(N1 + N0), seed=2)
+    st = wade.wade_stats(x, COND)
+    shift = 2.0 ** np.median(log_ratio_curve(st.Q1, st.Q0), axis=1)
+    divided = x.copy()
+    divided[:, COND == 1] /= shift[:, None]
+    perms = wade.draw_perms(COND, B, seed=2)
+    res = subset_test(x, COND, perms, divided, shift, pseudocount=1.0)
+    p = (1 + (res.null >= res.statistic[:, None]).sum(1)) / (B + 1)
+    rate_div = float((p < 0.05).mean())
     assert rate_div >= 0.5, f"expected the division correction to fire at 2 counts; got {rate_div:.2f}"
 
 
 def test_stage2_keeps_its_power_on_subsets_at_low_counts():
-    """10.3/10.4: 5% at 8x at 2 counts, measured 0.87 with thinning and the
+    """9.3/9.4: 5% at 8x at 2 counts, measured 0.87 with thinning and the
     pseudocount (0.64 before)."""
     rng = np.random.default_rng(37)
     rate, _ = _stage2_rate(_raw_counts(rng, 2.0, "subset", fold=8.0, frac=0.05))
@@ -154,7 +165,7 @@ def test_stage2_keeps_its_power_on_subsets_at_low_counts():
 
 @pytest.mark.parametrize("mu, floor", [(2.0, 0.5), (5.0, 0.7), (20.0, 0.85)])
 def test_affected_fraction_anchors_a_global_nb_fold_change_with_the_pseudocount(mu, floor):
-    """10.4: with log(x + one count) a global 2x reads 0.70 at 2 counts, 0.86
+    """9.4: with log(x + one count) a global 2x reads 0.70 at 2 counts, 0.86
     at 5, 0.96 at 20 (0.16, 0.07, 0.95 without). Below ~5 counts the log-scale
     characterization is noise-dominated and the anchor is approximate."""
     rng = np.random.default_rng(35)
@@ -164,7 +175,7 @@ def test_affected_fraction_anchors_a_global_nb_fold_change_with_the_pseudocount(
 
 
 def test_affected_fraction_is_not_halved_by_a_single_zero_at_large_n():
-    """10.4: three of six seeds at 20,000 v 20,000 carry a control zero; under
+    """9.4: three of six seeds at 20,000 v 20,000 carry a control zero; under
     the jitter alone that node is a log-ratio of ~10 and the estimate read
     0.39-0.70 on those seeds. With one count added before the log it does not
     depend on that."""
@@ -187,7 +198,7 @@ def test_affected_fraction_is_not_halved_by_a_single_zero_at_large_n():
 
 def test_stage2_one_sided_greater_is_clean_at_low_counts():
     """The cancer-outlier direction; 0.03-0.04 before thinning too, because
-    the old artifact was bottom-heavy (10.2). Still clean."""
+    the old artifact was bottom-heavy (9.2). Still clean."""
     rng = np.random.default_rng(36)
     rate, _ = _stage2_rate(_raw_counts(rng, 2.0, "global"), alternative="greater")
     assert rate <= 0.12

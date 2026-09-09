@@ -1,6 +1,8 @@
-"""Figures: the single-gene panel, the volcano, and the two-stage plot.
+"""Figures: the single-gene panel, the volcano, the two-stage plot, the driver
+panel, and a linked view.
 
-Three functions, each answering one question about a result:
+Four questions, one function each, and a fifth function that wires two of
+the views together in a live notebook:
 
 ``plot_gene``
     *What does this gene's difference look like?* The log-ratio curve
@@ -15,6 +17,11 @@ Three functions, each answering one question about a result:
 ``plot_stages``
     *What kind of difference?* ``p_mean_shift`` against ``p_subset`` — the
     four quadrants of the README's reading table, drawn.
+``plot_drivers``
+    *Should I believe this one?* Which samples drive a subset call, and
+    whether they are ordinary libraries.
+``plot_linked``
+    The volcano and the gene panel in one live widget: click a point.
 
 Two backends, one data layer
 ----------------------------
@@ -183,14 +190,13 @@ def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
         A key of :data:`THEMES` — ``"light"``, ``"dark"``,
         ``"high-contrast"`` — or a :class:`~wade.plotting.theme.Theme`, or
         ``None`` for :data:`DEFAULT_THEME`. Every figure takes it.
+    pseudocount
+        For a bare row: added before the log-ratio curve is taken, as the
+        subset stage does. A result supplies its own.
     meta
         Per-gene columns of :attr:`WadeResult.gene_meta` to show — one name or
-        several. The **first names the points**, in the panel titles here and
-        as the point label and hover title on the clouds, because a ranked list
-        of ``ENSG…`` accessions is unreadable and one of symbols is biology;
-        every named column joins plotly's hover and every ``table()``. On a
-        cloud, ``label=`` then matches these names too: you name what you see.
-        **No statistic reads any of it** — dropping it changes no number.
+        several. The **first names the points**, here in the panel titles;
+        every named column joins plotly's hover and every ``table()``.
     share_y
         Put every gene's log-ratio panel on the same y axis, so magnitudes are
         comparable across columns. Quantile panels are always per-gene.
@@ -204,10 +210,10 @@ def plot_gene(source, cond=None, *, gene=None, names=None, pseudocount=None,
         the two stages agreeing on the same gene, seen at once. Off by default
         — the log-ratio curve is what makes the method legible, and a third row
         is a diagnostic rather than the headline.
-    width, height
-        Figure size in **pixels** for plotly and in **inches** for
-        matplotlib — each library's native unit. Defaults scale with the
-        number of genes.
+    title, width, height
+        The figure title, and its size in **pixels** for plotly and in
+        **inches** for matplotlib — each library's native unit. Defaults
+        scale with the number of genes.
 
     Returns the backend's figure object: a ``plotly.graph_objects.Figure`` or a
     ``matplotlib.figure.Figure``.
@@ -353,24 +359,20 @@ def plot_drivers(res: WadeResult, gene, counts, *, k=None, top_n: int = 10,
         A result with a subset stage, and one gene by name or index.
     counts
         **The raw count matrix the run was given.** A :class:`WadeResult` does
-        not carry it — ``res.tpm`` is normalized *and* jittered, so it has no
-        exact zeros left and cannot be asked how many genes a library detected
-        — and WADE does not read files, so the caller who has the counts passes
-        them.
+        not carry it, and a library's complexity needs the exact zeros the
+        normalized matrix no longer has.
     k, top_n
         See :func:`driver_panel`. ``k`` overrides the number of drivers, which
         otherwise is the gene's own ``affected_fraction`` of the case samples.
     backend, theme, title, width, height
         As for :func:`plot_gene`.
 
-    This is the check that reversed a tempting Ewing-sarcoma reading of a real
-    plasma cohort, where a handful of anomalous libraries topped the subset
-    ranking of thousands of genes at once (``docs/scaling.md`` §7.2). Drivers
-    that are ordinary libraries which happen to share a diagnosis are the
-    finding; drivers that are low-complexity outliers are the artefact.
+    Drivers that are ordinary libraries which happen to share a diagnosis are
+    the finding; drivers that are low-complexity outliers are the artefact.
     ``DriverPanel.table()`` is the same thing as numbers, and carries the
     libraries' concentration as well.
     """
+
     panel = driver_panel(res, gene, counts, k=k, top_n=top_n)
     be = _resolve_backend(backend)
     th = _resolve_theme(theme)

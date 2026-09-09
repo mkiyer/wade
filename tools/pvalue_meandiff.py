@@ -6,7 +6,7 @@ quadrature, so this builds ground truth for the redefined statistic, as a GEMM
 over streamed permutation blocks, and then holds the saddlepoint to it.
 """
 import sys, time
-sys.path.insert(0, "/Users/mkiyer/proj/wade/tools")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 import numpy as np, pvalue_study as S
 
 d = S.Design(int(sys.argv[1]), int(sys.argv[2]))

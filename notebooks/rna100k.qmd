@@ -10,7 +10,7 @@ execute:
 ---
 
 The real-dataset workbench: ~31,000 genes × ~83,000 libraries of splice-junction
-counts, the dataset the performance queue (`docs/scaling.md`) was built for.
+counts, the dataset the performance work was built for.
 This notebook is the test bed for developing WADE against it and the showcase
 of the result boundary — **the data live in Dropbox and stay there**; nothing
 patient-derived is written into the repository, and results land next to the
@@ -19,7 +19,7 @@ data.
 Two rules it inherits:
 
 * **Memory is budgeted, not discovered.** A full-cohort run at this shape was
-  measured at **55.6 GB peak** on the synthetic twin (`docs/scaling.md` §1),
+  measured at **55.6 GB peak** on the synthetic twin (`docs/manual.md` §6),
   on top of nothing — the loaders below never materialize more than they say,
   and the full-matrix path is behind an explicit gate.
 * **The default render is small.** It runs one real contrast on a
@@ -116,7 +116,7 @@ vs 1,662 non-malignant plasma libraries (pancreas-heavy on the malignant
 side). **This is a plumbing-and-showcase contrast, not a discovery claim**:
 the plasma libraries span several studies, so study and disease are partly
 confounded and label exchangeability across studies is exactly the kind of
-assumption `docs/limits.md` warns about. A defensible analysis would permute
+assumption `docs/method.md` §10.2 warns about. A defensible analysis would permute
 within study; this notebook's job is to exercise the machinery on real data.
 
 ```{python}
@@ -150,8 +150,8 @@ res = wade.wade(
     counts, NORMALIZER, cond,
     gene_names=GENE_NAMES, sample_names=libs,
     nperms=2000, seed=1,
-    gene_chunk=4000,           # bounded memory, bit-identical (scaling.md §2.2)
-    fit_backend="rust",        # opt-in fit kernel (scaling.md §3.3)
+    gene_chunk=4000,           # bounded memory, bit-identical (bit-identical)
+    fit_backend="rust",        # opt-in fit kernel (opt-in fit kernel)
 )
 print(f"wade() on {counts.shape[0]:,} genes x {len(libs):,} plasma libraries: "
       f"{time.perf_counter() - t0:.0f} s   (m = {res.nprobs})")
@@ -250,7 +250,7 @@ Two honesty checks worth keeping in view on a cohort this size:
 
 ```{python}
 #| label: diagnostics
-# 1. The p-value floor (scaling.md §4): at ~31k genes, BH needs resolution
+# 1. The p-value floor (`docs/pvalue-review.md`): at ~31k genes, BH needs resolution
 #    near the empirical/GPD floor, and genes piling up there stop ranking.
 floor = 1.0 / (2000 * 250)
 at_floor = int((res.p_mean_shift <= floor * 1.001).sum())
@@ -268,7 +268,7 @@ print(f"median depth  malignant {np.median(depth[case]) / 1e6:.1f}M   "
 On what WADE does and does not do about depth, precisely. Library-size
 normalization removes depth's **first moment** — a 10M-count library and a
 1M-count library land on the same scale. Binomial thinning **did** run in
-the calls above (`res.subset.correction == "thinning"`), but it is stage 2's
+the calls above, but it is stage 2's
 per-gene *fold-change* correction: it makes the two groups exchangeable
 under the fitted global shift so the subset null is honest; it does not
 equalize depth. What no per-gene correction touches is depth's **second
@@ -278,7 +278,7 @@ difference between the groups — technical, but real — and a distributional
 test will see it. That is the case for a depth-equalizing preprocessing step
 (thin every library to a common depth before testing — exact for counts, at
 the price of discarded reads), which is queued as a measured experiment in
-`ROADMAP.md` §2 rather than assumed to help.
+`ISSUES.md` rather than assumed to help.
 
 Results and the manifest go **beside the data**, never into the repository:
 
@@ -430,14 +430,14 @@ library complexity.** FLI1, EWSR1 and TRGC2 are driven by libraries detecting
 everything" but **"are these samples ordinary libraries?"** — which makes
 per-library QC (complexity, top-10 mass share, depth) the load-bearing
 diagnostic, and driver attribution the substrate that lets a gene inherit its
-drivers' QC profile. That is now the top item in `ROADMAP.md` §2, in that
+drivers' QC profile. That is now the top item in `ISSUES.md`, in that
 corrected form.
 
 ## The full cohort, when you mean it
 
 The gate, not a default: ~20.6 GB for the matrix plus WADE's residents —
 **measured 55.6 GB peak at this exact shape** on the synthetic twin
-(`docs/scaling.md` §1, ~30 min at B = 2,000 with `fit_backend="rust"` and,
+(`docs/manual.md` §6, ~30 min at B = 2,000 with `fit_backend="rust"` and,
 on a balanced design, `stage1="gemm"`). Edit the contrast; the template runs
 whatever the metadata can define.
 
@@ -500,7 +500,7 @@ The follow-ups this motivates, in order:
   false-positive rates for both stages, and candidate guards — led by
   depth-equalizing binomial thinning, the count-exact version of adding
   Poisson noise.
-* **P-value resolution** (`scaling.md` §4) — 18.8% of genes at the floor is
+* **P-value resolution** (`docs/pvalue-review.md`) — 18.8% of genes at the floor is
   the predicted pile-up, observed; the saddlepoint route matters most
   because it would also sharpen the *ranking* the first bullet cares about.
 

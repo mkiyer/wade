@@ -1,11 +1,9 @@
-"""Per-stage timing and peak memory for the scaling work — docs/scaling.md.
+"""Per-stage timing and peak memory of a wade() run.
 
-Reproduces the measurement behind the tables in ``docs/scaling.md`` §1 and
-§2: NB counts (mean 50, dispersion 0.1), G genes by 2n samples, B
-permutations, timed stage by stage through the same calls ``wade.wade()``
-makes. Every number in the doc's "measured" tables came from this script (or
-its scratchpad ancestor, 2026-08-19); rerun it before and after any
-performance change and put both rows in the doc.
+NB counts (mean 50, dispersion 0.1), G genes by 2n samples, B permutations,
+timed stage by stage through the same calls ``wade.wade()`` makes. The
+timing and memory tables in ``docs/manual.md`` came from this script; rerun
+it before and after any performance change.
 
 Usage:
     python tools/bench_scaling.py --genes 1000 --n 2000 --nperms 200

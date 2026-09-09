@@ -1,7 +1,7 @@
 """Fixture loading and the deviation ledger for the layered numeric suite.
 
 The suite is built **inside-out** on the design in
-``docs/implementation-notes.md``.
+``CONTRIBUTING.md``.
 
 **Where the fixtures' authority comes from.** They were generated from the
 original R implementation, which was retired and deleted on 2026-09-04 — a
@@ -40,7 +40,7 @@ Two things this suite refuses to do:
   ``numpy.sum`` (pairwise) and a hand-written loop legitimately differ in
   the last bits. Merely reversing a summation order changes about two
   thirds of genes at a relative magnitude of 1e-14
-  (``docs/implementation-notes.md`` hazard 10).
+  (``CONTRIBUTING.md``).
 * **A recorded value is not automatically the right value.** For a
   one-sample group the reference implementation had a reshape defect, so
   the fixture records a number WADE deliberately does not reproduce; a
@@ -279,9 +279,9 @@ def assert_close_scaled(got, want, tol: float, label: str, layer: str = ""):
     Use this instead of :func:`assert_close` wherever the quantity crosses
     zero. Two places need it and both learned it the hard way: the stage-1
     mean difference, where which BLAS numpy links decides the summation order
-    (``scaling.md`` §3.1), and the subset bridge, where NumPy's own vectorized
+    (``CONTRIBUTING.md``), and the subset bridge, where NumPy's own vectorized
     ``log2`` and the Rust kernel's libm ``log2`` differ by an ulp on x86_64
-    (``implementation-notes.md`` §2.11).
+    (``CONTRIBUTING.md``).
     """
     dev, idx = max_scaled_dev(got, want)
     _LEDGER.append((layer, label, dev, tol, idx))
@@ -308,7 +308,7 @@ def ledger():
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     """Report the worst-case relative deviation per layer, and overall.
 
-    ``ROADMAP.md``: report the worst-case relative deviation observed, not
+    ``CONTRIBUTING.md``: report the worst-case relative deviation observed, not
     merely that assertions passed.
     """
     if not _LEDGER:
@@ -344,5 +344,5 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     )
     tr.write_line(
         "  Reference: 1e-12 relative is a real bug; 1e-14 is summation order "
-        "(implementation-notes.md hazard 10)."
+        "(CONTRIBUTING.md)."
     )

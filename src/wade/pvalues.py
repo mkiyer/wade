@@ -1,8 +1,7 @@
-"""Permutation p-values, GPD tail refinement, and BH-FDR.
+"""Permutation p-values, GPD tail refinement, and BH-FDR (``docs/method.md`` §6).
 
-Ports R's ``.gpd_tail_p()``, ``wade_perm_pvalues()`` and the two
-``stats::p.adjust(., "BH")`` calls. Every step is arithmetically explicit
-so a port can be tested branch by branch, which is how it is tested.
+Every step is arithmetically explicit so it can be tested branch by branch,
+which is how it is tested.
 """
 
 from __future__ import annotations
@@ -23,26 +22,23 @@ __all__ = [
     "bh_adjust",
 ]
 
+#: Exceedances below which the GPD refinement fires, and the number of null
+#: draws it fits. Together with ``nperms`` they set the smallest reportable
+#: p-value, ``1 / (nperms * n_tail)``.
 DEFAULT_N_EXC_MIN = 10
 DEFAULT_N_TAIL = 250
 
+#: The GPD fit needs at least this many exceedances above its threshold.
+MIN_GPD_EXCEEDANCES = 10
 
 ALTERNATIVES = ("two-sided", "greater", "less")
 
 
 def _orient(obs: np.ndarray, null: np.ndarray, alternative: str):
-    """Map an alternative onto an upper-tail comparison.
-
-    Every alternative reduces to "how often does the null reach the observed
-    value", so only the quantity being compared changes:
-
-    * ``greater`` — the statistic as it stands.
-    * ``less``    — its negation, so a gene *reduced* in cases is detected.
-    * ``two-sided`` — its magnitude, which is the permutation analogue of a
-      two-sided test and needs no doubling: the null of ``|T|`` already
-      contains both directions, so the multiplicity of looking both ways is
-      priced in rather than corrected for.
-    """
+    """Map an alternative onto an upper-tail comparison: the statistic as it
+    stands for ``"greater"``, negated for ``"less"``, and its magnitude for
+    ``"two-sided"`` (the null of ``|T|`` already contains both directions, so
+    no doubling is needed)."""
     if alternative not in ALTERNATIVES:
         raise ValueError(
             f"alternative must be one of {ALTERNATIVES}; got {alternative!r}"
@@ -58,15 +54,9 @@ def exceedance_counts(obs: np.ndarray, null: np.ndarray,
                       alternative: str = "greater") -> np.ndarray:
     """Per-gene ``#{b : null[g, b] >= obs[g]}``, after orienting for ``alternative``.
 
-    The broadcast axis is the trap. R's ``rowSums(perm >= obs)`` recycles
-    ``obs`` *down* each column, so gene ``i``'s observed value meets gene
-    ``i``'s null draws. NumPy broadcasts trailing dimensions first, so a
-    bare ``null >= obs`` aligns ``obs`` against the **permutation** axis —
-    and it only raises when the number of genes differs from the number of
-    permutations. On a square fixture it silently compares gene ``i``'s
-    null draw ``j`` against gene ``j``'s observed value
-    (``docs/implementation-notes.md`` hazard 7). Hence the explicit
-    ``obs[:, None]``, and hence every parity fixture being non-square.
+    ``obs[:, None]`` is explicit because a bare ``null >= obs`` would
+    broadcast ``obs`` along the permutation axis, and on a square matrix
+    that mistake raises nothing.
     """
     obs = np.asarray(obs, dtype=np.float64)
     null = np.asarray(null, dtype=np.float64)
@@ -128,38 +118,26 @@ def gpd_tail_p(
     hits: the ``xi > 0`` GPD form; the ``xi <= 0`` exponential limit; the
     floor binding; fewer than ten exceedances; an observation at or below
     the threshold; and a degenerate (non-finite or non-positive) variance
-    or scale.
+    or scale. With ``detail=True`` the returned :class:`GPDFit` names
+    which.
 
-    Three details that are easy to get wrong and that change the answer:
+    Three details that change the answer, pinned by the fixtures:
 
-    * **The exceedance inequality is strict.** ``exc = s[s > thr] - thr``,
-      so ties at the threshold are excluded and ``len(exc)`` is normally
-      exactly ``n_tail`` but is smaller whenever the null ties there — and
-      permutation nulls of discrete-ish statistics do tie. Using ``>=``
-      gives a different mean, a different variance, and possibly a
-      different branch.
-    * **The variance is the sample variance,** denominator ``n - 1``.
-      NumPy's default is ``ddof=0``. Both moment estimators are functions
-      of ``m^2 / v``, so an understated ``v`` pushes ``xi`` down and
-      ``sigma`` up, and since the branch test is ``xi <= 0`` the wrong
-      divisor can flip the branch. The measured ``xi`` values from
-      ordinary nulls include +0.031 and -0.133, so the boundary sits at
-      the operating point and is crossed by noise
-      (``docs/implementation-notes.md`` hazard 6).
-    * **The rescaling uses the nominal ``n_tail / B``, not
-      ``len(exc) / B``.** When ties reduce the exceedance count below
-      ``n_tail`` those differ; the reference uses the nominal one.
+    * **The exceedance inequality is strict** (``s > thr``), so ties at the
+      threshold are excluded and ``len(exc)`` can be below ``n_tail``.
+    * **The variance is the sample variance**, denominator ``n - 1``. Both
+      moment estimators are functions of ``mean^2 / var``, and the branch
+      test ``xi <= 0`` sits at the operating point, so the divisor can flip
+      the branch.
+    * **The rescaling uses the nominal ``n_tail / B``**, not ``len(exc) / B``.
 
-    The ``xi <= 0`` branch takes the ``xi -> 0`` exponential limit rather
-    than the GPD form, because a GPD with negative shape has a hard upper
-    bound at ``-sigma / xi`` beyond which the survival function is zero —
-    an observation past it would collapse a strong statistic to a
-    machine-epsilon p-value.
+    The ``xi <= 0`` branch takes the exponential limit rather than the GPD
+    form, because a GPD with negative shape has a hard upper bound beyond
+    which the survival function is zero.
 
-    The floor ``1 / (B * n_tail)`` is a **deliberate honesty constraint**,
-    not a numerical convenience: it is what B permutations and ``n_tail``
-    tail points can support. 2.0e-6 at B = 2000, 4.0e-6 at B = 1000. A
-    port that "improves" it by returning smaller p-values is a regression.
+    The floor ``1 / (B * n_tail)`` is an honesty constraint, not a
+    numerical guard: it is what ``B`` permutations and ``n_tail`` tail
+    points can support.
     """
     null = np.asarray(null, dtype=np.float64)
     if null.ndim != 1:
@@ -187,13 +165,13 @@ def gpd_tail_p(
         base.update(kw)
         return GPDFit(**base)
 
-    if exc.size < 10:
+    if exc.size < MIN_GPD_EXCEEDANCES:
         return _bail("bail_few_exceedances")
     if obs <= thr:
         return _bail("bail_obs_at_or_below_thr")
 
     mean_exc = float(exc.mean())
-    var_exc = float(exc.var(ddof=1))            # R's stats::var, denominator n-1
+    var_exc = float(exc.var(ddof=1))            # sample variance, denominator n-1
     if not np.isfinite(var_exc) or var_exc <= 0:
         return _bail("bail_degenerate_variance", mean_exc=mean_exc, var_exc=var_exc)
 
@@ -233,19 +211,15 @@ def perm_pvalues(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Empirical p-values across genes, then selective GPD refinement.
 
-    Returns ``(p, nexc, refined_mask)``.
+    Returns ``(p, nexc, refined)``; ``refined`` marks the genes whose
+    p-value came from the tail fit rather than the permutation count.
 
-    **The refinement gate has two conditions and the second is a property
-    of the run, not of the gene.** A gene is refined when it has fewer than
-    ``n_exc_min`` exceedances *and* ``B >= 2 * n_tail``. With the defaults
-    that second condition is ``B >= 500``, so at ``nperms < 500`` **no
-    refinement ever happens** and the minimum p-value is ``1 / (B + 1)``. A
-    port that omits it would refine at ``nperms = 200`` and produce
-    p-values the reference cannot produce, on a path no fixture at
-    ``nperms`` of 1000 or 2000 would ever exercise.
-
-    Genes with enough exceedances keep their empirical p-value: a
-    well-resolved p-value is never replaced by an extrapolated one.
+    A gene is refined when it has fewer than ``n_exc_min`` exceedances
+    *and* ``B >= 2 * n_tail`` — with the defaults, ``B >= 500``, so below
+    500 permutations no refinement ever happens and the minimum p-value is
+    ``1 / (B + 1)``. Genes with enough exceedances keep their empirical
+    p-value: a well-resolved p-value is never replaced by an extrapolated
+    one.
     """
     obs = np.asarray(obs, dtype=np.float64)
     null = np.asarray(null, dtype=np.float64)
@@ -257,29 +231,20 @@ def perm_pvalues(
 
     refined = np.zeros(obs.shape[0], dtype=bool)
     if n_perms >= 2 * n_tail:
-        refined = nexc < n_exc_min
-        for i in np.flatnonzero(refined):
-            p[i] = gpd_tail_p(obs[i], null[i], n_tail=n_tail)
+        for i in np.flatnonzero(nexc < n_exc_min):
+            fit = gpd_tail_p(obs[i], null[i], n_tail=n_tail, detail=True)
+            p[i] = fit.p
+            refined[i] = not fit.branch.startswith("bail")
     return p, nexc, refined
 
 
 def bh_adjust(p: np.ndarray) -> np.ndarray:
-    """Benjamini-Hochberg step-up adjustment, matching ``p.adjust(p, "BH")``.
+    """Benjamini-Hochberg step-up adjustment.
 
-    Applied **separately to each stage** across all genes: ``padj_mean_shift``
-    from the G values of ``p_mean_shift``, ``padj_subset`` from the G values of
-    ``p_subset``. The two stages are not pooled into one family of 2G tests.
-
-    Two behaviours pinned here that are not about the arithmetic, because
-    ``wade()`` produces all-NaN p-value columns when ``nperms == 0``:
-
-    * **NaN is dropped, not propagated**, the adjustment uses the reduced
-      count, and the NaN is put back in position. R gets this via lazy
-      evaluation of its ``n = length(p)`` default, which is forced only
-      after ``p`` has been subset to the non-missing entries.
-    * Ties receive equal adjusted values, and the monotonicity enforcement
-      — the cumulative minimum from the largest p-value downward — is
-      applied.
+    Applied separately to each stage across all genes; the two stages are
+    not pooled into one family. NaN is dropped, the adjustment uses the
+    reduced count, and the NaN is put back in position (``wade()`` produces
+    all-NaN p-value columns when ``nperms == 0``).
     """
     p = np.asarray(p, dtype=np.float64)
     if p.ndim != 1:
@@ -292,7 +257,8 @@ def bh_adjust(p: np.ndarray) -> np.ndarray:
         out[ok] = q
         return out
 
-    order = np.argsort(-q, kind="stable")        # R's order(p, decreasing = TRUE)
+    order = np.argsort(-q, kind="stable")
+
     ranks = np.arange(lp, 0, -1, dtype=np.float64)
     adjusted = np.minimum(1.0, np.minimum.accumulate(lp / ranks * q[order]))
     inverse = np.empty(lp, dtype=np.intp)

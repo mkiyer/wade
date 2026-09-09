@@ -1,4 +1,4 @@
-"""The quantile-grid cap (``max_probs``) — ``docs/method.md`` §1, ``docs/scaling.md`` §2.1.
+"""The quantile-grid cap (``max_probs``) — ``docs/method.md`` §1, ``docs/method.md`` §1.
 
 The cap is the one performance change that is *allowed* to change an answer,
 so what it changes is pinned here explicitly:
@@ -12,8 +12,8 @@ so what it changes is pinned here explicitly:
 * the realized grid is recorded in the result and the manifest, never applied
   silently.
 
-The full-scale fidelity table (n = 4,000 per group) is in ``docs/scaling.md``
-§2.1; these tests assert the same behaviour at suite-friendly sizes.
+These tests assert the behaviour ``docs/method.md`` §1 states, at
+suite-friendly sizes.
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ def test_subset_backends_agree_on_a_capped_grid():
 
 
 def test_affected_fraction_is_faithful_under_the_cap():
-    """The rule (scaling.md §2.1): m ~ 2.5 / smallest fraction of interest.
+    """The rule (method.md §1): m ~ 2.5 / smallest fraction of interest.
     At m = 100 a global change and a 10% subset are both well inside that."""
     q_full, q_cap = probability_grid(N), probability_grid(100)
     for frac, fold, tol in ((0.0, 2.0, 0.02), (0.10, 8.0, 0.02)):
@@ -129,7 +129,7 @@ def test_affected_fraction_is_faithful_under_the_cap():
 def test_mean_shift_inflation_under_the_cap_is_one_sided():
     """A coarse uniform grid gives the extreme node weight 1/m while its value
     is huge, so the quadrature inflates |mean_shift| for concentrated signals
-    — never deflates it (scaling.md §2.1). Inference is unaffected: the null
+    — never deflates it (method.md §1). Inference is unaffected: the null
     inherits the same quadrature."""
     counts = _counts(4, subset_frac=0.05, fold=8.0)
     x = counts + np.random.default_rng(12).uniform(0, 0.01, counts.shape)
@@ -142,7 +142,7 @@ def test_capped_run_records_the_grid_everywhere():
     counts = _counts(5)
     res = wade.wade(counts, np.ones(G), COND, nperms=50, seed=1, max_probs=100)
     assert res.nprobs == 100
-    assert res.params["max_probs"] == 100 and res.params["nprobs"] == 100
+    assert res.params["max_probs"] == 100
     man = wade.manifest(res)
     assert man["design"]["nprobs"] == 100 and man["design"]["max_probs"] == 100
     # every per-gene curve is on the capped grid
@@ -156,7 +156,7 @@ def test_capped_run_records_the_grid_everywhere():
 def test_stage2_level_holds_on_a_genuine_global_shift_under_the_cap():
     """The §6 standing question: does the cap interact with the thinning?
     Genuine global 2x shifts, unit libraries, capped grid — the false-subset
-    rate must stay at its nominal level (uncapped: 0.03-0.06, method.md §10.3)."""
+    rate must stay at its nominal level (uncapped: 0.03-0.06, method.md §9.3)."""
     rng = np.random.default_rng(6)
     reps = 60
     case = rng.poisson(rng.gamma(10, 2 * 5.0, (reps, N))).astype(float)

@@ -1,9 +1,11 @@
 [package]
 name = "wade-kernel"
-version = "0.1.0"        # pinned to pyproject by tests/test_packaging.py
+# Unused: the crate is never published on its own. The package is versioned
+# in pyproject.toml.
+version = "0.0.0"
 edition = "2021"
 description = "Permutation-loop kernel for WADE (Wasserstein Area Differential Expression)"
-license = "GPL-3.0-only"   # matches LICENSE and the README; was wrongly MIT
+license = "GPL-3.0-only"
 
 [lib]
 name = "_kernel"

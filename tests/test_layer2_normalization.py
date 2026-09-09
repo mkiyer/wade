@@ -94,7 +94,7 @@ def test_naive_denominator_is_detectably_wrong():
     # ... and the reason it is dangerous: the ordering is identical.
     assert np.array_equal(np.argsort(correct, axis=1), np.argsort(naive, axis=1))
 
-    # The bound stated in docs/implementation-notes.md section 2.
+    # The bound stated in CONTRIBUTING.md.
     bound = 0.01 / (normalizer.min() * lib.min())
     assert dev <= bound
 
@@ -163,7 +163,7 @@ def test_zero_library_column_returns_exactly_norm_factor_for_every_gene():
 def test_normalizer_shape_is_validated_rather_than_recycled():
     """R recycles a wrong-axis normalizer silently and returns plausible numbers.
 
-    ``docs/implementation-notes.md`` section 1 measures it: on a 6 x 4 matrix
+    ``CONTRIBUTING.md`` measures it: on a 6 x 4 matrix
     a per-sample length-4 vector recycles cleanly, with no error and no
     warning, and every library size is wrong. This is the one input error
     in the reference that produces plausible output, so the port raises.

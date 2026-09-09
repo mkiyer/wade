@@ -21,6 +21,7 @@ from conftest import PARITY_SCENARIOS, assert_close, load_fixture
 from portrun import run_port
 
 import wade
+from wade.quantiles import type7_quantiles
 
 LAYER = "layer 1 grid"
 
@@ -96,7 +97,7 @@ def test_nprobs_is_set_by_the_smaller_group():
     for n in (2, 3, 5, 8, 13, 21):
         x = rng.normal(size=(1, n)) * 100
         q = wade.probability_grid(n)
-        got = wade.type7_quantiles(x, q)[0]
+        got = type7_quantiles(x, q)[0]
         want = np.sort(x[0])[::-1]
         # Not a comparison against R — it measures the port against the exact
         # mathematical claim, which R also misses. Kept out of the parity total.

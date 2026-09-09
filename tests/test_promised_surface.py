@@ -43,15 +43,17 @@ def test_as_counts_reads_a_pandas_frame(matrix):
 
 
 def test_as_counts_pandas_index_carries_the_gene_labels(matrix):
-    """The pandas-idiomatic layout puts gene ids in the **index**, which is
-    not a column — so the labels would be lost silently. Reading the index
-    explicitly is the documented remedy, and it works."""
+    """The pandas-idiomatic layout (``read_csv(..., index_col=0)``) puts gene
+    ids in the **index**, which is not a column. A labelled index is read as
+    the gene ids; a default RangeIndex is not."""
     frame = pd.DataFrame(matrix, index=GENES, columns=SAMPLES)
-    plain = wade.as_counts(frame)
-    assert plain.gene_names[0] == "gene0"            # positional: index ignored
-    named = wade.as_counts(frame, gene_names=list(frame.index))
-    assert list(named.gene_names) == GENES
-    np.testing.assert_allclose(named.values, matrix)
+    c = wade.as_counts(frame)
+    assert list(c.gene_names) == GENES and list(c.sample_names) == SAMPLES
+    np.testing.assert_allclose(c.values, matrix)
+    plain = wade.as_counts(pd.DataFrame(matrix, columns=SAMPLES))
+    assert plain.gene_names[0] == "gene0"            # positional
+    named = wade.as_counts(frame, gene_names=[f"g{i}" for i in range(G)])
+    assert named.gene_names[0] == "g0"               # explicit labels win
 
 
 def test_pandas_metadata_and_normalizer_column(matrix):

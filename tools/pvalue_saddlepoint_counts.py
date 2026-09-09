@@ -1,7 +1,7 @@
 """The saddlepoint on the data model users actually have: NB counts, through
 wade()'s own normalization and jitter, at the sizes real cohorts have."""
 import sys, time
-sys.path.insert(0, "/Users/mkiyer/proj/wade/tools")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 import numpy as np, wade, pvalue_study as S
 
 n1, n0, B = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])

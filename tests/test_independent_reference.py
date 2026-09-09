@@ -14,7 +14,7 @@ against is re-derived here from an authority that is neither R nor WADE:
 layer                        independent authority
 ===========================  ====================================================
 1  probability grid          the closed form, ``linspace(1, 0, m)``
-2  normalization             the closed form in ``method.md`` §8
+2  normalization             the closed form in ``method.md`` §7
 3  quantile grids            :func:`numpy.quantile` -- a separately written,
                              separately maintained type-7 implementation
 4  reductions                definitions: ``D = Q1 - Q0``, and means of it
@@ -81,7 +81,7 @@ def test_layer1_grid_is_the_closed_form(name):
 
 @pytest.mark.parametrize("name", PARITY_SCENARIOS)
 def test_layer2_normalization_is_the_closed_form(name):
-    """The formula in ``method.md`` §8, written out here rather than called.
+    """The formula in ``method.md`` §7, written out here rather than called.
 
     The denominator is *not* ``lib_sizes[j]``, and that is the whole subtlety:
     the library sizes came from the unjittered counts while the numerator is
@@ -123,7 +123,7 @@ def test_layer4_reductions_are_their_definitions(name):
     columns. The two coincide only when that group is the smaller one and the
     grid therefore reads every sample; when it is the larger group the grid
     interpolates it, and the difference reaches 20% on these fixtures. That is
-    the quadrature-versus-mean distinction of ``scaling.md`` §4.10, and
+    the quadrature-versus-mean distinction of ``docs/pvalue-review.md``, and
     asserting the raw column mean here would silently redefine the statistic.
     """
     fx = load_fixture(name)

@@ -1,4 +1,4 @@
-"""Data in, results out — ``ROADMAP.md`` §1, :mod:`wade.io`.
+"""Data in, results out — :mod:`wade.io`.
 
 WADE reads no files, so there is nothing here about parsing. What is tested is
 the boundary it *does* own: accepting a count matrix in the shapes it arrives
@@ -173,7 +173,7 @@ def test_as_counts_validates_labels_and_values(matrix):
 
 def test_condition_reads_the_two_levels_and_records_them(sheet):
     c = condition(sheet, key="sample_id", column="condition", case="tumor", control="normal")
-    assert isinstance(c, Condition) and len(c) == N
+    assert isinstance(c, Condition) and len(c.labels) == N
     assert c.case == "tumor" and c.control == "normal" and c.column == "condition"
     np.testing.assert_array_equal(c.vector(SAMPLES), [1] * (N // 2) + [0] * (N // 2))
     # Order follows the samples asked for, not the sheet.
@@ -196,7 +196,7 @@ def test_condition_refuses_a_third_level_unless_asked(sheet):
         condition(three, key="sample_id", column="condition", case="tumor", control="normal")
     c = condition(three, key="sample_id", column="condition", case="tumor",
                   control="normal", drop_other=True)
-    assert c.dropped == ("S0",) and len(c) == N - 1
+    assert c.dropped == ("S0",) and len(c.labels) == N - 1
     # ... and the dropped sample is then reported as unassigned, not ignored.
     with pytest.raises(ValueError, match="no entry in the sample metadata"):
         c.vector(SAMPLES)
@@ -309,7 +309,7 @@ def result(matrix):
 
 
 def test_report_columns_are_in_the_agreed_order_and_neglog10_is_right(result):
-    cols = list(result.report())
+    cols = list(result.columns())
     assert cols[:len(RESULT_COLUMNS)] == list(RESULT_COLUMNS)
     assert cols[len(RESULT_COLUMNS):] == [
         "affected_fraction_lo", "affected_fraction_hi",
@@ -317,7 +317,7 @@ def test_report_columns_are_in_the_agreed_order_and_neglog10_is_right(result):
         "subset_log2_fc_lo", "subset_log2_fc_hi",
         "log2_fc_lo", "log2_fc_hi",
         "mean_shift_lo", "mean_shift_hi"]
-    rep = result.report()
+    rep = result.columns()
     np.testing.assert_allclose(rep["neglog10_p_mean_shift"], -np.log10(result.p_mean_shift))
     np.testing.assert_allclose(rep["neglog10_p_subset"], -np.log10(result.p_subset))
     assert result.to_frame().columns == cols
@@ -326,7 +326,7 @@ def test_report_columns_are_in_the_agreed_order_and_neglog10_is_right(result):
 def test_report_omits_the_subset_stage_when_it_did_not_run(matrix):
     cond = np.r_[np.ones(N // 2, int), np.zeros(N // 2, int)]
     res = wade.wade(matrix, 1.0, cond, nperms=50, subset=False, seed=1)
-    cols = list(res.report())
+    cols = list(res.columns())
     assert "p_subset" not in cols and "affected_fraction" not in cols
     assert cols[:5] == list(RESULT_COLUMNS[:5])
 
@@ -337,7 +337,7 @@ def test_write_results_round_trips_every_format(result, tmp_path, ext):
     assert path.exists()
     read = {".tsv": lambda p: pl.read_csv(p, separator="\t"), ".csv": pl.read_csv,
             ".parquet": pl.read_parquet, ".arrow": pl.read_ipc}[ext](path)
-    assert read.columns == list(result.report())
+    assert read.columns == list(result.columns())
     assert read.height == G
     np.testing.assert_allclose(read["log2_fc"].to_numpy(), result.log2_fc, rtol=1e-6)
 
@@ -347,7 +347,7 @@ def test_write_results_writes_a_manifest_beside_the_table(result, tmp_path):
     man = json.loads((tmp_path / "run.manifest.json").read_text(encoding="utf-8"))
     assert man["wade_version"] == wade.__version__
     assert man["run"]["nperms"] == 100 and man["run"]["seed"] == 1
-    assert man["run"]["correction"] == "thinning" and man["run"]["n_boot"] == 20
+    assert man["run"]["pseudocount"] == 1.0 and man["run"]["n_boot"] == 20
     design = man["design"]
     space = design.pop("permutation_space")
     assert design == {"n_genes": G, "n_case": N // 2, "n_ctrl": N // 2,
@@ -361,9 +361,6 @@ def test_write_results_writes_a_manifest_beside_the_table(result, tmp_path):
     assert man["results"]["alpha"] == 0.05
     assert "n_significant_subset" in man["results"]
     assert "created_utc" in man and man["numpy_version"] == np.__version__
-
-    wade.write_results(result, tmp_path / "quiet.tsv", manifest=False)
-    assert not (tmp_path / "quiet.manifest.json").exists()
 
 
 def test_manifest_records_the_condition_labels_when_there_were_any(matrix, sheet):

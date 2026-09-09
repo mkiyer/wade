@@ -1,4 +1,4 @@
-"""Restricted (within-stratum) permutation — ``docs/limits.md`` §2.2.
+"""Restricted (within-stratum) permutation — ``docs/method.md`` §10.2.
 
 A cohort assembled from several studies is not exchangeable across them:
 shuffling labels freely tests a hypothesis nobody holds, and reports batch
@@ -106,7 +106,7 @@ def test_restricted_permutation_controls_a_planted_batch_effect():
 
     Unit library sizes on purpose: with TPM-like normalization a uniform
     shift of every gene is divided straight back out, so the planted batch
-    effect would vanish before any test saw it (``docs/HANDOFF.md`` §3 on
+    effect would vanish before any test saw it (``CONTRIBUTING.md`` on
     composition). Unit libraries make a 4x shift stay a 4x shift.
     """
     rng = np.random.default_rng(11)

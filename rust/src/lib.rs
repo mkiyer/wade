@@ -1,117 +1,98 @@
-//! The permutation loop, in Rust.
+//! The permutation loops, in Rust.
 //!
-//! # Why this and nothing else
+//! The serial permutation loop is the entire cost of the method; everything
+//! else in WADE is a single pass. Three kernels live here, and the NumPy path
+//! in `wade.permutation` / `wade.thinning` is the contract each is held to:
 //!
-//! The serial permutation loop is the **entire cost** of the method:
-//! `nperms` iterations, each doing two row-quantile passes over a genes ×
-//! samples slice plus a subtraction and three reductions. Everything else
-//! in WADE is a single pass. Any boundary that puts this loop on the Rust
-//! side captures essentially all of the available speedup; any boundary
-//! that does not, captures almost none.
+//! * [`null_statistics`] — the mean-shift null, and
+//! * [`subset_null`] — the subset test's two passes. Both are **bitwise**
+//!   against NumPy, by construction. Type-7 quantiles are reimplemented term
+//!   for term, including the no-interpolation guard that returns `x[lo]`
+//!   untouched when the two bracketing order statistics are equal
+//!   (`(1-h)*a + h*a` can drift off `a` by an ulp, and count data is nothing
+//!   but ties). Every accumulation over the grid or over the permutations is
+//!   sequential, left to right, in the order the NumPy loop uses. The
+//!   parallelism is over **genes**, so no accumulation ever crosses a
+//!   thread; each gene sorts its row once and re-partitions it per
+//!   permutation in one O(n) walk, which is where the speed comes from.
+//!   The one platform-dependent bit is `log2` itself: `f64::log2` is the
+//!   system libm and NumPy's is its own loop on x86_64, and they can differ
+//!   in the last bit. Tests compare the bridge on the statistic's own scale
+//!   for that reason.
+//! * [`fit_bisect`] — the fold-change fit's bisection. **Not bitwise** against
+//!   NumPy, because no two binomial samplers consume randomness alike; it is
+//!   deterministic given `(seed, global gene index)`, chunk- and
+//!   thread-invariant, and held to the NumPy fit statistically. That is why
+//!   it is opt-in (`fit_backend="rust"`) and never auto-dispatched.
 //!
-//! # What crosses the boundary, and why it matters more than what is behind it
-//!
-//! This kernel returns the **full null matrix**, not p-values. That is a
-//! deliberate testability decision: asserting the two `g × nperms` nulls
-//! elementwise against the R's serial loop is the only place a kernel bug
-//! is cleanly separable from a p-value bug. A kernel that returned only
-//! p-values would be harder to test whatever its speed. It also keeps the
-//! GPD refinement possible at all, since that needs each refined gene's
-//! *full* null vector.
-//!
-//! The permutation matrix is an **input**, on the same argument path
-//! production uses. R's Mersenne-Twister and NumPy's PCG64 cannot agree on
-//! a shared seed, so exact cross-language parity is only achievable by
-//! passing the realised labels as data — and if the fixture path went
-//! through a separate entry point, the parity suite would be validating
-//! code nobody runs.
-//!
-//! # Numerical contract
-//!
-//! Two choices here are about numerical fidelity rather than speed, and
-//! neither should be "optimized" away:
-//!
-//! * **Type-7 quantiles are reimplemented here** rather than delegated,
-//!   term for term against R's `quantile.default` — including its
-//!   no-interpolation guard, which returns `x[lo]` untouched when the two
-//!   bracketing order statistics are equal. Without that guard
-//!   `(1-h)*a + h*a` can drift off `a` by an ulp on a run of equal values,
-//!   and WADE's target regime is zero-heavy count data.
-//!
-//! * **Summation is sequential, left to right**, matching R's `rowSums`.
-//!   NumPy's `sum` uses pairwise summation, which is *more* accurate and
-//!   therefore guaranteed to differ from R on some inputs. Since the R is
-//!   the parity oracle, matching its association is what keeps the null
-//!   matrices bitwise identical. Do not replace these loops with anything
-//!   that reassociates.
-//!
-//! Both kernels are parallelized across **genes** with rayon, because both
-//! sort each gene's row once and re-partition it per permutation (see the
-//! subset kernel's notes below — the mean-shift kernel adopted the same
-//! design 2026-08-20, ~10× over its original permutation-major loop). That
-//! changes nothing numerically: each gene's arithmetic is self-contained
-//! and no accumulation crosses threads.
-//!
-//! # The second kernel: the subset test
-//!
-//! [`subset_null`] is the permutation loop of the *shape* test
-//! (`docs/method.md` §3), validated elementwise against
-//! `wade.permutation._subset_null_numpy`, which is the contract. Its
-//! design differs from the mean-shift kernel in three ways, each for a
-//! reason:
-//!
-//! * **Parallel over genes, not permutations.** The test needs two passes
-//!   over the permutations — the first estimates the null moments of the
-//!   bridge at every width, the second standardizes against them before
-//!   maximizing. Per gene, those moment accumulators are tiny (`m` doubles)
-//!   and the second pass can reuse what the first computed; per
-//!   permutation, every thread would need its own `(genes × m)` accumulator
-//!   and a cross-thread reduction that would also change the summation
-//!   order. So each gene runs both passes on one thread, and the order of
-//!   accumulation over permutations is exactly the NumPy path's.
-//!
-//! * **One sort per gene, not one per permutation per group.** Every
-//!   permutation only re-partitions the same `n` values into two groups. Sort
-//!   the gene's row once; then the sorted case values are the subsequence of
-//!   that sorted row whose labels are 1, obtained by one O(n) walk. Equal
-//!   values are interchangeable, so ties make no difference to what is
-//!   read. This is where most of the speedup comes from.
-//!
-//! * **Almost no `log2` calls.** The log-ratio curve is
-//!   `log2(q1) - log2(q0)`. Where type 7 does not interpolate — `h == 0`, or
-//!   the two bracketing values are equal — the quantile *is* a group value
-//!   whose `log2` was computed once when the row was sorted, and because
-//!   `log2` is monotone the group's sorted logs are the logs of its sorted
-//!   values elementwise. Only where interpolation fires is `log2` called, on
-//!   the interpolated value, exactly as the NumPy path does. On the full
-//!   grid, `m = min(n1, n0)`, the smaller group's nodes land on its order
-//!   statistics and need no `log2` (bar the handful where NumPy's `linspace`
-//!   puts the node an ulp off an integer); on a balanced design that is both
-//!   groups, and on an unbalanced one only the larger group's nodes
-//!   interpolate. A grid capped below the design (`max_probs`,
-//!   `docs/method.md` §1) interpolates more nodes and saves fewer calls, but
-//!   either way **the inputs to `log2` are the same as the NumPy path's**.
-//!
-//!   The outputs are not always the same bits, and this comment used to
-//!   claim they were. `f64::log2` here is the system libm; `np.log2` on
-//!   x86_64 is NumPy's own vectorized loop. Both are correctly rounded to
-//!   well under an ulp and they disagree in the last bit. On macOS/arm64
-//!   they agree exactly, which is how a `1e-15` per-element tolerance passed
-//!   locally for weeks and produced twenty failures on the first Linux CI
-//!   run (2026-09-05). Measured, the whole effect is 1.6e-14 on a statistic
-//!   of order 1. Nothing here can fix that, and nothing should try: see
-//!   `docs/implementation-notes.md` §2.11.
-//!
-//! Everything else — the type-7 guard, the sequential cumulative sum, the
-//! `k/m` division before the multiplication, the `±0.0` that an unusable
-//! width contributes to the maximum — is mirrored term for term, and the
-//! test file holds the two paths to `1e-15` relative.
+//! The kernels return full `genes x permutations` null matrices rather than
+//! p-values: that is what the GPD refinement needs, and it is the only place
+//! a kernel bug is cleanly separable from a p-value bug. Permutations are an
+//! input (a `(n_perms, samples)` label matrix) on the same argument path
+//! production uses.
+
+#![allow(clippy::too_many_arguments)]
 
 use numpy::ndarray::{Array1, Array2, ArrayView2};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+/// Validate a `(n_perms, samples)` label matrix and flatten it to `u8` masks.
+///
+/// Group sizes are preserved by label exchange, so `n1` and `n0` are
+/// constants of the run and the type-7 plans can be built once. The grid may
+/// be *capped* below `min(n1, n0)` (`max_probs`) but never exceeds it: a
+/// denser-than-design grid signals a caller bug.
+fn label_masks(pv: ArrayView2<i64>, n: usize, nprobs: usize) -> PyResult<(Vec<u8>, usize, usize)> {
+    let n_perms = pv.nrows();
+    let mut n1 = 0usize;
+    let mut n0 = 0usize;
+    let mut masks = vec![0u8; n_perms * n];
+    for (b, row) in pv.rows().into_iter().enumerate() {
+        let mut r1 = 0usize;
+        let mut r0 = 0usize;
+        for (j, &lab) in row.iter().enumerate() {
+            match lab {
+                1 => {
+                    r1 += 1;
+                    masks[b * n + j] = 1;
+                }
+                0 => r0 += 1,
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "perms must contain only 0 and 1; row {} has {}",
+                        b, other
+                    )))
+                }
+            }
+        }
+        if b == 0 {
+            n1 = r1;
+            n0 = r0;
+        } else if r1 != n1 || r0 != n0 {
+            return Err(PyValueError::new_err(format!(
+                "permutation row {} has group sizes (n1, n0) = ({}, {}) but row 0 has \
+                 ({}, {}); label exchange preserves the group sizes",
+                b, r1, r0, n1, n0
+            )));
+        }
+        if r1.min(r0) < nprobs {
+            return Err(PyValueError::new_err(format!(
+                "permutation row {} gives min(n1, n0) = {} but probs has {} entries; \
+                 the grid may be capped below the design but never above it",
+                b,
+                r1.min(r0),
+                nprobs
+            )));
+        }
+    }
+    if n1 == 0 || n0 == 0 {
+        return Err(PyValueError::new_err("both groups must be non-empty"));
+    }
+    Ok((masks, n1, n0))
+}
 
 /// The mean-shift statistics of one gene under every permutation.
 ///
@@ -125,7 +106,7 @@ use rayon::prelude::*;
 /// reads exactly what per-permutation sorts would.
 ///
 /// The quantile arithmetic is [`Type7Plan`]'s term for term — the plans hold
-/// the same `lo`/`hi`/`h` R's definition produces — and the accumulation over
+/// the same `lo`/`hi`/`h` the type-7 definition produces — and the accumulation over
 /// the grid is sequential left to right, so the outputs are bitwise what a
 /// per-permutation sort produced.
 fn one_gene_mean_shift(
@@ -163,7 +144,7 @@ fn one_gene_mean_shift(
         }
         debug_assert_eq!(front, back);
 
-        // Sequential accumulation, matching R's rowSums association.
+        // Sequential accumulation, matching the NumPy path's association.
         let mut total = 0.0_f64;
         for k in 0..m {
             let a1 = part[plan1.lo[k]];
@@ -220,54 +201,7 @@ fn null_statistics<'py>(
         ));
     }
 
-    // Group sizes are preserved by label exchange, so nprobs is a constant of
-    // the run. The grid may be *capped* below min(n1, n0) (`max_probs`,
-    // docs/method.md §1) but never exceeds it: a denser-than-design grid is
-    // never produced by WADE and signals a caller bug.
-    let mut n1 = 0usize;
-    let mut n0 = 0usize;
-    let mut masks = vec![0u8; n_perms * n];
-    for (b, row) in pv.rows().into_iter().enumerate() {
-        let mut r1 = 0usize;
-        let mut r0 = 0usize;
-        for (j, &lab) in row.iter().enumerate() {
-            match lab {
-                1 => {
-                    r1 += 1;
-                    masks[b * n + j] = 1;
-                }
-                0 => r0 += 1,
-                other => {
-                    return Err(PyValueError::new_err(format!(
-                        "perms must contain only 0 and 1; row {} has {}",
-                        b, other
-                    )))
-                }
-            }
-        }
-        if b == 0 {
-            n1 = r1;
-            n0 = r0;
-        } else if r1 != n1 || r0 != n0 {
-            return Err(PyValueError::new_err(format!(
-                "permutation row {} has group sizes (n1, n0) = ({}, {}) but row 0 has \
-                 ({}, {}); label exchange preserves the group sizes",
-                b, r1, r0, n1, n0
-            )));
-        }
-        if r1.min(r0) < nprobs {
-            return Err(PyValueError::new_err(format!(
-                "permutation row {} gives min(n1, n0) = {} but probs has {} entries; \
-                 the grid may be capped below the design but never above it",
-                b,
-                r1.min(r0),
-                nprobs
-            )));
-        }
-    }
-    if n1 == 0 || n0 == 0 {
-        return Err(PyValueError::new_err("both groups must be non-empty"));
-    }
+    let (masks, n1, n0) = label_masks(pv, n, nprobs)?;
 
     let plan1 = Type7Plan::new(n1, &probs_slice, 0, false);
     let plan0 = Type7Plan::new(n0, &probs_slice, n1, true);
@@ -334,19 +268,19 @@ impl Alternative {
 
 /// The type-7 bracketing for a group of fixed size, computed once.
 ///
-/// Mirrors R's `quantile.default(type = 7)`, which is the definition both
-/// kernels read through:
+/// The type-7 definition both kernels read through, as `wade.quantiles`
+/// writes it:
 ///
 /// ```text
-/// index <- 1 + (n - 1) * p
-/// lo <- floor(index); hi <- ceiling(index)
-/// qs  <- x[lo]
-/// i   <- which(index > lo & x[hi] != qs)
-/// qs[i] <- (1 - h) * qs[i] + h * x[hi][i]
+/// index = 1 + (n - 1) * p          (1-based)
+/// lo = floor(index); hi = ceil(index); h = index - lo
+/// q  = x[lo]                        where h == 0 or x[hi] == x[lo]
+/// q  = (1 - h) * x[lo] + h * x[hi]  otherwise
 /// ```
 ///
 /// The 1-based index arithmetic is kept as-is and shifted to 0-based only at
-/// the point of indexing, so the floor/ceil see exactly the values R's do.
+/// the point of indexing, so the floor/ceil see exactly the values the NumPy
+/// path's do.
 /// The `x[hi] != x[lo]` guard is load-bearing on tied data: without it
 /// `(1-h)*a + h*a` can drift off `a` by an ulp on a run of equal values, and
 /// WADE's target regime is zero-heavy count data.
@@ -396,11 +330,11 @@ impl Type7Plan {
 /// buffer holding the group's sorted values *and* one holding their logs,
 /// addressed through a [`Type7Plan`] that knows where the group sits.
 ///
-/// The branch is the whole point. R's guard interpolates only where
+/// The branch is the whole point. The type-7 guard interpolates only where
 /// `h > 0` and `x[hi] != x[lo]`; everywhere else the quantile is exactly
 /// `x[lo]`, and `log2(x[lo])` is `logsorted[lo]` — the same libm call on the
 /// same input, made once per gene instead of once per permutation. Where
-/// the guard fires, the interpolated value is formed with R's
+/// the guard fires, the interpolated value is formed as
 /// `(1 - h) * a + h * b` and `log2` is called on it, which is what the NumPy
 /// path does. Every log therefore gets an identical input by construction,
 /// which is the strongest guarantee available here; whether the outputs are
@@ -742,53 +676,7 @@ fn subset_null<'py>(
         }
     }
 
-    // Group sizes are preserved by label exchange, so n1 and n0 are
-    // constants of the run and the bracketing plans can be built once.
-    // Verified rather than assumed, as the mean-shift kernel does.
-    let mut n1 = 0usize;
-    let mut n0 = 0usize;
-    let mut masks = vec![0u8; n_perms * n];
-    for (b, row) in pv.rows().into_iter().enumerate() {
-        let mut r1 = 0usize;
-        let mut r0 = 0usize;
-        for (j, &lab) in row.iter().enumerate() {
-            match lab {
-                1 => {
-                    r1 += 1;
-                    masks[b * n + j] = 1;
-                }
-                0 => r0 += 1,
-                other => {
-                    return Err(PyValueError::new_err(format!(
-                        "perms must contain only 0 and 1; row {} has {}",
-                        b, other
-                    )))
-                }
-            }
-        }
-        if b == 0 {
-            n1 = r1;
-            n0 = r0;
-        } else if r1 != n1 || r0 != n0 {
-            return Err(PyValueError::new_err(format!(
-                "permutation row {} has group sizes (n1, n0) = ({}, {}) but row 0 has \
-                 ({}, {}); label exchange preserves the group sizes",
-                b, r1, r0, n1, n0
-            )));
-        }
-        if r1.min(r0) < m {
-            return Err(PyValueError::new_err(format!(
-                "permutation row {} gives min(n1, n0) = {} but probs has {} entries; \
-                 the grid may be capped below the design but never above it",
-                b,
-                r1.min(r0),
-                m
-            )));
-        }
-    }
-    if n1 == 0 || n0 == 0 {
-        return Err(PyValueError::new_err("both groups must be non-empty"));
-    }
+    let (masks, n1, n0) = label_masks(pv, n, m)?;
 
     let plan1 = Type7Plan::new(n1, &probs_slice, 0, false);
     let plan0 = Type7Plan::new(n0, &probs_slice, n1, true);
@@ -881,7 +769,7 @@ fn middle_mean(buf: &mut [f64]) -> f64 {
 }
 
 /// One gene's bisection for the thinning-matched fold change — the loop of
-/// `wade.thinning._fit_fold_change_alpha`, given that gene's active-side
+/// `wade.thinning.fit_fold_change`, given that gene's active-side
 /// counts and scale and the untouched side's interquartile mean. Returns
 /// `0.5 * (lo + hi)` in natural log.
 ///
@@ -929,8 +817,9 @@ fn one_gene_fit(
         thinned.clear();
         for (&c, &a) in c_active.iter().zip(a_active.iter()) {
             let t = if c > 0 {
+                // `keep = exp(-mid)` with `0 < mid <= max_log_fold` is in (0, 1).
                 rand_distr::Binomial::new(c as u64, keep)
-                    .expect("keep probability out of range in fit kernel")
+                    .expect("keep probability is in (0, 1) by construction")
                     .sample(&mut rng) as f64
             } else {
                 0.0
@@ -947,8 +836,7 @@ fn one_gene_fit(
     0.5 * (lo + hi)
 }
 
-/// The fold-change fit's bisection, parallel over genes — `docs/scaling.md`
-/// §3.3. Opt-in (`fit_backend="rust"`): unlike the two permutation kernels it
+/// The fold-change fit's bisection, parallel over genes. Opt-in (`fit_backend="rust"`): unlike the two permutation kernels it
 /// is **not** bitwise against the NumPy path, because no two binomial
 /// samplers consume randomness alike; it fits the same objective and is held
 /// to the NumPy path statistically. Deterministic given `seed` and the
@@ -984,6 +872,15 @@ fn fit_bisect<'py>(
     }
     if msv.len() != g {
         return Err(PyValueError::new_err("m_static must have one value per gene"));
+    }
+    if !max_log_fold.is_finite() || max_log_fold <= 0.0 {
+        return Err(PyValueError::new_err(format!(
+            "max_log_fold must be positive and finite, got {}",
+            max_log_fold
+        )));
+    }
+    if iters == 0 {
+        return Err(PyValueError::new_err("iters must be at least 1"));
     }
     for &v in cv.iter() {
         if !v.is_finite() || v < 0.0 || v != v.round() {

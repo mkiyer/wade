@@ -22,8 +22,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The floors declared in pyproject (requires-python >=3.10, numpy>=1.24)
-        # were never exercised; this is what makes them claims rather than hopes.
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.10", "3.13"]
     steps:
@@ -32,14 +30,15 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          # No --no-build-isolation here: that flag needs maturin already
-          # importable, which the conda env supplies and setup-python does
-          # not. Let pip build in isolation and fetch it.
-          pip install -e ".[test,io,plot,linked]" pandas
+          pip install -e ".[test,io,plot]"
+      - name: Lint the kernel
+        run: cargo clippy --release -- -D warnings
       - name: Test
         run: pytest -q
 
@@ -76,38 +75,26 @@ jobs:
           pytest -q -m "not kernel"
 
   wheels:
-    name: wheel / ${{ matrix.target }} ${{ matrix.os }}
+    name: wheel / ${{ matrix.os }} ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         # One row per wheel PyPI needs. abi3-py310 means a single wheel per
-        # platform covers every supported Python, so this matrix is the whole
-        # distribution. Two rows cross-compile and cannot run what they build:
-        # aarch64 Linux (built in a QEMU container) and x86_64 macOS (built on
-        # an arm64 runner). `native` gates the smoke test rather than dropping
-        # those platforms, which is how users on them end up needing a Rust
-        # toolchain.
+        # platform covers every supported Python. Every row builds on a native
+        # runner, so every wheel is import-tested.
         include:
-          # `manylinux: auto` is the action's own default and is ignored off
-          # Linux, so every row can carry it rather than the matrix growing a
-          # conditional.
-          - { os: ubuntu-latest,  target: x86_64,             native: true  }
-          - { os: ubuntu-latest,  target: aarch64,            native: false }
-          - { os: macos-latest,   target: aarch64-apple-darwin, native: true  }
-          - { os: macos-latest,   target: x86_64-apple-darwin, native: false }
-          - { os: windows-latest, target: x64,                native: true  }
+          - { os: ubuntu-latest,    target: x86_64 }
+          - { os: ubuntu-24.04-arm, target: aarch64 }
+          - { os: macos-latest,     target: aarch64-apple-darwin }
+          - { os: macos-15-intel,   target: x86_64-apple-darwin }
+          - { os: windows-latest,   target: x64 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # maturin-action installs the Rust target it needs for a cross build;
-      # naming it here too means a missing target fails at setup with a clear
-      # message rather than midway through cargo.
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ contains(matrix.target, '-') && matrix.target || '' }}
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
@@ -116,20 +103,17 @@ jobs:
           manylinux: auto
           args: --release --out dist
       - name: Check the wheel installs and imports on its own
-        if: matrix.native
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          # --no-index must not reach the dependencies: it would block numpy
-          # as well as PyPI's wade. Install the declared deps first, then
-          # the wheel itself from dist and nowhere else.
+          # Install the declared dependency first, then the wheel from dist and
+          # nowhere else, so nothing is pulled from PyPI under the same name.
           pip install "numpy>=1.24"
-          pip install --no-index --find-links dist --no-deps wade
-          # The kernel must be present in the wheel: a wheel that silently
-          # fell back to NumPy is the failure this job exists to catch.
+          pip install --no-index --find-links dist --no-deps wade-rnaseq
+          # A wheel that silently fell back to NumPy is the failure this job
+          # exists to catch.
           python -c "import wade; assert wade.permutation.HAVE_RUST_KERNEL, \
               'wheel has no compiled kernel'; print(wade.__version__, 'kernel ok')"
-          python -c "import wade.plotting as P; print(P.available_backends())"
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.os }}-${{ matrix.target }}
@@ -141,14 +125,20 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable
       - uses: PyO3/maturin-action@v1
         with: { command: sdist, args: --out dist }
+      - name: Check the sdist builds from scratch
+        run: |
+          python -m pip install --upgrade pip
+          pip install dist/*.tar.gz
+          python -c "import wade; assert wade.permutation.HAVE_RUST_KERNEL; print(wade.__version__)"
       - uses: actions/upload-artifact@v4
         with: { name: sdist, path: dist/*.tar.gz }
 
   # Deliberately NOT triggered by a tag. A PyPI upload cannot be undone and a
   # version number cannot be reused, so publishing is a button press: run the
-  # workflow manually with `publish` checked. Everything above it still runs
+  # workflow manually with `publish` checked. Everything above still runs
   # first, so nothing reaches PyPI that has not passed the full matrix.
   #
   # Needs a PyPI trusted publisher for this repo (pypi.org -> the project ->

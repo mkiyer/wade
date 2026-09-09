@@ -5,7 +5,7 @@ of a subset sum, the double saddlepoint returns the *exact permutation*
 probability, so it must agree with brute-force relabelling and not with any
 distributional idealization. Everything here is against brute force.
 
-The cheap checks live here; ``docs/scaling.md`` §4.9 has the expensive ones
+The cheap checks live here; ``docs/pvalue-review.md`` has the expensive ones
 (1e8 permutations per design, four geometries, counts and sparse counts) that
 are too slow for a suite.
 """
@@ -140,7 +140,7 @@ def test_it_refuses_shapes_it_cannot_answer():
 def test_agrees_with_brute_force_at_every_geometry(n1, n0):
     """Including unbalanced, which is the case the quantile quadrature could
     not reach: there stage 1 is an L-statistic, not a subset sum, and no
-    saddlepoint exists for it (``scaling.md`` §4.4)."""
+    saddlepoint exists for it (``docs/pvalue-review.md``)."""
     x = _cohort(7, n1, n0, g=32)
     cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
     stat = x[:, :n1].mean(axis=1) - x[:, n1:].mean(axis=1)
@@ -172,7 +172,7 @@ def test_every_alternative_matches_its_own_brute_force_null(alternative):
 def test_null_p_values_are_uniform():
     """The property a p-value has to have. Checked on counts through
     :func:`wade.wade`'s own normalization, which is what stage 1 actually
-    sees — and at the sparsity the real cohort has (``scaling.md`` §7.5)."""
+    sees — and at the sparsity the real cohort has (the real cohort)."""
     rng = np.random.default_rng(13)
     g = 4000
     mu = 10 ** rng.uniform(-1.0, 0.7, (g, 1))            # ~50% zeros
@@ -225,7 +225,7 @@ def test_it_resolves_past_the_permutation_floor():
     """The whole point. The empirical p-value stops at ``1/(B+1)`` and the GPD
     refinement at ``1/(B·n_tail)``; the saddlepoint has no floor above
     ``1/C(n, n1)``, which is what lets BH decide on a 20,000-gene cohort
-    (``scaling.md`` §4.9)."""
+    (``docs/pvalue-review.md``)."""
     rng = np.random.default_rng(23)
     counts = rng.poisson(80, size=(30, N1 + N0)).astype(float)
     counts[:5, :N1] *= 3.0
@@ -263,3 +263,34 @@ def test_missing_scipy_fails_fast_and_says_what_to_do(monkeypatch):
     # and the default path is untouched by SciPy's absence
     wade.wade(counts, np.ones(len(counts)), COND, nperms=10, seed=1,
               lib_sizes=np.ones(len(COND)))
+
+
+def test_ties_at_the_extreme_are_counted_exactly():
+    """A gene with fewer nonzero values than a group has has many labellings
+    tying at the maximum sum, and the boundary is combinatorial: with 3
+    nonzero values among 40 all in the case group, P(A >= a_max) is
+    C(37, 17) / C(40, 20), not 1 / C(40, 20)."""
+    from math import comb
+
+    v = np.zeros((1, 40))
+    v[0, :3] = [50.0, 60.0, 70.0]
+    p = saddlepoint_subset_sum(v, 20, [180.0])[0]
+    assert p == pytest.approx(comb(37, 17) / comb(40, 20), rel=1e-9)
+    # ... and the same answer through the entry point with the jitter off.
+    cond = np.r_[np.ones(20, int), np.zeros(20, int)]
+    res = wade.wade(v, np.ones(1), cond, lib_sizes=np.ones(40), nperms=0,
+                    noise=0.0, pseudocount=0.0, stage1="saddlepoint", alternative="greater")
+    assert res.p_mean_shift[0] == pytest.approx(comb(37, 17) / comb(40, 20), rel=1e-6)
+
+
+def test_a_threshold_just_inside_the_lower_edge_is_bracketed():
+    """Thirty near-zero values and ten large ones put the lower edge of the
+    reachable range next to a wall of tiny gaps; the bracket used to widen at
+    +S only and raised 'this is a bug' here."""
+    rng = np.random.default_rng(7)
+    v = np.r_[rng.uniform(0, 0.01, 30), rng.gamma(3, 50, 10)][None, :]
+    srt = np.sort(v[0])
+    a_min, a_max = srt[:20].sum(), srt[-20:].sum()
+    for frac in (1e-11, 1e-9, 1e-6):
+        p = saddlepoint_subset_sum(v, 20, [a_min + frac * (a_max - a_min)])[0]
+        assert 0.999 <= p <= 1.0

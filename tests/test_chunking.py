@@ -1,4 +1,4 @@
-"""Gene chunking (``gene_chunk``) — ``docs/scaling.md`` §2.2.
+"""Gene chunking (``gene_chunk``) — ``CONTRIBUTING.md``.
 
 Chunking is a memory layout, never a numerical choice: **a chunked run is
 bit-identical to the unchunked run**, whatever the chunk size, including one
@@ -54,11 +54,10 @@ def _assert_identical(a, b):
         np.testing.assert_array_equal(getattr(a.stats, name), getattr(b.stats, name),
                                       err_msg=f"stats.{name}")
     if a.subset is not None:
-        for name in ("statistic", "r", "b", "r_test", "shift", "argmax_k"):
+        for name in ("statistic", "r", "shift", "argmax_k"):
             np.testing.assert_array_equal(getattr(a.subset, name),
                                           getattr(b.subset, name),
                                           err_msg=f"subset.{name}")
-        assert a.subset.correction == b.subset.correction
     else:
         assert b.subset is None
     for name in ("ci_affected_fraction", "ci_direction", "ci_log2_fc"):
@@ -105,15 +104,6 @@ def test_chunked_run_is_bitwise_identical_with_bootstrap_and_cap():
                      n_boot=25, max_probs=17, gene_chunk=5)
     _assert_identical(full, part)
     assert full.nprobs == 17
-
-
-def test_chunked_run_is_bitwise_identical_under_division_correction():
-    counts = _counts(2)
-    full = wade.wade(counts, np.ones(G), COND, nperms=40, seed=3, thin=False)
-    part = wade.wade(counts, np.ones(G), COND, nperms=40, seed=3, thin=False,
-                     gene_chunk=6)
-    assert full.subset.correction == "division"
-    _assert_identical(full, part)
 
 
 def test_chunked_run_is_bitwise_identical_with_no_pseudocount_and_one_sided():

@@ -1,28 +1,25 @@
-"""Data in, results out — ``ROADMAP.md`` §1.
+"""Data in, results out.
 
-**WADE does not own I/O.** There are no file readers here. polars and pandas
-already read CSV, TSV, Parquet, Arrow, Excel and gzip better than this package
-would, and every reader written here would be surface area with nothing to do
-with the statistic. What this module does instead:
+**WADE reads no files.** polars and pandas already read CSV, TSV, Parquet,
+Arrow, Excel and gzip better than this package would. What this module does
+instead:
 
-* :func:`as_counts` — **accept** a count matrix in whatever shape it arrives
-  in (NumPy array, polars or pandas DataFrame, any sparse matrix with
+* :func:`as_counts` — accept a count matrix in whatever shape it arrives in
+  (NumPy array, polars or pandas DataFrame, any sparse matrix with
   ``.toarray()``) and turn it into the one shape the statistic uses: a dense
   ``genes x samples`` float64 array with gene and sample labels beside it.
-  Labels are optional; the orientation is not guessed. Other per-gene columns
-  are carried in ``Counts.meta`` and read by no statistic.
-* :func:`condition` — turn a **sample metadata** table into a case/control
-  assignment, and align it to the matrix's samples *strictly*. This is the
-  one genuinely error-prone step in the whole area and the reason the helper
-  exists: a silently dropped sample is a silently different analysis, and
-  because library sizes are computed on the samples handed in, a silently
-  different normalization too.
-* :func:`to_frame` and :func:`write_results` — the results, which **are**
-  WADE's to own, plus a JSON manifest of what produced them.
+  Labels are optional; the orientation is never guessed. Other per-gene
+  columns are carried in ``Counts.meta`` and read by no statistic.
+* :func:`condition` — turn a sample metadata table into a case/control
+  assignment and align it to the matrix's samples *strictly*: a silently
+  dropped sample is a silently different analysis, and because library sizes
+  are computed on the samples handed in, a silently different normalization.
+* :func:`write_results` and :func:`manifest` — the results, plus a JSON
+  record of what produced them.
 
 Neither polars nor pandas is a dependency: frames are duck-typed on
-``.columns`` and ``.to_numpy()``, and only :func:`to_frame` and
-:func:`write_results` need polars at all, imported inside the call.
+``.columns`` and ``.to_numpy()``, and only writing results needs polars,
+imported inside the call.
 """
 
 from __future__ import annotations
@@ -38,7 +35,6 @@ __all__ = [
     "Condition",
     "as_counts",
     "condition",
-    "to_frame",
     "write_results",
     "manifest",
     "RESULT_COLUMNS",
@@ -62,10 +58,8 @@ class Counts:
     gene_names: np.ndarray              # (genes,) object
     sample_names: np.ndarray            # (samples,) object
     #: Every non-sample column of an input frame, per gene — a symbol, a
-    #: biotype, a length. **No statistic reads any of it**: WADE's core needs
-    #: one gene id and nothing more. It is carried so the display layer can
-    #: optionally show it (``docs/plotting.md``) and so
-    #: ``normalizer="Length"`` has somewhere to look.
+    #: biotype, a length. Read by no statistic; figures can show it and
+    #: ``normalizer="Length"`` is looked up here.
     meta: dict = field(default_factory=dict)
 
     @property
@@ -118,22 +112,34 @@ def _numeric(a: np.ndarray) -> bool:
                                      not isinstance(v, bool) for v in a[:32])
 
 
+def _labelled_index(frame):
+    """A pandas index carrying gene ids (``read_csv(..., index_col=0)``), or
+    ``None`` for a default positional index and for polars."""
+    index = getattr(frame, "index", None)
+    if index is None or type(index).__name__ == "RangeIndex":
+        return None
+    values = np.asarray(index, dtype=object)
+    return None if _numeric(values) else values
+
+
 def _from_frame(frame, id_column, sample_columns, exclude=()):
-    """(values, gene_names, meta) from a duck-typed DataFrame."""
+    """(values, gene_names, sample_names, meta) from a duck-typed DataFrame."""
     cols = list(frame.columns)
     if not cols:
         raise ValueError("the counts frame has no columns")
 
+    indexed = None
     if id_column == "auto":
+        indexed = _labelled_index(frame)
         first = _column(frame, cols[0])
-        id_column = cols[0] if not _numeric(first) else None
+        id_column = cols[0] if indexed is None and not _numeric(first) else None
     elif isinstance(id_column, (int, np.integer)) and not isinstance(id_column, bool):
         id_column = cols[int(id_column)]
     if id_column is not None and id_column not in cols:
         raise KeyError(f"no column {id_column!r} in the counts frame; it has {cols}")
 
     gene_names = (np.asarray(_column(frame, id_column), dtype=object)
-                  if id_column is not None else None)
+                  if id_column is not None else indexed)
 
     rest = [c for c in cols if c != id_column]
     if sample_columns is None:
@@ -162,14 +168,9 @@ def _from_frame(frame, id_column, sample_columns, exclude=()):
     if not sample_columns:
         raise ValueError("no sample columns were found in the counts frame")
 
-    try:                                        # polars and pandas both slice by list
-        values = np.asarray(frame[sample_columns].to_numpy(), dtype=np.float64)
-    except (TypeError, KeyError, AttributeError):
-        values = np.column_stack([_column(frame, c) for c in sample_columns]).astype(np.float64)
-    # Every leftover column is carried, string ones included: WADE's core reads
-    # one gene id and nothing else, but a symbol is what makes a ranked table
-    # readable, so dropping it silently was the wrong default. `normalizer=` can
-    # only name a numeric one, which `Counts.normalizer` enforces.
+    values = np.asarray(frame[sample_columns].to_numpy(), dtype=np.float64)
+    # Every leftover column is carried, string ones included: a symbol is what
+    # makes a ranked table readable. Only a numeric one can be a normalizer.
     meta = {c: _column(frame, c) for c in rest if c not in sample_columns}
     return values, gene_names, np.asarray(sample_columns, dtype=object), meta
 
@@ -199,14 +200,18 @@ def as_counts(
         would have no tell, and getting it wrong silently compares the wrong
         things.
     id_column
-        For a frame: ``"auto"`` takes the first column when it is non-numeric,
-        a name or integer position pins one, ``None`` means the frame is all
-        samples and gene names are positional.
+        For a frame: ``"auto"`` takes a labelled pandas index if there is one
+        (``read_csv(..., index_col=0)``), else the first column when it is
+        non-numeric; a name or integer position pins one; ``None`` means the
+        frame is all samples and gene names are positional. **An integer id
+        column (Entrez ids) is numeric and must be named**, or it is read as
+        a sample.
     sample_columns
         For a frame: which columns hold counts. By default every column after
-        the id column, and a **non-numeric** leftover raises rather than being
-        read as a sample. Numeric leftovers become :attr:`Counts.meta`, which
-        is where a ``normalizer="Length"`` is looked up.
+        the id column, so **every numeric column is a sample** unless it is
+        named in ``exclude`` or left out of ``sample_columns``; a non-numeric
+        leftover raises rather than being read as a sample. Columns not in
+        ``sample_columns`` become :attr:`Counts.meta`.
     exclude
         Column names that are **not** samples, kept as per-gene metadata.
         :func:`wade.wade` passes the normalizer's column name here, so
@@ -258,8 +263,8 @@ def as_counts(
     for label, arr, want in (("gene", found_genes, g), ("sample", found_samples, n)):
         if arr.shape != (want,):
             raise ValueError(
-                f"{label}_names must have one entry per {label}: expected {want}, "
-                f"got {arr.shape[0] if arr.ndim else arr.shape}"
+                f"{label}_names must have one entry per {label}: expected shape "
+                f"({want},), got {arr.shape}"
             )
         dup = _duplicates(arr)
         if dup:
@@ -267,9 +272,8 @@ def as_counts(
                              + (f" and {len(dup) - 8} more" if len(dup) > 8 else ""))
 
     _locate_bad_counts(values, found_genes, found_samples)
-
-    meta = {k: np.asarray(v) for k, v in meta.items() if len(v) == g}
-    return Counts(values=values, gene_names=found_genes, sample_names=found_samples, meta=meta)
+    return Counts(values=values, gene_names=found_genes, sample_names=found_samples,
+                  meta={k: np.asarray(v) for k, v in meta.items()})
 
 
 def _locate_bad_counts(values, gene_names, sample_names) -> None:
@@ -323,9 +327,6 @@ class Condition:
     column: str | None = None
     dropped: tuple = ()          # samples at some other level, when drop_other
 
-    def __len__(self) -> int:
-        return len(self.labels)
-
     def vector(self, sample_names, *, allow_extra: bool = False) -> np.ndarray:
         """The 0/1 vector for ``sample_names``, in that order. Strict.
 
@@ -345,7 +346,8 @@ class Condition:
                    if self.dropped else "")
                 + "Fix the sheet, or subset the matrix to the samples you mean."
             )
-        extra = [s for s in self.labels if s not in set(names.tolist())]
+        have = set(names.tolist())
+        extra = [s for s in self.labels if s not in have]
         if extra and not allow_extra:
             raise ValueError(
                 f"{len(extra)} sample(s) in the sample metadata are not columns of the "
@@ -402,18 +404,21 @@ def condition(
     if dup:
         raise ValueError(f"duplicate sample ids in the sample metadata: {dup[:8]}")
 
-    is_case = values == case
-    is_ctrl = values == control
     if case == control:
         raise ValueError(f"case and control are the same value ({case!r})")
+    is_case = values == case
+    is_ctrl = values == control
     other = ~(is_case | is_ctrl)
     if other.any() and not drop_other:
-        levels = sorted({str(v) for v in values[other].tolist()})
+        levels = sorted({repr(v) for v in values[other].tolist()})
+
         raise ValueError(
             f"column {column!r} has {int(other.sum())} sample(s) at "
-            f"{len(levels)} other level(s) than {case!r} and {control!r}: {levels[:8]}. "
-            f"Pass drop_other=True to exclude them, or name the two levels you mean."
+            f"{len(levels)} other level(s) than {case!r} and {control!r}: "
+            f"[{', '.join(levels[:8])}]. Pass drop_other=True to exclude them, "
+            f"or name the two levels you mean."
         )
+
     if not is_case.any() or not is_ctrl.any():
         raise ValueError(
             f"column {column!r} must contain both {case!r} ({int(is_case.sum())} samples) "
@@ -430,23 +435,23 @@ def condition(
 # Results out
 
 
-#: The written column order. ``neglog10_p_*`` is what a volcano plots; ``p_*``
-#: and ``padj_*`` stay beside it because significance is read off BH, not off
-#: the raw p-value. ``z_*`` are the permutation z-scores (the GSEA-NES
-#: analogue) — the ranking that keeps working when p-values pile up at the
-#: resolution floor; ``subset_log2_fc`` is the subset's magnitude, the log2
-#: fold change within the affected fraction. ``refined_*`` says whether that
-#: stage's p-value was **counted from permutations or extrapolated** by the
-#: GPD tail fit, which is the distinction that matters most for the genes at
-#: the floor (``docs/limits.md`` §5).
+#: The written column order. ``neglog10_p_*`` is what a volcano plots;
+#: ``z_*`` are the permutation z-scores, the ranking that keeps working when
+#: p-values pile up at the resolution floor; ``nexc_*`` is the number of null
+#: draws at or beyond the observed statistic and ``refined_*`` says whether
+#: that stage's p-value was counted from permutations or read off the GPD
+#: tail fit. Bootstrap intervals follow as ``*_lo`` / ``*_hi`` pairs.
 RESULT_COLUMNS = (
     "gene", "case_mean", "ctrl_mean", "mean_shift", "log2_fc",
     "p_mean_shift", "padj_mean_shift", "neglog10_p_mean_shift", "z_mean_shift",
-    "refined_mean_shift",
+    "nexc_mean_shift", "refined_mean_shift",
     "subset_stat", "p_subset", "padj_subset", "neglog10_p_subset", "z_subset",
-    "refined_subset",
+    "nexc_subset", "refined_subset",
     "affected_fraction", "subset_log2_fc", "direction", "w1",
 )
+
+#: The descriptors that can carry a bootstrap interval, in written order.
+CI_COLUMNS = ("affected_fraction", "direction", "subset_log2_fc", "log2_fc", "mean_shift")
 
 
 def _permutation_space_record(res) -> dict | None:
@@ -468,41 +473,41 @@ def _permutation_space_record(res) -> dict | None:
 
 
 def _neglog10(p):
-    p = np.asarray(p, dtype=np.float64)
     with np.errstate(divide="ignore", invalid="ignore"):
-        return -np.log10(p)
+        return -np.log10(np.asarray(p, dtype=np.float64))
 
 
 def result_columns(res) -> dict:
-    """The result as a plain dict of arrays, in :data:`RESULT_COLUMNS` order.
-
-    The *report view* of :meth:`wade.WadeResult.columns` — that one method is
-    the single place the column set is assembled, so a new statistic appears
-    here, in the written table and in the plotting layer's namespace at once
-    rather than needing three edits. All this adds is the written order and
-    the ``neglog10_p_*`` pair a volcano plots; the bootstrap intervals stay
-    at the end because they are per-statistic pairs, not statistics.
-    """
-    cols = dict(res.columns())
-    for stage in ("mean_shift", "subset"):
-        p_col = f"p_{stage}"
-        if cols.get(p_col) is not None:
-            cols[f"neglog10_{p_col}"] = _neglog10(cols[p_col])
+    """The result as a dict of equal-length arrays in :data:`RESULT_COLUMNS`
+    order, followed by the bootstrap intervals. The single place the table
+    is assembled: :meth:`wade.WadeResult.columns`, :func:`write_results` and
+    the plotting layer all read this."""
+    cols = {
+        "gene": res.gene, "case_mean": res.case_mean, "ctrl_mean": res.ctrl_mean,
+        "mean_shift": res.mean_shift, "log2_fc": res.log2_fc, "w1": res.w1,
+        "p_mean_shift": res.p_mean_shift, "padj_mean_shift": res.padj_mean_shift,
+        "neglog10_p_mean_shift": _neglog10(res.p_mean_shift),
+        "z_mean_shift": res.z_mean_shift,
+        "nexc_mean_shift": res.nexc_mean_shift, "refined_mean_shift": res.refined_mean_shift,
+    }
+    if res.subset is not None:
+        cols.update({
+            "subset_stat": res.subset.statistic,
+            "p_subset": res.p_subset, "padj_subset": res.padj_subset,
+            "neglog10_p_subset": _neglog10(res.p_subset),
+            "z_subset": res.z_subset,
+            "nexc_subset": res.nexc_subset, "refined_subset": res.refined_subset,
+            "affected_fraction": res.subset.affected_fraction,
+            "subset_log2_fc": res.subset.subset_log2_fc,
+            "direction": res.subset.direction,
+        })
     ordered = {k: cols[k] for k in RESULT_COLUMNS if cols.get(k) is not None}
-    for name in ("affected_fraction", "direction", "subset_log2_fc",
-                 "log2_fc", "mean_shift"):
+    for name in CI_COLUMNS:
         ci = getattr(res, f"ci_{name}")
         if ci is not None:
             ordered[f"{name}_lo"] = ci[0]
             ordered[f"{name}_hi"] = ci[1]
     return ordered
-
-
-def to_frame(res):
-    """The result as a polars DataFrame, in :data:`RESULT_COLUMNS` order."""
-    import polars as pl
-
-    return pl.DataFrame(result_columns(res))
 
 
 def manifest(res, *, alpha: float = 0.05) -> dict:
@@ -525,31 +530,27 @@ def manifest(res, *, alpha: float = 0.05) -> dict:
             "nperms": p.get("nperms"),
             "seed": p.get("seed"),
             "alternative": p.get("alternative"),
-            "correction": p.get("correction"),
             "n_exc_min": p.get("n_exc_min"),
             "n_tail": p.get("n_tail"),
             "n_boot": p.get("n_boot"),
-            "entry_point": p.get("entry_point"),
             "normalizer": p.get("normalizer"),
             "noise": p.get("noise"),
             "norm_factor": p.get("norm_factor"),
-            "thin": p.get("thin"),
+            "pseudocount": p.get("pseudocount"),
             "subset": p.get("subset"),
             "lib_sizes_supplied": p.get("lib_sizes_supplied"),
             "perms_supplied": p.get("perms_supplied"),
             # The two opt-in fast paths change reported numbers, so a
-            # manifest without them could not reproduce the run; gene_chunk
-            # is recorded for completeness even though it is bit-identical.
-            "stage1": p.get("stage1", "grid"),
-            "fit_backend": p.get("fit_backend", "numpy"),
+            # manifest without them could not reproduce the run.
+            "stage1": p.get("stage1"),
+            "fit_backend": p.get("fit_backend"),
             "gene_chunk": p.get("gene_chunk"),
-            "pseudocount": None if res.pseudocount is None else float(np.median(res.pseudocount)),
         },
         "design": {
             "n_genes": int(res.gene.shape[0]),
-            "n_case": p.get("n1"),
-            "n_ctrl": p.get("n0"),
-            "nprobs": p.get("nprobs"),
+            "n_case": p.get("n_case"),
+            "n_ctrl": p.get("n_ctrl"),
+            "nprobs": res.nprobs,
             "max_probs": p.get("max_probs"),
             "permutation_space": _permutation_space_record(res),
             "case_label": p.get("case_label"),
@@ -572,9 +573,6 @@ def manifest(res, *, alpha: float = 0.05) -> dict:
     return out
 
 
-_manifest = manifest
-
-
 _WRITERS = {
     ".tsv": lambda df, p: df.write_csv(p, separator="\t"),
     ".txt": lambda df, p: df.write_csv(p, separator="\t"),
@@ -587,36 +585,26 @@ _WRITERS = {
 
 
 def _manifest_path(path: Path) -> Path:
-    """``<name minus its extension>.manifest.json``, beside the table.
-
-    ``Path.with_suffix("").with_suffix(...)`` strips *every* dotted component
-    of the stem, so ``plasma.v1.tsv`` and ``plasma.v2.tsv`` both mapped to
-    ``plasma.manifest.json`` — the second run silently overwrote the first
-    run's provenance and the surviving manifest described the wrong table.
-    """
+    """``<stem>.manifest.json`` beside the table; ``stem`` keeps every dotted
+    component, so ``plasma.v1.tsv`` and ``plasma.v2.tsv`` get their own."""
     return path.with_name(path.stem + ".manifest.json")
 
 
-def write_results(res, path, *, manifest: bool = True, alpha: float = 0.05) -> Path:
+def write_results(res, path, *, alpha: float = 0.05) -> Path:
     """Write the result table, and beside it a JSON manifest of the run.
 
     Format follows the extension: ``.tsv`` / ``.txt``, ``.csv``, ``.parquet``,
     ``.arrow`` / ``.ipc`` / ``.feather``. The manifest is written to
-    ``<stem>.manifest.json`` unless ``manifest=False``.
+    ``<stem>.manifest.json``; ``alpha`` sets the significance counts it
+    records.
     """
     path = Path(path)
     writer = _WRITERS.get(path.suffix.lower())
     if writer is None:
         raise ValueError(
-            f"unknown result format {path.suffix!r}; use one of "
-            f"{sorted(_WRITERS)}. (WADE writes its own results but does not read "
-            f"data files — see ROADMAP.md §1.)"
+            f"unknown result format {path.suffix!r}; use one of {sorted(_WRITERS)}."
         )
-    frame = to_frame(res)
     path.parent.mkdir(parents=True, exist_ok=True)
-    writer(frame, path)
-    if manifest:
-        man = _manifest(res, alpha=alpha)
-        _manifest_path(path).write_text(
-            json.dumps(man, indent=2, sort_keys=False) + "\n")
+    writer(res.to_frame(), path)
+    _manifest_path(path).write_text(json.dumps(manifest(res, alpha=alpha), indent=2) + "\n")
     return path

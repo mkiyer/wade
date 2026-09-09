@@ -1,4 +1,4 @@
-"""The fold-change fit's compiled bisection (``fit_backend="rust"``) — ``docs/scaling.md`` §3.3.
+"""The fold-change fit's compiled bisection (``fit_backend="rust"``) — ``CONTRIBUTING.md``.
 
 Unlike the two permutation kernels, this one is **not** bitwise against its
 NumPy path: no two binomial samplers consume randomness alike, so the
@@ -143,3 +143,18 @@ def test_wade_with_the_kernel_fit_holds_stage2_level_on_a_global_shift():
                      nperms=200, seed=2, fit_backend="rust", gene_chunk=17)
     np.testing.assert_array_equal(res.p_subset, part.p_subset)
     np.testing.assert_array_equal(res.fitted_fold_change, part.fitted_fold_change)
+
+
+def test_kernel_fit_refuses_a_bad_bisection_range_instead_of_panicking():
+    """``keep = exp(-mid)`` is only a probability for ``mid > 0``; a
+    non-positive or non-finite ``max_log_fold`` used to panic every rayon
+    worker instead of raising."""
+    counts = np.ones((3, N1 + N0))
+    for bad in (-1.0, 0.0, np.nan, np.inf):
+        with pytest.raises(ValueError, match="max_log_fold"):
+            fit_fold_change(counts, COND, alpha=_unit_alpha(3, N1 + N0),
+                            backend="rust", max_log_fold=bad)
+    with pytest.raises(ValueError, match="iters"):
+        fit_fold_change(counts, COND, alpha=_unit_alpha(3, N1 + N0), backend="rust", iters=0)
+    with pytest.raises(ValueError, match="64-bit"):
+        fit_fold_change(counts, COND, alpha=_unit_alpha(3, N1 + N0), backend="rust", seed=2**64)

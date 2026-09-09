@@ -160,7 +160,7 @@ def sens(stat, lab, fpr=0.10):
     """Fraction of a scenario's genes ranked above the null genes' `fpr` quantile.
 
     The ranking question rather than the calling question: a large cohort puts
-    thousands of genes at the p-value floor (`docs/limits.md` 5) and what is
+    thousands of genes at the p-value floor (`docs/method.md` §10.3) and what is
     read then is the ordering. Sensitivity at a fixed false-positive rate says
     it in the terms a reader wants — take the top of the list down to a 10%
     false-positive rate, and this is the share of the truth you have — with no
@@ -381,7 +381,7 @@ md_table([[l, f"{round(SCENARIOS[l][0] * N1)} of {N1}",
 print()
 print(": `wade.detectability_floor` — the smallest p-value any label-permutation "
       "test can return for that many affected samples, whatever the effect size "
-      "(`docs/limits.md` 4). `2% at 8x` is above 0.05 outright, so no method in "
+      "(`docs/method.md` §10.1). `2% at 8x` is above 0.05 outright, so no method in "
       "this family can find it and any that appears to is reading noise.")
 ```
 
@@ -418,7 +418,7 @@ the one place this notebook departs from how WADE would be run on real data.
 
 Library-size normalization divides every gene by a column total that every
 gene contributes to, so a matrix with a large share of differential signal
-distorts every other gene ([`docs/limits.md`](../docs/limits.md) §2.4). A
+distorts every other gene ([`docs/method.md`](../docs/method.md) §10.2). A
 toy matrix with eight planted scenarios is exactly such a matrix. Measured on
 this one, with normalization on:
 
@@ -527,7 +527,7 @@ fig
 ## 4.3 Ranking, which is what survives the p-value floor
 
 On a real cohort thousands of genes tie at the resolution floor and the
-p-value stops ordering them ([`docs/limits.md`](../docs/limits.md) §5); what
+p-value stops ordering them ([`docs/method.md`](../docs/method.md) §10.3); what
 is read then is the statistic itself. That makes ranking the more durable
 comparison, and it needs no p-value at all.
 
@@ -881,7 +881,7 @@ md_table([[NAME[f], f"{np.median(BEST2[f][1][IS['2% at 8x']]):.2e}",
          ["method", "median raw p", "raw p below the floor", "power at BH 0.05"])
 print()
 print(f": On the {N_EACH} genes with {k6} affected cases of {N1}, whose "
-      f"combinatorial floor is {floor:.2e} (`docs/limits.md` 4.1). That floor "
+      f"combinatorial floor is {floor:.2e} (`docs/method.md` §10.4). That floor "
       "is a **scale, not a bound** — measured, 21% of planted 3-sample genes "
       "and 42% of planted 6-sample genes fall under it with no refinement "
       "involved at all — so this column is not an error rate. It measures how "
@@ -901,7 +901,7 @@ Four limits of this comparison, none of them fixable by running it longer:
 * **`2% at 8x` is at the design's resolution limit**, so no method in this
   family finds it reliably, and the scenario is here to show that rather than
   to separate the methods. Read the BH column, not the raw one.
-* **One geometry.** 300 against 300, balanced. `docs/limits.md` §4.2 shows the
+* **One geometry.** 300 against 300, balanced. `docs/method.md` §10.1 shows the
   floor is driven by imbalance, and an unbalanced cohort would reorder some of
   this.
 * **The competitors are reimplementations.** §2.2's checks make transcription
@@ -936,7 +936,7 @@ What the run shows, in the order it matters:
    maximizing over subset size gives its null a heavier one.
 3. **Ranking separates further than calling does.** The pAUC table
    distinguishes methods that the BH table ties at 0% or 100%, which is what
-   `docs/limits.md` §5 predicts for a cohort past the resolution floor.
+   `docs/method.md` §10.3 predicts for a cohort past the resolution floor.
 4. **Only WADE reports how much of the group differs**, with an interval, and
    which way. LSOSS's split point is the nearest thing available and it is not
    presented as an estimate by its authors.

@@ -3,15 +3,11 @@ requires = ["maturin>=1.5,<2"]
 build-backend = "maturin"
 
 [project]
-name = "wade"
-# Keep in step with src/wade/__init__.py's __version__ — the manifest reports
-# that one, so a drift between the two mislabels every written result — and
-# with Cargo.toml's, which drifted to 0.1.0 unnoticed because nothing checked.
-# tests/test_packaging.py now fails if any of the three diverge. (Not
-# `dynamic`: maturin would read Cargo.toml, whose semver cannot express a
-# PEP 440 ".dev0", which is why the test compares release segments.)
+# The distribution is `wade-rnaseq` (the PyPI name `wade` belongs to an unrelated
+# project); the import name is `wade`.
+name = "wade-rnaseq"
 version = "0.1.0"
-description = "Wasserstein Area Differential Expression — a quantile-area differential-distribution test built for subset detection"
+description = "Wasserstein Area Differential Expression: a two-stage differential-distribution test for RNA-seq counts, built for subset detection"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-only"
@@ -35,29 +31,14 @@ Repository = "https://github.com/mkiyer/wade"
 Issues = "https://github.com/mkiyer/wade/issues"
 
 [project.optional-dependencies]
-# pandas is a *test* dependency: the frame path is duck-typed and must be
-# exercised against both polars and pandas, not just whichever is installed.
+# Everything the statistic needs is NumPy. Each extra adds one capability.
+io = ["polars>=1.0"]                                  # to_frame() and write_results()
+plot = ["plotly>=6", "matplotlib>=3.8", "anywidget>=0.9"]   # the figures; either backend alone works
+saddlepoint = ["scipy>=1.10"]                         # stage1="saddlepoint"
+all = ["polars>=1.0", "plotly>=6", "matplotlib>=3.8", "anywidget>=0.9", "scipy>=1.10"]
 test = ["pytest>=7", "scipy>=1.10", "polars>=1.0", "pandas>=2.0"]
-# Plotting is optional and imported inside the plotting functions, so the
-# statistic keeps its one-dependency surface. Either backend alone works;
-# `plot` installs both (plotly is the default when both are present).
-plot = ["plotly>=6", "matplotlib>=3.8"]
-# Results out: to_frame() and write_results() build a polars DataFrame. Reading
-# data files is deliberately NOT WADE's job (ROADMAP.md 1) — polars is here for
-# the output side, and whatever you use to read your counts is your choice.
-io = ["polars>=1.0"]
-plotly = ["plotly>=6"]
-matplotlib = ["matplotlib>=3.8"]
-# plot_linked returns a plotly FigureWidget, whose click handler runs in a live
-# kernel. anywidget is what FigureWidget needs; every static figure works
-# without it, and a linked view does not survive export to HTML either way.
-linked = ["plotly>=6", "anywidget>=0.9"]
 
 [tool.maturin]
-# Keep editor and test junk out of the distribution.
-exclude = ["**/.DS_Store", ".pytest_cache/**", "target/**"]
-# PEP 561: ship the annotations, which are otherwise invisible once installed.
-include = ["src/wade/py.typed"]
 python-source = "src"
 module-name = "wade._kernel"
 features = ["pyo3/extension-module"]
@@ -65,7 +46,7 @@ features = ["pyo3/extension-module"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "parity: asserts agreement with the R reference on golden fixtures",
+    "parity: asserts agreement with the committed golden fixtures",
     "validation: method-validation simulations, not parity",
     "kernel: requires the compiled Rust kernel",
 ]

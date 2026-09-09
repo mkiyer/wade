@@ -19,6 +19,7 @@ from conftest import PARITY_SCENARIOS, TOL_GRID, assert_close, load_fixture
 from portrun import run_port
 
 import wade
+from wade.quantiles import type7_quantiles
 
 LAYER = "layer 3 quantile grids"
 
@@ -87,7 +88,7 @@ def test_type7_matches_R_on_the_convention_stress_vectors():
         x = np.asarray(case["x"])[None, :]
         for grid in case["grids"]:
             q = grid["q"]
-            got = wade.type7_quantiles(x, q)[0]
+            got = type7_quantiles(x, q)[0]
             assert_close(
                 got, grid["rowQuantiles"], 0.0,
                 f"type7 {case['label']} m={int(grid['nprobs'])} vs rowQuantiles", LAYER,
@@ -120,9 +121,9 @@ def test_type7_interpolation_leaves_ties_untouched():
     """
     x = np.array([[3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]])
     for m in range(1, 8):
-        got = wade.type7_quantiles(x, wade.probability_grid(m))
+        got = type7_quantiles(x, wade.probability_grid(m))
         assert np.all(got == 3.0)
 
     x2 = np.array([[0.0, 0.0, 0.0, 0.0, 7.0, 7.0, 7.0]])
-    got = wade.type7_quantiles(x2, wade.probability_grid(7))
+    got = type7_quantiles(x2, wade.probability_grid(7))
     assert set(np.unique(got)) <= {0.0, 7.0}

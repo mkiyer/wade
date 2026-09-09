@@ -33,45 +33,24 @@ pre-normalized matrix can reproduce neither, so there is no entry point for
 one.
 """
 
-from .api import (
-    DEFAULT_MAX_PROBS,
-    DEFAULT_NPERMS,
-    WadeResult,
-    wade,
-    wade_contrast,
-)
-from .diagnostics import GeneDetail, library_qc, subset_drivers, wade_gene
-from .io import (
-    RESULT_COLUMNS,
-    Condition,
-    Counts,
-    as_counts,
-    condition,
-    manifest,
-    to_frame,
-    write_results,
-)
-from .normalize import draw_jitter, library_sizes, tpm_like
-from .permutation import (detectability_floor, draw_perms, mean_diff_null,
-                          mean_diff_stat, null_statistics, permutation_space,
-                          strata_indices)
-from .plotting import plot_drivers, plot_gene, plot_linked, plot_stages, plot_volcano
-from .pvalues import ALTERNATIVES, GPDFit, bh_adjust, gpd_tail_p, perm_pvalues
-from .quantiles import probability_grid, type7_quantiles
-from .stats import WadeStats, wade_stats
-from .subset import (
-    SubsetResult,
-    affected_fraction,
-    bridge,
-    subset_log2_fc,
-    characterization_ci,
-    direction,
-    log_ratio_curve,
-    subset_test,
-)
-from .thinning import fit_fold_change, one_count, thin_counts
+from importlib.metadata import PackageNotFoundError, version as _version
 
-__version__ = "0.1.0"
+from .api import DEFAULT_MAX_PROBS, DEFAULT_NPERMS, WadeResult, wade, wade_contrast
+from .diagnostics import GeneDetail, library_qc, subset_drivers, wade_gene
+from .io import RESULT_COLUMNS, Condition, Counts, as_counts, condition, manifest, write_results
+from .normalize import draw_jitter, library_sizes, tpm_like
+from .permutation import (detectability_floor, draw_perms, null_statistics,
+                          permutation_space)
+from .plotting import plot_drivers, plot_gene, plot_linked, plot_stages, plot_volcano
+from .pvalues import ALTERNATIVES, bh_adjust, perm_pvalues
+from .quantiles import probability_grid
+from .stats import wade_stats
+from .subset import affected_fraction, direction, subset_log2_fc
+
+try:
+    __version__ = _version("wade-rnaseq")
+except PackageNotFoundError:                      # pragma: no cover - source tree, not installed
+    __version__ = "0+unknown"
 
 __all__ = [
     "ALTERNATIVES",
@@ -79,48 +58,32 @@ __all__ = [
     "Counts",
     "DEFAULT_MAX_PROBS",
     "DEFAULT_NPERMS",
-    "GPDFit",
     "GeneDetail",
-    "SubsetResult",
+    "RESULT_COLUMNS",
     "WadeResult",
-    "WadeStats",
     "affected_fraction",
     "as_counts",
     "bh_adjust",
-    "bridge",
-    "characterization_ci",
     "condition",
     "detectability_floor",
     "direction",
     "draw_jitter",
-    "fit_fold_change",
     "draw_perms",
-    "gpd_tail_p",
     "library_qc",
     "library_sizes",
-    "log_ratio_curve",
     "manifest",
-    "mean_diff_null",
-    "mean_diff_stat",
     "null_statistics",
-    "permutation_space",
-    "one_count",
     "perm_pvalues",
+    "permutation_space",
     "plot_drivers",
     "plot_gene",
     "plot_linked",
     "plot_stages",
     "plot_volcano",
     "probability_grid",
-    "strata_indices",
-    "RESULT_COLUMNS",
     "subset_drivers",
     "subset_log2_fc",
-    "subset_test",
-    "thin_counts",
-    "to_frame",
     "tpm_like",
-    "type7_quantiles",
     "wade",
     "wade_contrast",
     "wade_gene",

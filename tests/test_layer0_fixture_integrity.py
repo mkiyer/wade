@@ -116,7 +116,7 @@ def test_fixtures_are_non_square_where_it_matters():
 def test_suite_covers_both_group_size_parities():
     """Hazard 1 needs an even *and* an odd larger group.
 
-    The odd-length example in ``docs/implementation-notes.md`` cannot separate
+    The odd-length example in ``CONTRIBUTING.md`` cannot separate
     quantile types 1, 2 and 7 at all — it agrees across all three. A suite
     built only on odd lengths would pass with type 1 substituted.
     """

@@ -204,7 +204,7 @@ _fig
 **Scope.** Simulated data with planted ground truth, so every result below is
 checkable against something known. This is not a benchmark; see
 Section 7. For what WADE cannot do, read
-[`docs/limits.md`](../docs/limits.md).
+[`docs/method.md`](../docs/method.md) §10.
 :::
 
 # 2. Methods Overview
@@ -235,7 +235,7 @@ $$R(p) = \log_2 Q_1(p) - \log_2 Q_0(p).$$
 
 **Stage 2's null is the gene's own fitted global shift, not equality.** A gene
 with both a shift and a subset is reported as both. The shift is estimated by
-binomial thinning of the raw counts (`method.md` 10.3).
+binomial thinning of the raw counts (`method.md` 9.3).
 
 **The stages are never combined.** No pooled p-value, no categorical label.
 Benjamini-Hochberg is applied within each stage separately.
@@ -689,13 +689,13 @@ wade.plot_drivers(res, REP["subset 15% at 8x"], counts,
 The failure mode this detects is not hypothetical. On plasma cfRNA, libraries
 detecting half as many genes as their peers and holding a third of their mass in
 ten genes topped the subset ranking of thousands of genes at once
-(`docs/scaling.md` 7.2). Planting twelve such libraries among the 300 cases
+(`docs/manual.md` §8). Planting twelve such libraries among the 300 cases
 reproduces it.
 
 ```{python}
 #| echo: false
 #| output: asis
-# scaling.md 7.2 in miniature. Twelve anomalous libraries among the 300 cases:
+# The artefact-library check of the manual, in miniature. Twelve anomalous libraries among the 300 cases:
 # each detects 55% fewer genes and piles its mass into a handful, one of which
 # is renamed ARTEFACT. Three such libraries were not enough for WADE to call
 # the gene at all -- 3 of 300 is a 1% subset, below the resolution floor -- so
@@ -812,7 +812,7 @@ md_table(pl.DataFrame(_t))
 ```
 
 ```python
-res.report()                        # dict of arrays
+res.columns()                       # dict of arrays, in the written order
 res.to_frame()                      # polars DataFrame
 wade.write_results(res, "out.tsv")  # TSV + JSON manifest
 ```
@@ -833,8 +833,8 @@ attempted here.
 
 # 8. Performance and Scalability
 
-Measurements are maintained in [`docs/scaling.md`](../docs/scaling.md) beside
-the hypothesis each tested; `tools/bench_scaling.py` reproduces them.
+The timing and memory tables are in [`docs/manual.md`](../docs/manual.md) §6;
+`tools/bench_scaling.py` reproduces them.
 
 ```{python}
 #| echo: false
@@ -882,7 +882,8 @@ A fast path that changes a number is opt-in and documents what it changes.
 
 **P-value resolution.** On a 31,000 x 83,000 cohort, 18.8% of genes sit at the
 mean-shift floor. Ordering past the floor is addressed by magnitude and the
-permutation z-scores; a calibrated tail probability is not (`scaling.md` 4).
+permutation z-scores; a calibrated tail probability is not
+(`docs/pvalue-review.md`).
 
 **Composition.** Library-size normalization couples genes, so a
 signal-saturated matrix distorts `affected_fraction` and `direction`. The

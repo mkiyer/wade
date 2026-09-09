@@ -1,36 +1,26 @@
-"""The subset test and the characterization statistics.
+"""The subset test and the characterization statistics (``docs/method.md`` §3–4).
 
-Implements ``docs/method.md`` sections 3 and 4.
+WADE asks two questions, and this module answers the second one: **is the
+difference confined to a subset of samples?** Everything is read off the
+log-ratio curve ``R(p) = log2 Q_case(p) - log2 Q_ctrl(p)``, the scale on which
+a global fold change is flat regardless of its magnitude.
 
-WADE asks two questions, and this module answers the second one:
-
-1. Is there a difference?  ->  :mod:`wade.stats`, the mean-shift test.
-2. **Is the difference confined to a subset of samples?**  -> here.
-
-Everything is read off the **log-ratio curve**
-
-    R(p) = log2 Q_case(p) - log2 Q_ctrl(p)
-
-which is the scale on which a global fold change is *flat* regardless of its
-magnitude. On the absolute scale a 2x shift produces a difference curve that is
-itself concentrated at high quantiles and is not distinguishable from a subset
-effect -- measured, the same characterization statistic reads a pure 2x shift
-as 0.70 on the absolute scale and 0.98 on this one.
-
-Nothing here takes a threshold. There is no tail fraction, no window width, no
-rounding rule and no guard factor: the user is never asked what shape of
-difference to look for, which is the defect that made COPA require re-running at
-every percentile cutoff.
+Nothing here takes a threshold: no tail fraction, no window width, no rounding
+rule. The user is never asked what shape of difference to look for.
 """
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
 
 from .quantiles import capped_nprobs, probability_grid, type7_quantiles
 from .stats import split_groups
+from .thinning import gene_chunks
+
 
 __all__ = [
     "log_ratio_curve",
@@ -38,7 +28,6 @@ __all__ = [
     "affected_fraction",
     "direction",
     "subset_log2_fc",
-    "shift_correct",
     "SubsetResult",
     "subset_test",
     "characterization_ci",
@@ -76,9 +65,7 @@ def bridge(r: np.ndarray) -> np.ndarray:
     Two properties make it the right object:
 
     * **Exactly invariant to a global fold change.** ``R -> R - c`` sends
-      ``S_k -> S_k - kc`` and leaves ``B_k`` unchanged. This is what lets the
-      observed statistic stay untouched while only its null is rebuilt
-      (see :func:`shift_correct`).
+      ``S_k -> S_k - kc`` and leaves ``B_k`` unchanged.
     * **Orthogonal to the total by construction**, so scanning it is not
       re-testing the mean shift. Measured correlation with the log fold change
       under the null: +0.02.
@@ -210,81 +197,30 @@ def subset_log2_fc(r: np.ndarray) -> np.ndarray:
     return np.where(down, bottom, top)
 
 
-def shift_correct(x: np.ndarray, cond: np.ndarray, r: np.ndarray) -> np.ndarray:
-    """Divide out the estimated global fold change, per gene.
-
-    **This is the whole reason the shape test works**, and getting it wrong is
-    not subtle. It is the correction for *continuous* data and for an
-    continuous data, reachable through ``thin=False``; for raw counts
-    :func:`wade.wade` uses binomial thinning instead
-    (:mod:`wade.thinning`, ``docs/method.md`` §10.3), because a division does
-    not make count groups exchangeable at low expression.
-
-    Permutation generates the null of *no difference at all*. The shape test's
-    null is *a pure global shift* — the mean shift is the hypothesis being
-    argued against. Permuting data that still contains a real shift produces
-    groups that are mixtures of shifted and unshifted samples, whose spread
-    does not match the shift model, so the standardization's denominator comes
-    out too small. Measured, that error fires the test on **14-19%** of genuine
-    global fold changes; correcting first restores exact nominal level (0.040 /
-    0.045 / 0.050 at fold changes of 1.5 / 2 / 8) at no cost in power.
-
-    The shift is estimated by the **median** of ``R``, not the mean: a subset
-    signal moves the top quantiles and leaves the median alone, so estimating
-    the shift this way does not quietly remove the signal being tested for.
-
-    The observed statistic needs no adjustment — :func:`bridge` is exactly
-    shift-invariant — so this matrix is used *only* to generate the null.
-    """
-    x = np.asarray(x, dtype=np.float64)
-    cond = np.asarray(cond)
-    shift = 2.0 ** np.median(r, axis=1)
-    out = x.copy()
-    out[:, cond == 1] /= shift[:, None]
-    return out
-
-
 @dataclass(frozen=True)
 class SubsetResult:
     """Everything the subset test produces.
 
-    Two curves are kept. ``r`` is the **characterization** curve — the
-    log-ratio of the observed quantiles (with the pseudocount), which
-    ``affected_fraction`` and ``direction`` are read from and which
-    :func:`wade.plot_gene` draws. ``r_test`` is the curve the **statistic** was
-    computed on: the same thing for the division correction (the bridge is
-    exactly invariant to it) but the thinned matrix's curve under thinning,
-    which is not (``docs/method.md`` §10.3).
+    ``r`` is the characterization curve — the log-ratio of the observed
+    quantiles, with the pseudocount — which ``affected_fraction``,
+    ``direction`` and ``subset_log2_fc`` are read from and which
+    :func:`wade.plot_gene` draws. The statistic itself is computed on the
+    thinned matrix's curve, which is not kept.
     """
 
     statistic: np.ndarray     # (g,)   max_k standardized bridge
     null: np.ndarray | None   # (g, B) the permutation null
     r: np.ndarray             # (g, m) the log-ratio curve (characterization)
-    b: np.ndarray             # (g, m) its bridge
     affected_fraction: np.ndarray  # (g,) effective fraction of samples that differ
     direction: np.ndarray          # (g,) -1 all down .. +1 all up
-    argmax_k: np.ndarray      # (g,)   width at which the scan peaked (diagnostic:
-                              #        NOT a fraction estimate — it is several-fold
-                              #        low when a subset's values are replaced
-                              #        rather than scaled; affected_fraction is the
-                              #        estimator, method.md §3)
+    argmax_k: np.ndarray      # (g,)   width at which the scan peaked. A diagnostic,
+                              #        not a fraction estimate (method.md §3)
     shift: np.ndarray         # (g,)   the fitted global fold change the null was built under
-    r_test: np.ndarray | None = None   # (g, m) the curve the statistic was computed on
-    correction: str = "division"       # "division" or "thinning"
 
     @property
     def subset_log2_fc(self) -> np.ndarray:
         """The subset's magnitude — see :func:`subset_log2_fc`."""
         return subset_log2_fc(self.r)
-
-        return self.argmax_k / self.r.shape[1]
-
-
-
-def _bridge_from(x: np.ndarray, cond: np.ndarray, q: np.ndarray) -> np.ndarray:
-    i1, i0 = split_groups(cond)
-    return bridge(log_ratio_curve(type7_quantiles(x[:, i1], q),
-                                  type7_quantiles(x[:, i0], q)))
 
 
 def _resolve_pseudocount(pseudocount, shape) -> np.ndarray | None:
@@ -294,12 +230,14 @@ def _resolve_pseudocount(pseudocount, shape) -> np.ndarray | None:
         return None
     pc = np.asarray(pseudocount, dtype=np.float64)
     if pc.ndim == 0:
-        return None if float(pc) == 0.0 else np.full(shape, float(pc))
-    if pc.ndim == 1:
+        if float(pc) == 0.0:
+            return None
+        pc = np.full(shape, float(pc))
+    elif pc.ndim == 1:
         if pc.shape[0] != shape[1]:
             raise ValueError(f"a per-sample pseudocount needs {shape[1]} values, got {pc.shape[0]}")
-        return np.broadcast_to(pc[None, :], shape).copy()
-    if pc.shape != shape:
+        pc = np.broadcast_to(pc[None, :], shape).copy()
+    elif pc.shape != shape:
         raise ValueError(f"pseudocount must be a scalar, a per-sample vector or a {shape} array; got {pc.shape}")
     if np.any(pc < 0) or not np.all(np.isfinite(pc)):
         raise ValueError("pseudocount must be finite and non-negative")
@@ -310,12 +248,12 @@ def subset_test(
     x: np.ndarray,
     cond: np.ndarray,
     perms: np.ndarray,
+    corrected: np.ndarray,
+    shift: np.ndarray,
     *,
     alternative: str = "two-sided",
     backend: str = "auto",
     pseudocount=None,
-    corrected: np.ndarray | None = None,
-    shift: np.ndarray | None = None,
     max_probs: int | None = None,
 ) -> SubsetResult:
     """Scan the bridge over every window width, against a global-shift null.
@@ -331,9 +269,18 @@ def subset_test(
     having looked — which is the direct answer to COPA's defect of requiring a
     percentile cutoff and therefore having to be run at several.
 
+    **The null is a global shift, not "no difference".** Permuting data that
+    contains a real shift produces groups that are mixtures of shifted and
+    unshifted samples, and the test then fires on 14–19% of genuine global
+    fold changes. So both the observed statistic and the null are computed on
+    ``corrected``: the matrix made exchangeable under the fitted global shift
+    by binomial thinning (:mod:`wade.thinning`, ``docs/method.md`` §9.3).
+    The observed statistic is read off it too, because the bridge is not
+    invariant to thinning.
+
     Two passes over the permutations are unavoidable: the first estimates
     ``mu_k`` and ``sigma_k``, which the second needs in order to standardize
-    before maximizing. Both run on the shift-corrected matrix.
+    before maximizing.
 
     ``alternative`` selects which end of the distribution the concentration
     must sit at. ``"two-sided"`` (the default) scans ``|Z_k|`` and detects
@@ -349,20 +296,18 @@ def subset_test(
 
     Parameters
     ----------
+    x
+        The normalized matrix, genes x samples; the characterization curve
+        is read off it.
+    corrected, shift
+        The thinned, normalized matrix (same shape as ``x``) and the per-gene
+        fold change it was thinned under (:func:`wade.thinning.fit_fold_change`,
+        :func:`wade.thinning.thin_counts`).
     pseudocount
         Added to every value before the log-ratio curve is taken — a scalar
         in the matrix's units, a per-sample vector, or a genes x samples
         array. :func:`wade.wade` passes one count in each cell's normalized
-        units (``docs/method.md`` §10.4); ``None`` means none.
-    corrected, shift
-        A matrix already made exchangeable under the fitted global shift
-        (thinned counts, normalized — :mod:`wade.thinning`) and the fold
-        change it was built under. When given, **both** the observed
-        statistic and the null are computed on it, because the bridge is not
-        invariant to thinning. When omitted, the continuous-data correction
-        applies: divide the case columns by ``2**median(R)`` for the null and
-        leave the observed statistic alone, which the bridge's exact
-        invariance to division permits.
+        units (``docs/method.md`` §9.4); ``None`` means none.
     max_probs
         Caps the grid at large cohorts, exactly as :func:`wade.wade_stats`
         does (``docs/method.md`` §1). ``affected_fraction``'s resolution
@@ -383,46 +328,26 @@ def subset_test(
 
     # The characterization curve: observed quantiles, pseudocounted.
     r_obs = log_ratio_curve(type7_quantiles(xp[:, i1], q), type7_quantiles(xp[:, i0], q))
-    b_obs = bridge(r_obs)
+
+    corrected = np.asarray(corrected, dtype=np.float64)
+    if corrected.shape != x.shape:
+        raise ValueError(f"corrected must have the matrix's shape {x.shape}, got {corrected.shape}")
+    shift = np.asarray(shift, dtype=np.float64)
+    if shift.shape != (x.shape[0],):
+        raise ValueError(f"shift must have one value per gene; got {shift.shape}")
+    xs = corrected if pc is None else corrected + pc
+    b_test = bridge(log_ratio_curve(type7_quantiles(xs[:, i1], q),
+                                    type7_quantiles(xs[:, i0], q)))
 
     from .permutation import subset_null_backend
 
-    if corrected is not None:
-        # Thinning: the matrix is exchangeable under the fitted shift, and the
-        # observed statistic is read off it too (docs/method.md 10.3).
-        corrected = np.asarray(corrected, dtype=np.float64)
-        if corrected.shape != x.shape:
-            raise ValueError(f"corrected must have the matrix's shape {x.shape}, got {corrected.shape}")
-        if shift is None:
-            raise ValueError("pass the fitted fold change as shift= alongside corrected=")
-        shift = np.asarray(shift, dtype=np.float64)
-        xs = corrected if pc is None else corrected + pc
-        r_test = log_ratio_curve(type7_quantiles(xs[:, i1], q), type7_quantiles(xs[:, i0], q))
-        b_test = bridge(r_test)
-        how = "thinning"
-    else:
-        # Division: the null is generated under the fitted global shift, not
-        # under no-difference. b_obs is unchanged by this because bridge() is
-        # exactly shift-invariant; only the null moves. With a pseudocount the
-        # invariance is not exact (x/f + c is not a constant log shift), so
-        # the observed curve is then re-read off the corrected matrix too.
-        xs = shift_correct(x, cond, r_obs)
-        shift = 2.0 ** np.median(r_obs, axis=1)
-        if pc is None:
-            r_test, b_test = r_obs, b_obs
-        else:
-            xs = xs + pc
-            r_test = log_ratio_curve(type7_quantiles(xs[:, i1], q), type7_quantiles(xs[:, i0], q))
-            b_test = bridge(r_test)
-        how = "division"
-
-    stat, null, mu, sd, argmax = subset_null_backend(
+    stat, null, _mu, _sd, argmax = subset_null_backend(
         xs, b_test, perms, q, alternative=alternative, backend=backend
     )
     return SubsetResult(
-        statistic=stat, null=null, r=r_obs, b=b_obs,
+        statistic=stat, null=null, r=r_obs,
         affected_fraction=affected_fraction(r_obs), direction=direction(r_obs),
-        argmax_k=argmax, shift=shift, r_test=r_test, correction=how,
+        argmax_k=argmax, shift=shift,
     )
 
 
@@ -440,35 +365,23 @@ def characterization_ci(
 ) -> dict[str, np.ndarray]:
     """Bootstrap percentile intervals for the five per-gene descriptors —
     ``affected_fraction``, ``direction``, ``subset_log2_fc``, ``log2_fc`` and
-    ``mean_shift`` — ``docs/method.md`` §10.5.
+    ``mean_shift`` — ``docs/method.md`` §9.5.
 
     Samples are resampled **within each group** with replacement, the
     log-ratio curve is recomputed on the same grid with the same pseudocount,
-    and the three numbers are read off it. Returns a dict of ``(2, genes)``
-    arrays, lower row first.
+    and the descriptors are read off it. ``log2_fc`` is bootstrapped as the
+    log ratio of group means and ``mean_shift`` as their difference. Returns a
+    dict of ``(2, genes)`` arrays, lower row first.
 
     The interval is about sampling uncertainty in the *estimator*; it does
     not remove the estimator's known biases (a 2× step against 30% noise is a
     ramp and reads larger than the planted fraction; a two-level departure
-    reads as one effective fraction). ``log2_fc`` is bootstrapped as the log
-    ratio of group means, which is what the grid quadrature is on a balanced
-    design, and ``mean_shift`` as their difference — which is what the grid
-    quadrature is on a balanced design (``docs/method.md`` §2). ``subset_log2_fc``
-    is read off the same resampled curve as the other two descriptors, and it
-    is the interval that matters most in practice: it is the column to rank
-    subset findings by once ``p_subset`` saturates, so how wide it is decides
-    whether the ranking means anything.
+    reads as one effective fraction).
 
-    ``gene_chunk`` bounds the working set (``docs/scaling.md`` §2.2) and is
-    bit-identical to the unchunked call: the replicate index sets do not
-    depend on the genes, so they are drawn once, up front, in the same stream
-    order the unchunked loop draws them.
-
-    ``threads`` (default: all cores) runs the replicates concurrently —
-    ``docs/scaling.md`` §3.4. Also bit-identical, whatever the thread count:
-    the indices are predrawn, every replicate's arithmetic is self-contained,
-    and each writes its own rows. NumPy's sort releases the GIL, which is
-    where the time goes. ``threads=1`` is a serial run.
+    ``gene_chunk`` bounds the working set and ``threads`` (default: all
+    cores) runs the replicates concurrently. Both are bit-identical to the
+    plain call: the replicate index sets are drawn once, up front, and every
+    replicate's arithmetic is self-contained.
     """
     x = np.asarray(x, dtype=np.float64)
     cond = np.asarray(cond)
@@ -479,7 +392,6 @@ def characterization_ci(
     rng = np.random.default_rng(0) if rng is None else rng
     g = x.shape[0]
 
-    from .thinning import gene_chunks
     chunks = gene_chunks(g, gene_chunk)
     J1 = np.empty((n_boot, n1), dtype=np.intp)
     J0 = np.empty((n_boot, n0), dtype=np.intp)
@@ -490,7 +402,6 @@ def characterization_ci(
     aff = np.empty((n_boot, g)); dirn = np.empty((n_boot, g))
     lfc = np.empty((n_boot, g)); slfc = np.empty((n_boot, g)); ms = np.empty((n_boot, g))
     if threads is None:
-        import os
         threads = os.cpu_count() or 1
     for ch in chunks:
         x_ch = x[ch]
@@ -508,7 +419,6 @@ def characterization_ci(
                 lfc[b, ch] = np.log2(m1 / m0)
                 ms[b, ch] = m1 - m0
 
-        from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
             list(pool.map(one_replicate, range(n_boot)))
     lo_q, hi_q = 100 * (1 - level) / 2, 100 * (1 + level) / 2

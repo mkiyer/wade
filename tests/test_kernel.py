@@ -1,13 +1,8 @@
 """The Rust kernel, validated against the layer-5 null matrices.
 
-``ROADMAP.md`` puts this last for a reason: **establish parity on
-readable code before optimizing.** If the NumPy implementation and the
-kernel had been written together, a numerical disagreement with the R
-would have two candidate causes — a port error or an optimization error
-— and no way to tell them apart. Written in order, the NumPy path was
-validated against the R first, so the kernel now has a baseline that is
-already known to be correct and any disagreement has exactly one
-explanation.
+The NumPy path is the contract: it was validated against the fixtures
+first, so the kernel has a baseline already known to be correct and any
+disagreement has exactly one explanation.
 
 The kernel is therefore held to **two** standards, and both matter:
 

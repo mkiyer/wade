@@ -33,11 +33,12 @@ class Theme:
         house = replace(THEMES["light"], case="#7b3fa0", ctrl="#3fa07b")
         plot_volcano(res, theme=house)
 
-    ``font`` and ``plotly_template`` are read by the plotly renderer only.
-    matplotlib's fonts are left to matplotlib: typesetting is not this layer's
-    job (``docs/plotting.md``), and the template is plotly's own concept — it
-    has to follow the theme or a dark figure is a light slab with dark points.
+    Every colour is a ``#rrggbb`` hex string; ``surface`` in particular is
+    split into channels for translucent label boxes. ``font`` and
+    ``plotly_template`` are read by the plotly renderer only; matplotlib's
+    fonts are left to matplotlib.
     """
+
 
     #: Titles, axis labels, the log-ratio curve, direct point labels.
     ink: str
@@ -138,7 +139,8 @@ def _axis_label(name: str) -> str:
 #: The README's reading table, keyed by (mean-shift significant, subset significant).
 QUADRANTS = {
     (True, False): "global shift",
-    (True, True): "subset, strong enough\nto move the mean",
-    (False, True): "distributional change,\nno net mean shift",
+    (True, True): "subset, strong enough to move the mean",
+    (False, True): "distributional change, no net mean shift",
     (False, False): "not differential",
 }
+

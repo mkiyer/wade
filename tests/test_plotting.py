@@ -100,7 +100,7 @@ def res_meta():
 
 @pytest.fixture(scope="module")
 def res_drivers():
-    """``docs/scaling.md`` §7.2 in miniature, and the two genes are built to be
+    """``docs/manual.md`` §8 in miniature, and the two genes are built to be
     the two real cases rather than merely different.
 
     ``BAD`` are three libraries that detect half as many genes as their peers
@@ -291,8 +291,10 @@ def test_volcano_colour_options(res, res_nosubset):
     # is as far as the data layer goes; the theme resolves it to a colormap.
     v = P.volcano_data(res, color="w1")
     np.testing.assert_array_equal(v.color, res.w1)
-    assert v.color_spec["range"] is None and v.color_spec["role"] == "sequential"
-    assert P.volcano_data(res, color="log2_fc").color_spec["role"] == "diverging"
+    assert v.color_spec["range"] == (res.w1.min(), res.w1.max())
+    assert v.color_spec["role"] == "sequential"
+    lfc = P.volcano_data(res, color="log2_fc").color_spec
+    assert lfc["role"] == "diverging" and lfc["range"][0] == -lfc["range"][1] < 0
     # ... and a supplied per-gene array, for anything WADE cannot know about
     own = np.arange(float(G))
     np.testing.assert_array_equal(P.volcano_data(res, color=own).color, own)
@@ -377,7 +379,7 @@ def test_stages_table_and_labels(res):
 def test_every_dataclass_has_a_table_of_the_results_own_numbers(res):
     """The chart's table-view twin, on all three.
 
-    This is the seam ``docs/plotting.md`` promises: the exact numbers a figure
+    This is the seam ``CONTRIBUTING.md`` promises: the exact numbers a figure
     draws, reachable without reading them off the pixels, and what a third
     renderer or an export to ggplot is written against. Columns must be equal
     length and must be the result's own values, not a re-derivation.
@@ -862,7 +864,7 @@ def _overlapping_label_pairs(data):
 def test_labels_are_placed_without_colliding(res):
     """The alternate-above-and-below scheme this replaced left 24 overlapping
     pairs out of 8 labels on this data; the slot assignment leaves 0–1. Numbers
-    and method are in ``docs/plotting.md``."""
+    and method are in ``CONTRIBUTING.md``."""
     for d in (P.volcano_data(res, "mean_shift", label=8),
               P.volcano_data(res, "subset", label=8),
               P.stages_data(res, label=8)):
@@ -1065,7 +1067,7 @@ def test_the_driver_panel_is_subset_drivers_and_library_qc_and_not_a_re_derivati
 def test_the_driver_panel_separates_an_artefact_from_a_genuine_hit(res_drivers):
     """The figure exists for exactly this call, and it is the check that
     reversed a tempting Ewing-sarcoma reading of a real cohort
-    (``docs/scaling.md`` §7.2)."""
+    (``docs/manual.md`` §8)."""
     res, counts = res_drivers
     art = P.driver_panel(res, "ARTEFACT", counts)
     gen = P.driver_panel(res, "GENUINE", counts)

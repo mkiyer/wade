@@ -11,7 +11,7 @@ default correction — binomial thinning of the counts, with a one-count
 pseudocount on the log-ratio curve. An earlier version of this file generated
 continuous lognormal values, a pure multiplicative model in which the
 division correction is exact and the count regime is never exercised; that is
-how the low-expression failure in S10.2 went unnoticed. ``test_scale.py``
+how the low-expression failure in S9.2 went unnoticed. ``test_scale.py``
 covers the expression levels below a few counts, this file the ordinary one.
 
 Library sizes are fixed at 1 and ``norm_factor`` at 1, so a normalized value
@@ -271,7 +271,7 @@ def test_the_shift_correction_is_what_delivers_specificity():
     """Assert the mechanism, not just the outcome — and rank the three of them.
 
     Stage 2's null is *a global fold change*, not no-difference, and how that
-    null is built is the whole design (docs/method.md S3, S10.3). Three ways to
+    null is built is the whole design (docs/method.md S3, S9.3). Three ways to
     build it, measured here on a genuine 2x at 50 counts:
 
     * **no correction** — permute the raw matrix, which tests against
@@ -307,7 +307,9 @@ def test_the_shift_correction_is_what_delivers_specificity():
 
     b_obs = bridge(r_obs)
     none = rate(x, b_obs)
-    division = rate(wade.subset.shift_correct(x, COND, r_obs), b_obs)
+    divided = x.copy()
+    divided[:, COND == 1] /= (2.0 ** np.median(r_obs, axis=1))[:, None]
+    division = rate(divided, b_obs)
 
     # counts already are the scale, so the fit's per-cell alpha is all ones
     unit_alpha = lambda rows=slice(None): np.ones(counts[rows].shape)   # noqa: E731
@@ -328,7 +330,7 @@ def test_shape_test_refuses_a_grid_too_small_to_have_a_bridge():
     cond = np.r_[np.ones(6, int), np.zeros(2, int)]
     x = _nb(rng, MU, (4, 8)) + PSEUDO
     with pytest.raises(ValueError, match="at least 3 grid points"):
-        subset_test(x, cond, wade.draw_perms(cond, 10, seed=1))
+        subset_test(x, cond, wade.draw_perms(cond, 10, seed=1), x, np.ones(4))
 
 
 def test_affected_fraction_is_robust_to_signal_shape_and_the_scan_argmax_is_not():
@@ -355,7 +357,7 @@ def test_affected_fraction_is_robust_to_signal_shape_and_the_scan_argmax_is_not(
     for shape in ("multiply", "replace"):
         for frac in (0.05, 0.10, 0.25):
             x = np.array([gen(shape, frac) for _ in range(60)])
-            res = subset_test(x, COND, perms)
+            res = subset_test(x, COND, perms, x, np.ones(len(x)))
             # argmax_k / m — the width the scan chose, computed here rather than
             # carried as a property nothing else consumed.
             scan_fraction = res.argmax_k / res.r.shape[1]

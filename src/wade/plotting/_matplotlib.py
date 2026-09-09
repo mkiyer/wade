@@ -7,6 +7,8 @@ inside each renderer, never here.
 
 from __future__ import annotations
 
+import textwrap
+
 import numpy as np
 
 from .data import DRIVER_PANELS, _interval_arms, _label_positions
@@ -191,8 +193,9 @@ def _stages_mpl(data, theme, *, title, width, height):
     }
     for key, text in QUADRANTS.items():
         pos = corners[key]
-        n = counts[text.replace("\n", " ")]
-        ax.text(pos["x"], pos["y"], f"{text}\n{n} genes", transform=ax.transAxes,
+        ax.text(pos["x"], pos["y"], f"{textwrap.fill(text, 22)}\n{counts[text]} genes",
+                transform=ax.transAxes,
+
                 ha=pos["ha"], va=pos["va"], fontsize=8.5, color=theme.muted,
                 bbox=dict(facecolor=theme.surface, alpha=0.8, edgecolor="none", pad=3))
     ax.set_xlabel(data.xlabel)

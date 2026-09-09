@@ -1,12 +1,10 @@
 """Diagnostics: the single-gene curves, per-library QC, and subset attribution.
 
-R's ``wade_gene()``. The downstream reading of this panel is what makes
-the statistic legible — on the log-ratio curve ``r`` a global fold change
-is flat, a rare high-expressing subset sits at zero and then climbs near
-``p = 1``, and a single-outlier gene stays flat and then spikes at the
-last node. The second and third are not distinguishable from this curve
-alone; separating them is the permutation p-value's job.
-:func:`wade.plot_gene` draws it.
+On the log-ratio curve ``r`` a global fold change is flat, a rare
+high-expressing subset sits at zero and then climbs near ``p = 1``, and a
+single-outlier gene stays flat and then spikes at the last node. The second
+and third are not distinguishable from this curve alone; separating them is
+the permutation p-value's job. :func:`wade.plot_gene` draws it.
 """
 
 from __future__ import annotations
@@ -44,33 +42,16 @@ def wade_gene(
 
     Takes normalized values, not counts, and not the matrix. ``pseudocount``
     (a scalar, or one value per sample) is added before the log-ratio curve
-    ``r`` is taken, as the subset stage does (``docs/method.md`` §10.4); the
+    ``r`` is taken, as the subset stage does (``docs/method.md`` §9.4); the
     quantile functions ``y1``/``y0`` and the cumulative area stay raw.
     ``max_probs`` caps the grid as the test does (``§1``); pass the run's
     value — :meth:`wade.WadeResult.gene_detail` does — so the curves here are
     the ones the statistics were read from.
 
-    Why the reversal happens *after* the statistic, not before
-    ----------------------------------------------------------
-    Two reasons, and only the second is about floating point.
-
-    The statistics are computed on the **descending** grid the test uses;
-    the reversal here is for display only, so the curve reads left to right
-    in increasing quantile. Doing it in this order is what keeps the plotted
-    curve consistent with the numbers the test produced.
-
-    Second, reversing changes the summation order. The curve is built so
-    that ``cumulative_area[-1] == mean_shift``, and in exact arithmetic that is
-    trivially true — but ``mean_shift`` sums ``D`` forwards while the
-    endpoint accumulates it backwards. Measured in the R over 2,000 random
-    rows, the two differ bitwise in about two thirds of genes, at a worst
-    relative difference of 3.5e-14. **So the endpoint identity is a
-    tolerance assertion, not an exact one.** It is still the cheapest
-    correctness test the implementation has and it is asserted in the test
-    suite.
-
-    Note the division is by ``nprobs`` — the full grid size — at every
-    point, not by the number of terms accumulated so far.
+    The statistics are computed on the descending grid the test uses and
+    reversed here for display only. ``cumulative_area[-1]`` equals
+    ``mean_shift`` up to summation order (it accumulates in the opposite
+    direction), so that identity is a tolerance assertion, not an exact one.
     """
     row = np.asarray(row, dtype=np.float64)
     if row.ndim != 1:
@@ -109,9 +90,8 @@ def wade_gene(
 def library_qc(counts: np.ndarray, *, top_n: int = 10, normalizer=None) -> dict:
     """Per-library depth, complexity and concentration.
 
-    Three numbers per sample, and they have the same status as the
-    combinatorial floor in ``docs/limits.md``: properties of the **data** to
-    look at *before* trusting a run, not knobs.
+    Three numbers per sample: properties of the **data** to look at *before*
+    trusting a run.
 
     ``depth``
         Column total. Library size on the count scale.
@@ -124,11 +104,9 @@ def library_qc(counts: np.ndarray, *, top_n: int = 10, normalizer=None) -> dict:
     Why they matter to *this* test: a library that detects half as many genes
     as its peers, and holds a third of its mass in ten of them, is an extreme
     outlier in every gene it does detect — and a distributional test will
-    faithfully report a subset in each of those genes. Measured on real plasma
-    cfRNA, a handful of such libraries topped the subset ranking of thousands
-    of genes at once and produced a thoroughly convincing false story
-    (``notebooks/rna100k.qmd``, "Who drives a subset?"). Complexity was what
-    separated them from a genuine finding; cross-gene recurrence was not.
+    faithfully report a subset in each of those genes. On real plasma cfRNA a
+    handful of such libraries topped the subset ranking of thousands of genes
+    at once; complexity was what separated them from a genuine finding.
 
     ``normalizer`` (a per-gene vector or genes x samples matrix) computes the
     shares on the rate scale ``counts / normalizer`` instead of on raw counts,
@@ -162,7 +140,7 @@ def subset_drivers(res, gene, *, k: int | None = None) -> dict:
     """Which samples drive one gene's subset call.
 
     The affected region is the gene's own ``affected_fraction`` — the top
-    ``ceil(affected_fraction * nprobs)`` case samples by normalized value, or
+    ``ceil(affected_fraction * n_case)`` case samples by normalized value, or
     the bottom ones when ``direction`` is negative — so no threshold is
     introduced here either. ``k`` overrides that width for exploration.
 
@@ -189,7 +167,8 @@ def subset_drivers(res, gene, *, k: int | None = None) -> dict:
     frac = res.subset.affected_fraction[i]
     if k is None:
         frac = 1.0 if not np.isfinite(frac) else float(frac)
-        k = int(np.clip(np.ceil(frac * res.nprobs), 1, case_cols.size))
+        k = int(np.clip(np.ceil(frac * case_cols.size), 1, case_cols.size))
+
     else:
         k = int(np.clip(k, 1, case_cols.size))
     down = np.nan_to_num(res.subset.direction[i]) < 0

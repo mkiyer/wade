@@ -12,11 +12,10 @@ one you get set by a property of your data rather than by anything we choose.
 Stage 1 now has a good answer. **Stage 2 does not**, and that is what we would
 most like help with.
 
-> **Provenance.** `docs/scaling.md` §4.5–§4.10 is the canonical record inside
-> the project; this file is the self-contained version for a reader without
-> the code. Where they disagree, `scaling.md` is right and this is stale.
-> Every number here is measured against brute-force permutation — never
-> simulated from theory — and each table states its permutation count.
+> **Provenance.** This is the self-contained account for a reader without
+> the code. Every number here is measured against brute-force permutation —
+> never simulated from theory — and each table states its permutation count.
+> The harness is `tools/pvalue_study.py` (Appendix C).
 
 ---
 
@@ -393,7 +392,7 @@ assignment *is* a permutation), which is why the fixed-endpoint GPD works
 there. **Stage 2's is not approached.** The whole fixed-endpoint family is
 therefore closed for stage 2, for a structural reason rather than for want of
 a tighter bound — so an answer to question 1 that relies on the endpoint will
-not work here either. Full measurements in `scaling.md` §4.11.
+not work here either.
 
 ### 3. Should stage 2's studentisation be frozen?
 
@@ -500,7 +499,7 @@ same ground is not covered twice.
   subset effect already makes `R` descending, so sorting is a no-op — survival
   0, `p` 0, on 16/24 and 17/24 genes. A corrected relaxation bound is valid (zero
   violations in 96,000,000 gene-permutations) and still anti-conservative to
-  0.007, for the structural reason in question 2. `scaling.md` §4.11.
+  0.007, for the structural reason in question 2.
 
 * *Apply the expensive estimator only to the ~18% of genes at the empirical
   floor, keeping the run under two minutes.* The tiering is right; the

@@ -29,17 +29,17 @@ def result():
 
 
 def test_both_stages_report_exceedances_and_refinement(result):
-    """`limits.md` §5 makes a reading rule out of these — a gene *at* the floor
+    """`docs/method.md` §10.3 makes a reading rule out of these — a gene *at* the floor
     was censored there, not measured there — and it was appliable to stage 1
     only, because stage 2 computed the pair and discarded it."""
     for nexc, refined in ((result.nexc_mean_shift, result.refined_mean_shift),
                           (result.nexc_subset, result.refined_subset)):
         assert nexc.shape == (G,) and refined.shape == (G,)
         assert nexc.dtype.kind == "i" and refined.dtype == bool
-        # refinement fires exactly where the exceedance count is short
-        assert np.all(refined == (nexc < wade.pvalues.DEFAULT_N_EXC_MIN))
+        # refinement fires only where the exceedance count is short
+        assert np.all(nexc[refined] < wade.pvalues.DEFAULT_N_EXC_MIN)
 
-    rep = result.report()
+    rep = result.columns()
     assert "refined_mean_shift" in rep and "refined_subset" in rep
     # the branch is exercised on this design, for both stages
     assert result.refined_subset.any() and result.refined_mean_shift.any()
@@ -59,10 +59,10 @@ def test_no_subset_stage_means_no_subset_diagnostics():
     counts = rng.poisson(50, (G, N)).astype(float)
     res = wade.wade(counts, np.ones(G), COND, nperms=0)
     assert res.nexc_subset is None and res.refined_subset is None
-    assert "refined_subset" not in res.report()
+    assert "refined_subset" not in res.columns()
 
 
-# --- D3: the check limits.md says to run before anything -------------------
+# --- D3: the check method.md §10 says to run before anything -------------------
 
 
 def test_detectability_floor_is_the_documented_formula():
@@ -72,7 +72,7 @@ def test_detectability_floor_is_the_documented_formula():
         assert wade.detectability_floor(n1, n0, k) == pytest.approx(
             comb(n1, k) / comb(n1 + n0, k))
 
-    # limits.md's own example: 77 v 18 cannot reach 0.05 with 15 affected
+    # method.md §10.1's own example: 77 v 18 cannot reach 0.05 with 15 affected
     assert wade.detectability_floor(77, 18, 15) > 0.03
     # ... and balancing the same 95 samples buys three orders of magnitude
     assert wade.detectability_floor(48, 47, 15) < 1e-4

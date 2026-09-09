@@ -1,4 +1,4 @@
-"""The count-native shift correction — ``docs/method.md`` §10.3–10.5, :mod:`wade.thinning`.
+"""The count-native shift correction — ``docs/method.md`` §9.3–9.5, :mod:`wade.thinning`.
 
 Unit properties of the three pieces (the fitted fold change, the thinning,
 the one-count pseudocount), then the wiring through the public entry points:
@@ -55,7 +55,7 @@ def test_midmean_is_defined_where_a_median_is_zero():
 
 def test_fitted_fold_change_is_unbiased_for_an_nb_global_shift_at_low_and_moderate_counts():
     """The interquartile-mean *ratio* reads 2.08 for a true 2 on skewed counts;
-    matching after thinning reads 2.00 (method.md 10.3)."""
+    matching after thinning reads 2.00 (method.md 9.3)."""
     rng = np.random.default_rng(1)
     for mu in (2.0, 20.0):
         counts = np.c_[_nb(rng, 2 * mu, (100, N1)), _nb(rng, mu, (100, N0))]
@@ -172,33 +172,15 @@ def counts():
     return c
 
 
-def test_wade_uses_thinning_by_default_and_division_on_request(counts):
+def test_wade_thins_under_the_fitted_fold_change(counts):
     res = wade.wade(counts, np.ones(60), COND, nperms=100, seed=1)
-    assert res.subset.correction == "thinning" and res.params["correction"] == "thinning"
-    assert res.subset.r_test is not None and not np.array_equal(res.subset.r_test, res.subset.r)
     assert res.fitted_fold_change.shape == (60,)
     assert abs(np.median(res.fitted_fold_change[:5]) - 2.0) < 0.25
-    res_div = wade.wade(counts, np.ones(60), COND, nperms=100, seed=1, thin=False)
-    assert res_div.subset.correction == "division"
-    # Stage 1 is untouched by either choice.
-    np.testing.assert_array_equal(res.p_mean_shift, res_div.p_mean_shift)
-    np.testing.assert_array_equal(res.tpm, res_div.tpm)
+    # Stage 1 never sees the thinned matrix.
+    res_nosub = wade.wade(counts, np.ones(60), COND, nperms=100, seed=1, subset=False)
+    np.testing.assert_array_equal(res.p_mean_shift, res_nosub.p_mean_shift)
+    np.testing.assert_array_equal(res.tpm, res_nosub.tpm)
 
-
-def test_thin_false_falls_back_to_the_division_correction(counts):
-    """``thin=False`` is the only way to reach the division correction now that
-    there is no pre-normalized entry point. It is kept because
-    ``tests/test_scale.py`` uses it to *demonstrate* why thinning exists — on
-    counts at low expression the division fires on genuine global shifts — not
-    because it is an analysis option."""
-    res = wade.wade(counts, np.ones(60), COND, nperms=100, seed=1, thin=False)
-    assert res.subset.correction == "division"
-    assert res.fitted_fold_change is not None
-    # the bridge is exactly invariant to a division, so with no pseudocount the
-    # observed curve is untouched and only the null moves
-    res0 = wade.wade(counts, np.ones(60), COND, nperms=100, seed=1, thin=False,
-                     pseudocount=0.0)
-    np.testing.assert_array_equal(res0.subset.r, res0.subset.r_test)
 
 def test_the_pseudocount_is_one_count_in_each_samples_units_and_can_be_switched_off(counts):
     res = wade.wade(counts, np.ones(60), COND, nperms=50, seed=1)
@@ -228,7 +210,7 @@ def test_results_are_reproducible_from_the_seed_and_stage1_is_unchanged_by_the_n
 def test_non_integer_counts_are_accepted_and_rounded_for_the_thinning(counts):
     est = counts + np.random.default_rng(0).uniform(-0.3, 0.3, counts.shape).clip(-counts, None)
     res = wade.wade(est, np.ones(60), COND, nperms=50, seed=1)
-    assert res.subset.correction == "thinning"
+    assert res.subset is not None
     np.testing.assert_array_equal(res.tpm.shape, est.shape)
 
 

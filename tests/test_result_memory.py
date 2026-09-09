@@ -6,7 +6,7 @@ matrix it came from, measured, and a caller still holding their own counts
 paid 4x. Two of the three are *derived*: the jitter is a seeded draw and the
 pseudocount is ``norm_factor / (norm * lib)`` scaled. Both are now rebuilt on
 access from things the result already keeps, which is the difference between
-19 GB and 60 GB on a 30,000 x 80,000 cohort (``docs/scaling.md`` §2.3).
+19 GB and 60 GB on a 30,000 x 80,000 cohort (``ISSUES.md`` item 7).
 
 The contract has two halves and both are load-bearing:
 
