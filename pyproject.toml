@@ -6,8 +6,8 @@ build-backend = "maturin"
 # The distribution is `wade-rnaseq` (the PyPI name `wade` belongs to an unrelated
 # project); the import name is `wade`.
 name = "wade-rnaseq"
-version = "0.1.0"
-description = "Wasserstein Area Differential Expression: a two-stage differential-distribution test for RNA-seq counts, built for subset detection"
+version = "0.2.0"
+description = "Exact Wasserstein distribution tests for RNA-seq, with descriptive bulk and tail effects"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-only"
@@ -33,20 +33,23 @@ Issues = "https://github.com/mkiyer/wade/issues"
 [project.optional-dependencies]
 # Everything the statistic needs is NumPy. Each extra adds one capability.
 io = ["polars>=1.0"]                                  # to_frame() and write_results()
-plot = ["plotly>=6", "matplotlib>=3.8", "anywidget>=0.9"]   # the figures; either backend alone works
-saddlepoint = ["scipy>=1.10"]                         # stage1="saddlepoint"
-all = ["polars>=1.0", "plotly>=6", "matplotlib>=3.8", "anywidget>=0.9", "scipy>=1.10"]
-test = ["pytest>=7", "scipy>=1.10", "polars>=1.0", "pandas>=2.0"]
+plot = ["plotly>=6", "matplotlib>=3.8"]   # the figures; either backend alone works
+all = ["polars>=1.0", "plotly>=6", "matplotlib>=3.8"]
+test = ["pytest>=7", "scipy>=1.11", "polars>=1.0", "pandas>=2.0"]
 
 [tool.maturin]
 python-source = "src"
 module-name = "wade._kernel"
 features = ["pyo3/extension-module"]
+# Keep the private workbench, local evidence and historical illustrations
+# in the checkout, out of release archives. Current figures are notebook outputs.
+exclude = ["notebooks/rna100k.qmd", ".release/**", "notebooks/results/**", "archive/**", "research/**", "docs/figures/**"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "research/tests"]
+pythonpath = ["research"]
+norecursedirs = ["archive", ".release", "target", ".git"]
 markers = [
-    "parity: asserts agreement with the committed golden fixtures",
     "validation: method-validation simulations, not parity",
     "kernel: requires the compiled Rust kernel",
 ]

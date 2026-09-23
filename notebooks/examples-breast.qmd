@@ -1,0 +1,199 @@
+---
+title: "TCGA breast: subtypes and expression heterogeneity"
+subtitle: "WADE 0.2.0 · single-test release candidate · review pending"
+format:
+  html:
+    html-math-method: mathml
+    include-in-header: _mathjax-quiet.html
+    toc: true
+    embed-resources: true
+    fig-dpi: 150
+    code-tools: true
+  typst:
+    toc: true
+    papersize: us-letter
+jupyter: python3
+execute:
+  warning: false
+  echo: false
+---
+
+```{python}
+#| label: setup
+import sys
+from pathlib import Path
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import polars as pl
+import wade
+sys.path.insert(0, str(Path.cwd().parent / "tools"))
+import tcga_examples as TC
+from notebook_support import output_dir, markdown_table, export_table
+OUT = output_dir("breast")
+cohort = TC.load_cohort("breast", OUT)
+PANEL = TC.BREAST_PANEL
+SHOW = ["gene","status","bulk_shift","upper_tail","lower_tail","padj"]
+def table(frame,name):
+    markdown_table(frame,OUT,name)
+```
+
+## Prespecified design
+
+Use full **gene counts** and one library per patient and sample class. The
+primary unpaired comparison retains eligible normal-adjacent samples and
+excludes their paired tumours, leaving independent patients. Technical and
+population exclusions are fixed before gene testing; cases are not removed
+because they weaken a signal. Exact retained IDs and exclusions are exported.
+
+RLE is fitted on the full measured gene universe after primary sample selection.
+The prespecified example test mask requires at least 10 counts in five pooled
+samples and pooled mean CPM at least 0.1, using the eligible input cohort.
+This is an example recipe, not a universal threshold. Test filtering reuses
+the fitted factors. Expression is `log2(count / size_factor + 1)`; no noise is
+added. Repeated observations, depth and tissue mixture remain relevant to
+interpretation. The upstream count processing/reference record remains a
+release documentation requirement.
+
+```{python}
+#| label: accounting
+#| output: asis
+primary_meta = cohort.meta[cohort.independent.tolist()]
+table(primary_meta.group_by("group").len(),"primary-accounting")
+```
+
+## Whole-transcriptome distribution test
+
+Use exact empirical W1 and the production stopping rule, cap 499,999, seed 1.
+BH corrects the complete retained family once. Display markers were fixed in
+advance; their inclusion does not imply significance. A q-value tests the gene's
+whole distribution, not its bulk sign or a particular tail.
+
+```{python}
+#| label: primary
+#| output: false
+res = TC.run(cohort,cohort.independent,OUT,"primary")
+annotation_values = TC.annotation_expression(cohort,res,PANEL)
+export_table(annotation_values,OUT,"panel-expression-annotations")
+```
+
+```{python}
+#| label: transcriptome-calls
+#| output: asis
+calls=int(np.sum(res.padj <= .05))
+table(pl.DataFrame({"Tested genes":[int(res.tested.sum())],"Distribution calls":[calls],
+                    "Called fraction":[calls/res.tested.sum()]}),"transcriptome-calls")
+```
+
+These broad call sets require review of the normalization reference, tissue
+mixture and technical effects. Marker recovery does not establish their
+real-data false discovery proportion.
+
+{{< pagebreak >}}
+
+```{python}
+#| label: panel
+#| output: asis
+table(TC.panel_table(res,PANEL).select(SHOW),"primary-panel")
+```
+
+```{python}
+#| label: fig-patterns
+#| fig-cap: "Bulk shift and upper-decile difference relative to bulk. Color records the single distribution-test call. All tested genes are shown."
+TC.plot_bulk_tail(res,["ERBB2","ESR1","PGR","KRT5","MKI67"])
+```
+
+```{python}
+#| label: fig-library-qc
+#| fig-cap: "Library depth, detection and concentration before gene filtering. These diagnostics do not correct confounding or establish technical causes."
+TC.plot_qc(cohort,res)
+```
+
+## Breast subtypes
+
+PAM50 subtype labels are expression-derived and illustrate biology; recovery
+of subtype markers is not independent validation. HER2-enriched is not
+synonymous with clinical HER2 positivity, and basal-like is not synonymous
+with triple-negative disease. Unknown and normal-like labels remain separate.
+The [TCGA breast study](https://www.nature.com/articles/nature11412) and the
+frozen cBioPortal annotations describe the source. DNA copy-number calls and
+clinical receptor assays provide complementary measurements, not a new cohort.
+
+```{python}
+#| label: subtype-coverage
+#| output: asis
+table(primary_meta.filter(pl.col("group")=="tumor").group_by("subtype").len().sort("subtype"),"subtype-coverage")
+```
+
+```{python}
+#| label: fig-erbb2
+#| fig-cap: "ERBB2 distributions and quantile effects in the independent primary tumour-versus-normal comparison."
+res.plot_gene("ERBB2")
+```
+
+```{python}
+#| label: fig-subtypes
+#| fig-cap: "Observed patient expression by supplied subtype. Points receive horizontal display jitter only; inference uses the original counts without added noise."
+groups=["Normal-adjacent"]+TC.SUBTYPES+["Normal-like","Unknown"]
+labels=np.where(primary_meta["group"].to_numpy()=="normal","Normal-adjacent",primary_meta["subtype"].to_numpy())
+colors=["#7d8790","#4b9e9a","#6986b5","#bd556f","#b58b3b","#9f80b0","#c1c5ca"]
+fig,axes=plt.subplots(2,3,figsize=(11,7),layout="constrained")
+rng=np.random.default_rng(17)
+for ax,gene in zip(axes.flat,["ERBB2","GRB7","ESR1","PGR","KRT5","MKI67"]):
+    values=res.expression[res.gene_index(gene)]
+    for j,(group,color) in enumerate(zip(groups,colors)):
+        v=values[labels==group]
+        if len(v):
+            ax.scatter(j+rng.uniform(-.17,.17,len(v)),v,s=5,alpha=.3,color=color,linewidths=0)
+            ax.boxplot([v],positions=[j],widths=.4,showfliers=False,boxprops={"color":color})
+    ax.set(title=gene,xticks=range(len(groups)),xticklabels=groups,ylabel="log₂(normalized count + 1)")
+    ax.tick_params(axis="x",labelrotation=65,labelsize=8)
+fig
+```
+
+{{< pagebreak >}}
+
+## Prespecified tumour-subtype contrasts
+
+Compare each of the four named subtypes with the other three, excluding
+normal-like and unknown from these contrasts while retaining their accounting
+above. The tumour reference fit is frozen before the contrasts. Each contrast
+uses the same eligible genes and seed, with a prespecified 99,999 cap. An additional BH correction
+covers all finite gene × four-contrast p-values together. This is an exploratory
+expression-label association family, not independent validation of PAM50. The
+minimum raw p-value is 1e-5; the four-contrast correction can therefore require
+several discoveries together. This budget does not resolve an isolated
+discovery in the combined family.
+
+```{python}
+#| label: subtype-tests
+#| output: false
+subtype_idx=np.flatnonzero(((cohort.meta["group"]=="tumor") & cohort.meta["subtype"].is_in(TC.SUBTYPES)).to_numpy())
+subtype_names=cohort.meta["subtype"].to_numpy()[subtype_idx]
+contrasts={name:TC.run(cohort,subtype_idx,OUT,"subtype-"+str(j),
+                      condition=(subtype_names==name).astype(int),reference="subtypes",max_permutations=99_999)
+           for j,name in enumerate(TC.SUBTYPES)}
+all_p=np.concatenate([r.pvalue for r in contrasts.values()])
+all_q=wade.bh_adjust(all_p).reshape(len(contrasts),-1)
+frames=[]
+for j,(name,r) in enumerate(contrasts.items()):
+    frame=r.to_frame().with_columns(subtype=pl.lit(name),q_four_contrasts=pl.Series(all_q[j]))
+    frames.append(frame)
+all_contrasts=pl.concat(frames)
+export_table(all_contrasts,OUT,"all-subtype-contrasts")
+```
+
+```{python}
+#| label: subtype-panel
+#| output: asis
+table(all_contrasts.filter(pl.col("gene").is_in(["ERBB2","ESR1","KRT5","MKI67"])).select(
+    "subtype","gene","bulk_shift","upper_tail","q_four_contrasts"),"subtype-panel")
+```
+
+## Review status
+
+All subtype and primary results, including missed display markers, are retained.
+Figures and results require user approval before release. The new single-test
+outputs supersede the earlier two-stage breast analysis. No sample-level rarity
+or inferred subtype membership is claimed.

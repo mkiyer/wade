@@ -33,8 +33,9 @@ def test_version_comes_from_pyproject():
 def test_every_declared_marker_is_used_and_every_used_marker_declared():
     declared = set(re.findall(r'^\s*"(\w+): ', PYPROJECT, re.M))
     used = set()
-    for f in (ROOT / "tests").glob("test_*.py"):
-        used |= set(re.findall(r"pytest\.mark\.(\w+)", f.read_text(encoding="utf-8")))
+    for folder in ("tests", "research/tests"):
+        for f in (ROOT / folder).glob("test_*.py"):
+            used |= set(re.findall(r"pytest\.mark\.(\w+)", f.read_text(encoding="utf-8")))
     used -= {"parametrize", "skipif", "xfail", "skip", "filterwarnings", "usefixtures"}
     assert used <= declared, f"markers used but not declared: {sorted(used - declared)}"
     assert declared <= used, f"markers declared but unused: {sorted(declared - used)}"
@@ -67,6 +68,6 @@ def test_importing_wade_costs_only_numpy():
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-@pytest.mark.parametrize("extra", ["test", "plot", "io", "saddlepoint", "all"])
+@pytest.mark.parametrize("extra", ["test", "plot", "io", "all"])
 def test_optional_extras_are_declared(extra):
     assert re.search(rf"^{extra} = \[", PYPROJECT, re.M), f"extra {extra!r} not declared"

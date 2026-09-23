@@ -1,0 +1,157 @@
+---
+title: "WADE, DESeq2 and OUTRIDER"
+subtitle: "WADE 0.2.0 · single-test release candidate · review pending"
+format:
+  html:
+    html-math-method: mathml
+    include-in-header: _mathjax-quiet.html
+    toc: true
+    embed-resources: true
+    fig-dpi: 150
+    code-tools: true
+  typst:
+    toc: true
+    papersize: us-letter
+jupyter: python3
+execute:
+  warning: false
+  echo: false
+---
+
+```{python}
+#| label: setup
+import os,sys,json
+from pathlib import Path
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import polars as pl
+sys.path.insert(0,str(Path.cwd().parent/"tools"))
+from notebook_support import output_dir,markdown_table,export_table
+import comparison_support as CS
+OUT=output_dir("reference-benchmarks")
+ROOT=Path(os.environ["WADE_COMPARISON_RESULTS"])
+def table(frame,name,labels=None):
+    markdown_table(CS.as_polars(frame),OUT,name,display_names=labels)
+```
+
+These comparisons use recognizable public resources: compcodeR simulations,
+the airway RNA-seq experiment, the Schurch yeast replicate study, and the
+original OUTRIDER Kremer/GTEx-skin count backgrounds. Native method fits are
+preserved byte-for-byte and WADE is recomputed with the migrated public API.
+The [original reference protocol](../archive/development-20260923/docs/reference-benchmark-plan.md) records
+versions, sources, exclusions and the custom outlier injections.
+
+The purpose is an honest comparison of capabilities and limitations. WADE is
+intended to complement conventional DE in large cohorts, not replace DESeq2
+in small studies. Gene-level distribution tests and sample-gene outlier tests
+must retain their distinct hypotheses and multiple-testing families.
+
+## Conventional differential expression
+
+Unmodified compcodeR generation uses three replicates per sample size. The
+raw-count eligibility/reference universe is preserved from the native fit,
+and RLE factor parity is checked. WADE uses 49,999 shuffles, seed 20260919,
+no noise and one distribution q-value. Native DESeq2 and edgeR retain their
+own fitting and filtering behavior. Larger gene families have a p-value floor
+of 2e-5 at this cap, so isolated discoveries can be unresolved.
+
+```{python}
+#| label: reference-tables
+reference,reference_source=CS.load(ROOT,"reference",OUT)
+outlier,outlier_source=CS.load(ROOT,"outlier",OUT)
+```
+
+```{python}
+#| label: fig-reference-power
+#| fig-cap: "Conventional compcodeR mean changes. All requested DE genes, including generator/test-filter losses, remain in the power denominator. Three matrices per size provide limited precision."
+sim=reference[reference.dataset.str.startswith("compcodeR")]
+summary=CS.summary(sim,["method","n_case"],"power")
+fig,ax=plt.subplots(figsize=(7,3.8),layout="constrained")
+for method,color in CS.COLORS.items():
+    part=summary[summary.method==method].sort_values("n_case")
+    if len(part):
+        ax.plot(part.n_case,part["mean"],"o-",color=color,label=method)
+        ax.fill_between(part.n_case,part.lo,part.hi,color=color,alpha=.12)
+ax.set(xlabel="Samples per group",ylabel="Requested DE genes recovered",ylim=(0,1))
+ax.legend()
+export_table(CS.as_polars(summary),OUT,"reference-power-summary")
+fig
+```
+
+```{python}
+#| label: reference-calibration
+#| output: asis
+table(CS.summary(sim,["method","n_case"],"fdp_distribution").drop(columns="n"),"reference-fdp-summary",
+    {"method":"Method","n_case":"Samples/group","mean":"Mean FDP","lo":"95% lower","hi":"95% upper"})
+table(reference[~reference.dataset.str.startswith("compcodeR")][["dataset","method","n_case","n_control","calls"]],"real-data-calls",
+    {"dataset":"Dataset","method":"Method","n_case":"Cases","n_control":"Controls","calls":"Calls"})
+```
+
+Airway and Schurch are real count matrices with known experimental labels;
+they do not provide comprehensive independent per-gene truth. Call counts or
+agreement on these data are not sensitivity/specificity estimates. Airway's
+paired donor design is preserved through within-donor label swaps.
+
+## OUTRIDER and related methods
+
+The native competitors are OUTRIDER's autoencoder, its PCA alternative, saseR,
+and OutSingle. Their sample-gene outputs remain visible. OutSingle supplies
+scores without native p-values. For a gene-level comparison, native p-values
+are aggregated over case samples by a conservative Bonferroni minimum-p
+operation and then BH across genes. This aggregation asks a different question
+from a cohort distribution test and does not become a native OUTRIDER gene test.
+
+Injected patterns on the original count backgrounds are our controlled pilot,
+not a reproduction of every published injection scheme. Global changes and
+mixed bulk mechanisms are evaluated as group alterations rather than insisting
+that a latent-factor outlier model call every shifted cell an outlier.
+Unmodified real cells are not known negatives. Consequently, calls outside the
+planted targets are reported as such, not mislabeled false discoveries.
+
+```{python}
+#| label: outlier-tables
+native=pd.read_csv(outlier_source/"native-scores.tsv",sep="\t")
+group=pd.read_csv(outlier_source/"group-scores.tsv",sep="\t")
+```
+
+{{< pagebreak >}}
+
+```{python}
+#| label: native-outlier-recall
+#| output: asis
+table(native[["background","method","changed_cells","changed_cell_recall","apparent_cell_average_precision"]],"native-outlier-summary",
+    {"background":"Background","method":"Method","changed_cells":"Changed cells",
+     "changed_cell_recall":"Cell recall","apparent_cell_average_precision":"Apparent AP"})
+```
+
+```{python}
+#| label: fig-outlier-gene-recall
+#| fig-cap: "Gene-level recovery of injected upward patterns, split by real count background. Native case-minP aggregation and WADE distribution tests retain different hypotheses. The horizontal axis uses the selected case count; multiplying zero counts can leave some targets unchanged. One injection matrix per background does not supply a replicated calibration study."
+fig,axes=plt.subplots(1,2,figsize=(10,4),layout="constrained",sharey=True)
+colors=dict(CS.COLORS,**{"OUTRIDER-AE case-minP":"#775aa5","OUTRIDER-PCA case-minP":"#af91ce",
+                         "saseR case-minP":"#4e923c"})
+for ax,background in zip(axes,["kremer","gtex-skin"]):
+    part=group[(group.background==background)&(group.pattern=="up")]
+    for method in part.method.unique():
+        rows=part[part.method==method].sort_values("realized_prevalence")
+        ax.plot(rows.realized_prevalence,rows.recall,"o-",ms=3,label=method,color=colors[method])
+    ax.set(title=background,xlabel="Selected case fraction",ylim=(0,1))
+axes[0].set_ylabel("Altered genes recovered")
+handles,labels=axes[0].get_legend_handles_labels()
+fig.legend(handles,labels,loc="outside upper center",ncol=3,fontsize=8)
+export_table(CS.as_polars(group),OUT,"outlier-group-results")
+fig
+```
+
+## Release interpretation
+
+The [sample-size notebook](benchmark.qmd) shows the larger replicated pattern
+screen. The [transcriptome confirmation](../archive/development-20260923/docs/transcriptome-workflow-validation.md)
+addresses full gene families, filtering, reference overlap and correlation in
+its stated bulk scope. Neither dataset choice nor a successful fit certifies
+universal FDR control. Sparse workflows, depth-confounded comparisons and
+predictive rare-event significance retain separate open research requirements.
+All tables, plots and conclusions here are pending approval.

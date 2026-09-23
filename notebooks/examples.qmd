@@ -1,0 +1,177 @@
+---
+title: "TCGA prostate: fusion-associated expression"
+subtitle: "WADE 0.2.0 · single-test release candidate · review pending"
+format:
+  html:
+    html-math-method: mathml
+    include-in-header: _mathjax-quiet.html
+    toc: true
+    embed-resources: true
+    fig-dpi: 150
+    code-tools: true
+  typst:
+    toc: true
+    papersize: us-letter
+jupyter: python3
+execute:
+  warning: false
+  echo: false
+---
+
+```{python}
+#| label: setup
+import sys
+from pathlib import Path
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import polars as pl
+import wade
+sys.path.insert(0, str(Path.cwd().parent / "tools"))
+import tcga_examples as TC
+from notebook_support import output_dir, markdown_table, export_table
+OUT = output_dir("prostate")
+cohort = TC.load_cohort("prostate", OUT)
+PANEL = TC.PROSTATE_PANEL
+SHOW = ["gene","status","bulk_shift","upper_tail","lower_tail","padj"]
+def table(frame,name):
+    markdown_table(frame,OUT,name)
+```
+
+## Prespecified design
+
+Use full **gene counts** and one library per patient and sample class. The
+primary unpaired comparison retains eligible normal-adjacent samples and
+excludes their paired tumours, leaving independent patients. Technical and
+population exclusions are fixed before gene testing; cases are not removed
+because they weaken a signal. Exact retained IDs and exclusions are exported. Every gene, normalization
+reference and stopping record is retained. All results and figures require
+user approval.
+
+RLE is fitted on the full measured gene universe after primary sample selection.
+The prespecified example test mask requires at least 10 counts in five pooled
+samples and pooled mean CPM at least 0.1, using the eligible input cohort.
+This is an example recipe, not a universal threshold. Test filtering reuses
+the fitted factors. Expression is `log2(count / size_factor + 1)`; no noise is
+added. Repeated observations, depth and tissue mixture remain relevant to
+interpretation. The upstream count processing/reference record remains a
+release documentation requirement.
+
+```{python}
+#| label: accounting
+#| output: asis
+primary_meta = cohort.meta[cohort.independent.tolist()]
+table(primary_meta.group_by("group").len(),"primary-accounting")
+```
+
+## Whole-transcriptome distribution test
+
+Use exact empirical W1 and the production stopping rule, cap 499,999, seed 1.
+BH corrects the complete retained family once. Display markers were fixed in
+advance; their inclusion does not imply significance. A q-value tests the gene's
+whole distribution, not its bulk sign or a particular tail.
+
+```{python}
+#| label: primary
+#| output: false
+res = TC.run(cohort,cohort.independent,OUT,"primary")
+annotation_values = TC.annotation_expression(cohort,res,PANEL)
+export_table(annotation_values,OUT,"panel-expression-annotations")
+```
+
+```{python}
+#| label: transcriptome-calls
+#| output: asis
+calls=int(np.sum(res.padj <= .05))
+table(pl.DataFrame({"Tested genes":[int(res.tested.sum())],"Distribution calls":[calls],
+                    "Called fraction":[calls/res.tested.sum()]}),"transcriptome-calls")
+```
+
+These broad call sets require review of the normalization reference, tissue
+mixture and technical effects. Marker recovery does not establish their
+real-data false discovery proportion.
+
+{{< pagebreak >}}
+
+```{python}
+#| label: panel
+#| output: asis
+table(TC.panel_table(res,PANEL).select(SHOW),"primary-panel")
+```
+
+```{python}
+#| label: fig-patterns
+#| fig-cap: "Bulk shift and upper-decile difference relative to bulk. Color records the single distribution-test call. All tested genes are shown."
+TC.plot_bulk_tail(res,PANEL[:5])
+```
+
+```{python}
+#| label: fig-library-qc
+#| fig-cap: "Library depth, detection and concentration before gene filtering. These diagnostics do not correct confounding or establish technical causes."
+TC.plot_qc(cohort,res)
+```
+
+## Fusion-associated expression
+
+The [TCGA prostate study](https://doi.org/10.1016/j.cell.2015.10.025) supplies
+fusion and expression-high annotations via the frozen cBioPortal study records.
+The exact source responses and checksums accompany the analysis. Fusion,
+expression-high, negative and unknown remain distinct. RNA-based ascertainment
+is not automatically independent of expression, and expression-high status is
+not a confirmed fusion.
+
+```{python}
+#| label: fusion-coverage
+#| output: asis
+rows=[]
+for gene in ["ERG","ETV1","ETV4","FLI1"]:
+    m=primary_meta.filter(pl.col("group")=="tumor")
+    for category in ["fusion","high","none",None]:
+        selected=m.filter(pl.col(gene+"_STATUS").is_null() if category is None else pl.col(gene+"_STATUS")==category)
+        rows.append(dict(gene=gene,annotation=category or "unknown",patients=selected.height))
+table(pl.DataFrame(rows),"fusion-coverage")
+```
+
+```{python}
+#| label: fig-etv1
+#| fig-cap: "ETV1 in the independent-patient primary cohort. An upper-tail description can coexist with a negative bulk shift."
+res.plot_gene("ETV1")
+```
+
+```{python}
+#| label: fig-etv4
+#| fig-cap: "ETV4 in the same primary cohort. The reported q-value is the actual current-method result, whether or not the marker is called."
+res.plot_gene("ETV4")
+```
+
+```{python}
+#| label: fig-erg
+#| fig-cap: "ERG provides a more prevalent fusion-associated expression example. No per-sample fusion membership is inferred by WADE."
+res.plot_gene("ERG")
+```
+
+```{python}
+#| label: fig-fusion-expression
+#| fig-cap: "ETV1 and ETV4 in the independent primary cohort, colored by supplied fusion annotations. Unknown and non-fusion tumours remain visible."
+m=primary_meta
+x=res.expression[res.gene_index("ETV1")]
+y=res.expression[res.gene_index("ETV4")]
+tumour=m["group"].to_numpy()=="tumor"
+a=(m["ETV1_STATUS"]=="fusion").fill_null(False).to_numpy() & tumour
+b=(m["ETV4_STATUS"]=="fusion").fill_null(False).to_numpy() & tumour
+fig,ax=plt.subplots(figsize=(6.6,4),layout="constrained")
+for label,mask,color,marker in [("Other/unknown tumours",tumour & ~a & ~b,"#a0aab3","o"),
+    ("ETV1 fusion",a,"#2675ac","o"),("ETV4 fusion",b,"#be4960","o"),
+    ("Normal-adjacent",~tumour,"#d99143","s")]:
+    ax.scatter(x[mask],y[mask],s=24,alpha=.75,color=color,marker=marker,label=label)
+ax.set(xlabel="ETV1: log₂(count / size factor + 1)",ylabel="ETV4: log₂(count / size factor + 1)")
+ax.legend(fontsize=9)
+fig
+```
+
+The plot is an annotation association, not a ground-truth FDR assessment.
+No inferred driver width or sample-level significance is reported. In particular,
+few normal samples can limit a recurrent-tail test even when the highest tumour
+values are extreme. This limitation motivates the later rarity work, but is
+not repaired by assigning another q-value to the same descriptive tail.

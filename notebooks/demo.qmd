@@ -1,16 +1,13 @@
 ---
-title: "Wasserstein Area Differential Expression"
-subtitle: "Demo and user guide"
+title: "WADE: one distribution test, clear descriptions"
+subtitle: "WADE 0.2.0 · single-test release candidate · review pending"
 format:
   html:
     html-math-method: mathml
     include-in-header: _mathjax-quiet.html
     toc: true
-    toc-depth: 3
-    toc-expand: 2
     embed-resources: true
     fig-dpi: 150
-    fig-align: center
     code-tools: true
   typst:
     toc: true
@@ -18,893 +15,154 @@ format:
 jupyter: python3
 execute:
   warning: false
+  echo: false
 ---
 
-<!--
-MASTER SOURCE. The demo dataset, the README's figures, and the numbers the
-README quotes all originate here; README.md embeds what this notebook writes to
-../docs/figures/. Regenerating those figures is `quarto render
-notebooks/demo.qmd`. There is no second dataset to drift from this one.
+WADE asks whether a gene's expression distribution differs between cohorts.
+Then it describes the bulk shift and tails. There is **one p-value and one
+q-value per gene**. This notebook demonstrates that contract on synthetic
+counts with known planted patterns; it is not a performance benchmark.
 
-Toolchain: Quarto, jupyter engine. `--to html` is self-contained and keeps
-plotly interactive without a kernel; `--to typst` produces a PDF using Quarto's
-bundled Typst, so no LaTeX install is required. `jupyter: python3` resolves to
-the conda env named `wade`; do not pin a named kernel.
-
-Section 7 is a signpost. The head-to-head belongs to notebooks/benchmark.qmd.
-
-MATH: html-math-method is `mathml`, not the default MathJax. Under
-`embed-resources: true` Quarto's inlined MathJax v2 cannot fetch its runtime
-extensions, so it fails to typeset and every equation renders as literal
-\\(...\\) in the page (measured: 78 of them). KaTeX was no better. MathML is
-converted at build time by pandoc, needs no JavaScript, no CDN and no network,
-and is supported by every current browser. Typst renders math natively, so the
-PDF was never affected.
-
-Sections are numbered BY HAND and `number-sections` must stay off in BOTH
-formats, or the numbers double up ("1 1. Introduction"). See the numbering note
-below for why automatic numbering was abandoned.
-
-RENDER TRAP, measured on Quarto 1.10.18: a STALE demo.html makes Quarto skip
-rewriting the figure files while still referencing them, so images silently
-break with "Could not fetch resource demo_files/figure-html/...". Deleting
-demo_files/ and .quarto/ is not enough. If figures go missing:
-
-    rm -rf notebooks/demo.html notebooks/demo_files notebooks/.quarto
-
-plotly.js is inlined once per plotly figure, about 5 MB each, so plotly is
-spent only where hover is the actual value: the both-stages volcano, and the
-one figure whose purpose is to compare the two renderers. Everything else is
-matplotlib, which is also the publication path.
-
-The simulation and the run happen in the `setup` cell so that figures can
-appear in the sections that discuss them. Section 5.2 displays the generator's
-real source with inspect.getsource, so there is one definition and no risk of
-the shown code drifting from the executed code.
--->
+## A complete workflow
 
 ```{python}
 #| label: setup
-#| echo: false
-import inspect
-import time
+import sys
 from pathlib import Path
-
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
-
 import wade
-from wade.permutation import HAVE_RUST_KERNEL
-
-FIGDIR = Path("../docs/figures")
-pl.Config(tbl_rows=25, tbl_cols=14, tbl_hide_dataframe_shape=True)
-
-PHI = 0.1                      # NB dispersion; biological CV about 0.32
-N1 = N0 = 300                  # cases, controls
-N_NULL, N_EACH = 3000, 15      # null genes, and genes per planted class
-
-#: prefix -> (label, construction, argument)
-CLASSES = {
-    "global2x":   ("global 2x",           "global", 2.0),
-    "up15pct":    ("subset 15% at 8x",    "up",     0.15),
-    "up5pct":     ("subset 5% at 8x",     "up",     0.05),
-    "twosided15": ("two-sided 15% at 2x", "both",   0.15),
-    "down10pct":  ("subset 10% at 1/8x",  "down",   0.10),
-}
-
-
-def nb(rng, mu, size):
-    """Negative binomial as a Poisson-Gamma mixture."""
-    return rng.poisson(rng.gamma(1 / PHI, PHI * mu, size=size)).astype(float)
-
-
-def gene(rng, mu, kind, arg):
-    """One gene's raw counts, cases first. `kind` plants the ground truth."""
-    ctrl, case = nb(rng, mu, N0), nb(rng, mu, N1)
-    if kind == "global":
-        case = nb(rng, mu * arg, N1)
-    elif kind in ("up", "down"):
-        k = round(arg * N1)
-        idx = rng.choice(N1, k, replace=False)
-        case[idx] = nb(rng, mu * (8.0 if kind == "up" else 1 / 8.0), k)
-    elif kind == "both":
-        # Half up and half down by the same factor: a spread that is symmetric
-        # on the log scale, which is the scenario `direction` is defined for.
-        k = round(arg * N1)
-        idx = rng.choice(N1, 2 * k, replace=False)
-        case[idx[:k]] = nb(rng, mu * 2.0, k)
-        case[idx[k:]] = nb(rng, mu / 2.0, k)
-    return np.r_[case, ctrl]
-
-
-def simulate(seed=0):
-    """Counts, gene names, the condition vector, and every gene's planted class."""
-    rng = np.random.default_rng(seed)
-    rows, names, truth = [], [], []
-    for i, mu in enumerate(10 ** rng.uniform(0, 3, N_NULL)):
-        rows.append(gene(rng, mu, "null", None))
-        names.append(f"null_{i}")
-        truth.append("null")
-    for prefix, (label, kind, arg) in CLASSES.items():
-        for i, mu in enumerate(10 ** rng.uniform(0.5, 3, N_EACH)):
-            rows.append(gene(rng, mu, kind, arg))
-            names.append(f"{prefix}_{i}")
-            truth.append(label)
-    cond = np.r_[np.ones(N1, int), np.zeros(N0, int)]
-    return (np.array(rows), np.array(names, dtype=object), cond,
-            np.array(truth, dtype=object))
-
-
-counts, gene_names, cond, truth = simulate()
-
-t0 = time.perf_counter()
-res = wade.wade(counts, np.ones(counts.shape[0]), cond,
-                nperms=2000, n_boot=200, seed=1, gene_names=gene_names)
-ELAPSED = time.perf_counter() - t0
-
-# One representative gene per class: the one whose affected_fraction is closest
-# to its class median, so no panel below is an unrepresentative outlier.
-REP = {}
-for _prefix, (_label, _k, _a) in CLASSES.items():
-    _i = np.flatnonzero(truth == _label)
-    _med = np.median(res.affected_fraction[_i])
-    REP[_label] = str(gene_names[_i[np.argmin(np.abs(res.affected_fraction[_i] - _med))]])
-
-def md_table(df, digits=3):
-    """A polars frame as a markdown table.
-
-    Quarto styles markdown tables properly in both HTML and PDF. The default
-    polars repr puts a dtype row under the header, quotes every string, and
-    prints full float precision, none of which belongs in a rendered document.
-    """
-    df = df.with_columns([pl.col(c).round(digits)
-                          for c, t in zip(df.columns, df.dtypes) if t.is_float()])
-    lines = ["| " + " | ".join(str(c) for c in df.columns) + " |",
-             "|" + "|".join("---" for _ in df.columns) + "|"]
-    for row in df.iter_rows():
-        lines.append("| " + " | ".join("" if v is None else str(v) for v in row) + " |")
-    print("\n".join(lines))
-
-
-def show_source(*fns):
-    """Render a function's real source as a highlighted block."""
-    print("```python")
-    print("\n\n".join(inspect.getsource(f).rstrip() for f in fns))
-    print("```")
+sys.path.insert(0, str(Path.cwd().parent / "tools"))
+from notebook_support import output_dir, markdown_table
+OUT = output_dir("demo")
+rng = np.random.default_rng(811)
+n_case = n_control = 200
+cond = np.r_[np.ones(n_case,int),np.zeros(n_control,int)]
+marker_names = ["Bulk increase", "Upper tail", "Bulk down + tail", "Opposing tails", "Unchanged"]
+names = [f"background_{j}" for j in range(800)] + marker_names
+mean = np.exp(rng.uniform(np.log(5),np.log(500),len(names)))
+mean[-5:] = 40
+mu = np.repeat(mean[:,None],len(cond),axis=1)
+mu[-5,:n_case] *= 2
+mu[-4,:20] *= 32
+mu[-3,:n_case] *= .5
+mu[-3,:20] *= 64
+mu[-2,:50] *= 3
+mu[-2,50:100] *= .1
+sf = 2**rng.uniform(-.5,.5,len(cond))
+counts = rng.negative_binomial(1/.15,1/(1+.15*mu*sf))
+data = wade.as_counts(counts,gene_names=names)
+np.savez_compressed(OUT / "simulation.npz", counts=counts, cond=cond, genes=np.asarray(names), known_factors=sf)
 ```
 
-# 1. Introduction
-
-Differential expression testing asks whether a gene's **mean** differs between
-two groups. For a difference confined to a subset of samples that question is
-the wrong one: a gene elevated eightfold in 5% of 300 cases moves the group mean
-by 35%, and the test reports nothing about how many samples were involved.
-
-WADE tests the **distributions**. It reports two results per gene — a shift of
-the whole distribution, and a difference confined to part of it — with a size
-and a direction for the second.
-
-@fig-intro is the consequence. Both genes have the same log2 fold change. The
-first is a global two-fold shift; the second is 15% of cases at eightfold. No
-mean-based test separates them.
+Prespecify sample QC and the normalization reference. RLE is appropriate here
+because most simulated genes are unchanged. Filtering acts on pooled counts
+and does not refit those factors.
 
 ```{python}
-#| label: fig-intro
-#| echo: false
-#| fig-cap: "Same log2 fold change, different distributional shape. Top row: the log-ratio curve R(p), dashed line at the fitted global shift. Bottom row: the two quantile functions."
-_fig = wade.plot_gene(res, gene=[REP["global 2x"], REP["subset 15% at 8x"]],
-                      backend="matplotlib", width=7.4, height=5.6)
-_fig
-```
-
-::: {.callout-note appearance="simple"}
-**Scope.** Simulated data with planted ground truth, so every result below is
-checkable against something known. This is not a benchmark; see
-Section 7. For what WADE cannot do, read
-[`docs/method.md`](../docs/method.md) §10.
-:::
-
-# 2. Methods Overview
-
-Derivation is in [`docs/method.md`](../docs/method.md) and the manuscript
-supplement. This section covers only what is needed to read the output.
-
-## 2.1 The log-ratio curve
-
-Let $Q_1(p)$ and $Q_0(p)$ be the case and control quantile functions on a grid
-of $m$ probabilities. WADE reads
-
-$$R(p) = \log_2 Q_1(p) - \log_2 Q_0(p).$$
-
-| shape of $R(p)$ | interpretation |
-|---|---|
-| flat at $c$ | global fold change of $2^c$ |
-| zero, then rising near $p = 1$ | subset of cases expressing higher |
-| falling near $p = 0$ | subset of cases expressing lower |
-| falling then rising | two-sided change |
-
-## 2.2 Two stages
-
-| stage | question | statistic | null |
-|---|---|---|---|
-| 1, mean shift | did the mean change? | area between $Q_1$ and $Q_0$ | label permutation |
-| 2, subset | is the change confined to part of the distribution? | departure of $R(p)$ from flat | permutation **under the fitted global shift** |
-
-**Stage 2's null is the gene's own fitted global shift, not equality.** A gene
-with both a shift and a subset is reported as both. The shift is estimated by
-binomial thinning of the raw counts (`method.md` 9.3).
-
-**The stages are never combined.** No pooled p-value, no categorical label.
-Benjamini-Hochberg is applied within each stage separately.
-
-## 2.3 Shape descriptors
-
-`affected_fraction`
-: Effective fraction of the distribution that differs. Equals $\pi$ for a clean
-  subset of size $\pi$ and $1.0$ for a global change.
-
-`direction`
-: $+1$ if the whole distribution moved up, $-1$ down, $0$ two-sided.
-
-`subset_log2_fc`
-: Fold change **within** the affected fraction, quantile-matched. For a
-  concentrated difference this is the magnitude to report, not `log2_fc`.
-
-## 2.4 Input requirements
-
-WADE takes **raw counts**. The continuity jitter is applied at count precision
-before normalization and stage 2's null is built by binomial thinning of reads;
-neither is reproducible from a pre-normalized matrix, and no entry point
-accepts one. Continuous input is out of scope.
-
-# 3. Installation
-
-```bash
-conda create -n wade python=3.12 numpy && conda activate wade
-pip install wade                # statistic only: one dependency
-pip install 'wade[plot]'        # + plotly, matplotlib
-pip install 'wade[io]'          # + polars, for to_frame / write_results
-pip install 'wade[linked]'      # + anywidget, for plot_linked
-```
-
-The statistic depends on NumPy alone. Both plotting backends are imported
-inside the plotting functions, so `import wade` loads neither.
-
-```{python}
-#| echo: false
-#| output: asis
-_rows = [("wade", wade.__version__), ("numpy", np.__version__)]
-for _m in ("polars", "plotly", "matplotlib", "anywidget"):
-    try:
-        _rows.append((_m, __import__(_m).__version__))
-    except Exception:
-        _rows.append((_m, "not installed"))
-_rows.append(("Rust kernel", "yes" if HAVE_RUST_KERNEL else "no, NumPy fallback"))
-md_table(pl.DataFrame(_rows, schema=["component", "version"], orient="row"))
-```
-
-# 4. Usage
-
-```python
-res = wade.wade(
-    counts,          # genes x samples, RAW counts (array, DataFrame, or sparse)
-    normalizer,      # per gene: effective length, intron count, or 1.0 for CPM
-    cond,            # 1 = case, 0 = control
-    nperms=2000,     # permutations; sets the p-value floor at 1/(B+1)
-    n_boot=200,      # bootstrap intervals for the shape descriptors
-    seed=1,
-    gene_names=...,  # optional; positional if omitted
-)
-```
-
-| argument | effect |
-|---|---|
-| `nperms` | Sets resolution, not only runtime: the empirical floor is $1/(B+1)$ |
-| `normalizer` | One normalizer. CPM is `normalizer=1.0`; other size factors enter via `lib_sizes=` |
-| `alternative` | `"two-sided"` (default), `"greater"`, `"less"` |
-| `n_boot` | 95% intervals for the five descriptors; `0` disables |
-| `gene_chunk` | Memory ceiling; bit-identical to a single-block run |
-| `strata` | Restricted permutation when samples are exchangeable only within groups |
-
-Input and output:
-
-```python
-counts = wade.as_counts(frame, sample_columns=[...])   # arrays, polars/pandas, sparse
-cond   = wade.condition(samples, "group", case="tumor", ctrl="normal")
-res.to_frame()                                         # polars DataFrame
-wade.write_results(res, "out.tsv")                     # + JSON manifest
-```
-
-WADE reads no files. Alignment between counts and metadata is strict and names
-the offending labels on failure.
-
-# 5. Simulated Dataset
-
-## 5.1 Design
-
-Negative-binomial counts, dispersion $\phi = 0.1$ (biological CV about 0.32),
-per-gene mean log-uniform over 1 to 1000 counts so the panel spans both the
-noise-dominated and the well-resolved range. 300 cases against 300 controls,
-$B = 2000$ permutations, 200 bootstrap replicates.
-
-| class | genes | construction | expected |
-|---|---|---|---|
-| null | 3000 | none | neither stage |
-| `global2x` | 15 | all cases $\times 2$ | stage 1; `affected` $\approx 1$ |
-| `up15pct` | 15 | 45 of 300 cases $\times 8$ | both stages; `affected` $\approx 0.15$ |
-| `up5pct` | 15 | 15 of 300 cases $\times 8$ | stage 2; near the combinatorial floor |
-| `twosided15` | 15 | 45 cases $\times 2$, 45 cases $\div 2$ | stage 2; `direction` $\approx 0$ |
-| `down10pct` | 15 | 30 of 300 cases $\div 8$ | stage 2; `direction` $\approx -1$ |
-
-::: {.callout-important appearance="simple"}
-**Null genes outnumber signal genes 40 to 1 by necessity.** Library-size
-normalization divides every gene by a column total that every gene contributes
-to, so excess signal distorts the null. The controlling quantity is the
-signal's share of **library mass**, not of gene count: at 45 signal genes in
-645 (7% of genes, 6.6% of mass) 186 of 600 null genes cleared BH from
-case-library inflation alone. This dataset's measured inflation is below.
-:::
-
-```{python}
-#| echo: false
-#| output: asis
-_sig = truth != "null"
-_case_mass = counts[:, cond == 1].sum()
-_extra = counts[_sig][:, cond == 1].sum() - counts[_sig][:, cond == 0].sum()
-md_table(pl.DataFrame({
-    "quantity": ["genes", "signal genes", "signal share of gene count",
-                 "signal-driven case-library inflation", "distortion threshold",
-                 "null genes: median log2_fc"],
-    "value": [f"{counts.shape[0]:,}", f"{int(_sig.sum())}", f"{_sig.mean():.1%}",
-              f"{_extra / _case_mass:.2%}", "about 10%",
-              f"{np.median(res.log2_fc[truth == 'null']):+.3f}"],
-}))
-```
-
-## 5.2 Generation
-
-```{python}
-#| label: src-gene
-#| echo: false
-#| output: asis
-show_source(nb, gene)
-```
-
-```{python}
-#| label: src-simulate
-#| echo: false
-#| output: asis
-show_source(simulate)
-```
-
-```{python}
-#| echo: false
-#| output: asis
-md_table(pl.DataFrame({"genes": [counts.shape[0]], "samples": [counts.shape[1]],
-                       "cases": [int(cond.sum())],
-                       "controls": [int((cond == 0).sum())]}))
-```
-
-## 5.3 Loading real data
-
-```python
-import polars as pl
-
-frame   = pl.read_csv("counts.tsv", separator="\t")   # gene_id + one column per sample
-samples = pl.read_csv("samples.tsv", separator="\t")
-
-counts = wade.as_counts(frame, sample_columns=samples["sample_id"].to_list())
-cond   = wade.condition(samples, "group", case="tumor", ctrl="normal",
-                        sample_names=counts.sample_names)
-res    = wade.wade(counts, counts.normalizer("intron_count"), cond, nperms=2000)
-```
-
-Any non-sample column of the frame is carried on `res.gene_meta` and is
-available to figures and tables. No statistic reads it.
-
-# 6. Results
-
-## 6.1 Execution
-
-```python
-res = wade.wade(counts, np.ones(counts.shape[0]), cond,
-                nperms=2000, n_boot=200, seed=1, gene_names=gene_names)
-```
-
-```{python}
-#| echo: false
-#| output: asis
-md_table(pl.DataFrame({
-    "quantity": ["genes x samples", "permutations", "bootstrap replicates",
-                 "realized grid size m", "Rust kernel", "wall clock"],
-    "value": [f"{counts.shape[0]:,} x {counts.shape[1]:,}", "2,000", "200",
-              str(res.nprobs), "yes" if HAVE_RUST_KERNEL else "no",
-              f"{ELAPSED:.1f} s"],
-}))
-```
-
-## 6.2 Results table
-
-One row per gene, 20 columns. Below, one representative gene per planted class:
-the gene whose `affected_fraction` is closest to its class median.
-
-```{python}
-#| echo: false
-#| output: asis
-_i = np.array([res.gene_index(g) for g in REP.values()])
-md_table(pl.DataFrame({
-    "class": list(CLASSES),
-    "gene": [str(gene_names[j]) for j in _i],
-    "log2_fc": res.log2_fc[_i].round(2),
-    "padj 1": [f"{v:.0e}" for v in res.padj_mean_shift[_i]],
-    "padj 2": [f"{v:.0e}" for v in res.padj_subset[_i]],
-    "affected": res.affected_fraction[_i].round(2),
-    "subset fc": res.subset_log2_fc[_i].round(2),
-    "dirn": res.direction[_i].round(2),
-}))
-```
-
-### Column groups
-
-| group | columns | use |
-|---|---|---|
-| identity | `gene` | the only column the statistic requires |
-| expression | `case_mean`, `ctrl_mean` | context |
-| stage 1 | `mean_shift`, `log2_fc`, `p_mean_shift`, `padj_mean_shift`, `neglog10_p_mean_shift`, `z_mean_shift`, `refined_mean_shift` | did the mean change |
-| stage 2 | `subset_stat`, `p_subset`, `padj_subset`, `neglog10_p_subset`, `z_subset`, `refined_subset` | is it confined to part of the distribution |
-| shape | `affected_fraction`, `subset_log2_fc`, `direction` | what kind of difference |
-| other | `w1` | 1-Wasserstein distance; reported, unused downstream |
-
-### Four ways to misread it
-
-1. **`log2_fc` is the whole gene's fold change; `subset_log2_fc` is the
-   affected part's.** For `up5pct` these differ by roughly 1.6 log2 units. A
-   concentrated difference is reported on the second.
-2. **`z_mean_shift` and `z_subset` rank; they are not p-values.** They are the
-   observed statistic against its own permutation null, the GSEA-NES analogue.
-   Passing them through a normal CDF is invalid.
-3. **`refined_*` marks a p-value from the GPD tail fit** rather than from
-   counting permutations. A gene reported *at* the floor $1/(B+1)$ has been
-   censored there, not measured there.
-4. **`padj` is BH within one stage.** The stages are never combined.
-
-## 6.3 Recovery of planted truth
-
-Class medians against what was planted. `padj 1` and `padj 2` are the two
-stages' adjusted p-values, `affected` is `affected_fraction`, `subset fc` is
-`subset_log2_fc`, `dirn` is `direction`, and `BH 2` counts the genes in the
-class clearing BH at FDR 0.05 on stage 2.
-
-```{python}
-#| echo: false
-#| output: asis
-QUAD = {(1, 0): "global shift", (1, 1): "subset, moves the mean",
-        (0, 1): "distributional, no mean shift", (0, 0): "not differential"}
-_rows = []
-for _label in ["null", *(v[0] for v in CLASSES.values())]:
-    _i = np.flatnonzero(truth == _label)
-    _m = lambda a: round(float(np.median(np.asarray(a)[_i])), 2)
-    _sm = np.median(res.padj_mean_shift[_i]) <= 0.05
-    _ss = np.median(res.padj_subset[_i]) <= 0.05
-    _rows.append({
-        "class": ["null", *CLASSES][len(_rows)], "n": len(_i),
-        "log2_fc": _m(res.log2_fc),
-        "affected": _m(res.affected_fraction),
-        "subset fc": _m(res.subset_log2_fc),
-        "dirn": _m(res.direction),
-        "BH 2": f"{int((res.padj_subset[_i] <= 0.05).sum())}/{len(_i)}",
-        "median quadrant": QUAD[(int(_sm), int(_ss))],
-    })
-md_table(pl.DataFrame(_rows))
-```
-
-Three rows in that table need stating.
-
-**`global2x` and `up15pct` share a `log2_fc` and differ in every shape
-column.** That is the pair in @fig-intro and the reason the method exists.
-
-**`direction` is scale-free, so it reports the sign of an arbitrarily small
-shift.** The null class reads `direction` well away from zero despite a median
-`log2_fc` near $-0.02$, because library-size normalization gives every null gene
-a slight negative offset which `direction` then normalizes to full scale.
-`affected_fraction` near 0.09 is the column that identifies these genes as null.
-Read `direction` only after a difference has been established.
-
-**A downward subset is harder to detect than an upward one of the same size.**
-Measured on this generator at 300 v 300, 15 genes per class: a 5% subset at
-$8\times$ clears BH in 15/15, a 5% subset at $1/8\times$ in 7/15 (median `padj`
-0.096). Compression toward zero counts costs resolution. The downward class
-here is planted at 10% for that reason.
-
-## 6.4 Figures
-
-Most figures here use **matplotlib**: it is the publication path (vector PDF or
-SVG, no browser) and it keeps this page small. Two use **plotly**, where hover
-carrying the gene name and every statistic on a 3,000-gene cloud is the point;
-that interactivity survives into this page without a kernel. Running the
-notebook live, any figure can be either — `backend=` selects one.
-
-Figures written to `../docs/figures/` are the ones `README.md` embeds. This
-notebook is their source.
-
-### Which genes? `plot_volcano`
-
-::: {.content-visible when-format="html"}
-
-```{python}
-#| label: fig-volcano
-#| fig-cap: "Effect size against significance for both stages, coloured by affected_fraction: dark is a concentrated difference, light a global one. Dashed line: the raw p at which BH rejects at FDR 0.05. Hover a point."
-wade.plot_volcano(res, stage="both", label=list(REP.values()),
-                  backend="plotly", height=520)
-```
-
-:::
-
-::: {.content-visible when-format="typst"}
-
-```{python}
-#| label: fig-volcano-static
-#| echo: false
-#| fig-cap: "Effect size against significance for both stages, coloured by affected_fraction: dark is a concentrated difference, light a global one. Dashed line: the raw p at which BH rejects at FDR 0.05."
-wade.plot_volcano(res, stage="both", label=list(REP.values()),
-                  backend="matplotlib", width=10.5, height=4.6)
-```
-
-:::
-
-The x axis is `log2_fc`. `mean_shift` is available as an axis but is in
-TPM-like units spanning several orders of magnitude across a transcriptome,
-which collapses the cloud onto a vertical line.
-
-On a large cohort p-values saturate at the resolution floor and the y axis
-becomes a line of ties. Either axis accepts any result column:
-
-```{python}
-#| label: fig-volcano-alt
-#| fig-cap: "Axes that do not saturate: the subset's own magnitude against the affected fraction. The five planted classes separate into distinct regions."
-wade.plot_volcano(res, stage="subset", x="subset_log2_fc", y="affected_fraction",
-                  label=list(REP.values()), backend="matplotlib", width=7.2, height=5.4)
-```
-
-### What kind of difference? `plot_stages`
-
-```{python}
-#| label: fig-stages
-#| fig-cap: "Stage 1 against stage 2. Quadrant boundaries are each stage's BH cutoff at FDR 0.05, so a gene's quadrant is exactly its pair of adjusted p-values."
-wade.plot_stages(res, label=list(REP.values()), backend="matplotlib",
-                 width=7.0, height=6.2)
-```
-
-```{python}
-#| echo: false
-#| output: asis
-from wade.plotting import stages_data
-_q = stages_data(res).counts()
-md_table(pl.DataFrame({"quadrant": list(_q), "genes": list(_q.values())}))
-```
-
-### What does this gene look like? `plot_gene`
-
-Rows: the log-ratio curve $R(p)$ against the dashed fitted global shift;
-`cumulative_area`, which is stage 1's statistic accumulating and whose last
-point is `mean_shift`; and the two quantile functions the curve above is a ratio
-of. The shaded band is the bootstrap interval on the edge of the affected
-region.
-
-::: {.panel-tabset}
-
-#### global 2x
-
-```{python}
-#| label: fig-panel-global-2x
-#| echo: false
-#| fig-cap: "global 2x"
-wade.plot_gene(res, gene=[REP["global 2x"]], backend="matplotlib",
-               cumulative_area=True, width=6.4, height=6.6)
-```
-
-#### subset 15% at 8x
-
-```{python}
-#| label: fig-panel-subset-15pct-at-8x
-#| echo: false
-#| fig-cap: "subset 15% at 8x"
-wade.plot_gene(res, gene=[REP["subset 15% at 8x"]], backend="matplotlib",
-               cumulative_area=True, width=6.4, height=6.6)
-```
-
-#### subset 5% at 8x
-
-```{python}
-#| label: fig-panel-subset-5pct-at-8x
-#| echo: false
-#| fig-cap: "subset 5% at 8x"
-wade.plot_gene(res, gene=[REP["subset 5% at 8x"]], backend="matplotlib",
-               cumulative_area=True, width=6.4, height=6.6)
-```
-
-#### two-sided 15% at 2x
-
-```{python}
-#| label: fig-panel-two-sided-15pct-at-2x
-#| echo: false
-#| fig-cap: "two-sided 15% at 2x"
-wade.plot_gene(res, gene=[REP["two-sided 15% at 2x"]], backend="matplotlib",
-               cumulative_area=True, width=6.4, height=6.6)
-```
-
-#### subset 10% at 1/8x
-
-```{python}
-#| label: fig-panel-subset-10pct-at-18x
-#| echo: false
-#| fig-cap: "subset 10% at 1/8x"
-wade.plot_gene(res, gene=[REP["subset 10% at 1/8x"]], backend="matplotlib",
-               cumulative_area=True, width=6.4, height=6.6)
-```
-
-:::
-
-```{python}
-#| label: fig-gene-readme
-#| echo: false
-#| fig-cap: "Three classes with different shape, side by side. Also written to docs/figures/gene.png, which README.md embeds."
-FIGDIR.mkdir(parents=True, exist_ok=True)
-_trio = [REP["global 2x"], REP["subset 15% at 8x"], REP["subset 5% at 8x"]]
-_fg = wade.plot_gene(res, gene=_trio, backend="matplotlib", width=10.5, height=6.0)
-_fg.savefig(FIGDIR / "gene.png", dpi=120, bbox_inches="tight")
-_fg
-```
-
-```{python}
-#| label: write-readme-figs
-#| echo: false
+#| label: simple-workflow
+#| echo: true
 #| output: false
-_f2 = wade.plot_volcano(res, stage="both", label=_trio, backend="matplotlib",
-                        width=11, height=4.8)
-_f2.savefig(FIGDIR / "volcano.png", dpi=120)
-plt.close(_f2)
-
-_f2 = wade.plot_stages(res, label=_trio, backend="matplotlib", width=6.4, height=5.6)
-_f2.savefig(FIGDIR / "stages.png", dpi=120)
-plt.close(_f2)
+norm = wade.fit_normalization(data)
+keep = wade.filter_counts(data, min_count=3, min_samples=2)
+result = wade.wade(data, cond, normalization=norm, test_genes=keep, seed=1)
+_ = wade.write_results(result, OUT / "all-genes.tsv")
 ```
 
-### Should this gene be believed? `plot_drivers`
+The default is `log2(count / size_factor + 1)`, no added noise, exact empirical
+W1 and a cap of 499,999 shuffles. Null-like genes can stop at their 20th
+exceedance. The entire retained family receives one BH adjustment.
 
-A distributional test reports a subset in every gene that a low-complexity
-library happens to detect. `plot_drivers` places the driving samples against the
-cohort: dashed line at the cohort median, band over its interquartile range.
-
-```{python}
-#| label: fig-drivers
-#| fig-cap: "Drivers of one planted subset gene. Complexity and depth sit inside the cohort's interquartile range, which is what an ordinary set of libraries looks like."
-wade.plot_drivers(res, REP["subset 15% at 8x"], counts,
-                  backend="matplotlib", width=10.0, height=3.2)
-```
-
-The failure mode this detects is not hypothetical. On plasma cfRNA, libraries
-detecting half as many genes as their peers and holding a third of their mass in
-ten genes topped the subset ranking of thousands of genes at once
-(`docs/manual.md` §8). Planting twelve such libraries among the 300 cases
-reproduces it.
+{{< pagebreak >}}
 
 ```{python}
-#| echo: false
+#| label: marker-results
 #| output: asis
-# The artefact-library check of the manual, in miniature. Twelve anomalous libraries among the 300 cases:
-# each detects 55% fewer genes and piles its mass into a handful, one of which
-# is renamed ARTEFACT. Three such libraries were not enough for WADE to call
-# the gene at all -- 3 of 300 is a 1% subset, below the resolution floor -- so
-# the demonstration needs the number of bad libraries the real cohort had.
-_rng = np.random.default_rng(11)
-counts_a = counts.copy()
-IA, DOMINANT = 3, np.arange(6)
-BAD = _rng.choice(N1, 12, replace=False)
-counts_a[IA] = gene(_rng, 300.0, "null", None)       # an abundant transcript
-_others = np.setdiff1d(np.arange(counts_a.shape[0]), DOMINANT)
-for _j in BAD:
-    counts_a[_rng.choice(_others, int(0.55 * counts_a.shape[0]), replace=False), _j] = 0.0
-    counts_a[DOMINANT, _j] *= 120.0
-_names_a = gene_names.copy()
-_names_a[IA] = "ARTEFACT"
-res_a = wade.wade(counts_a, np.ones(counts_a.shape[0]), cond, nperms=2000, seed=1,
-                  gene_names=_names_a,
-                  sample_names=[f"lib{j:02d}" for j in range(counts_a.shape[1])])
-_ia = res_a.gene_index("ARTEFACT")
-_spurious = int(((res_a.padj_subset <= 0.05) & (truth == "null")).sum())
-_dp = wade.plotting.driver_panel(res_a, "ARTEFACT", counts_a)
-md_table(pl.DataFrame({
-    "quantity": ["ARTEFACT p_subset", "ARTEFACT padj_subset",
-                 "ARTEFACT affected_fraction", "drivers that are anomalous libraries",
-                 "gene's median share of a driver's library",
-                 "drivers' median complexity", "cohort median complexity",
-                 "null genes now called subset-significant"],
-    "value": [f"{res_a.p_subset[_ia]:.1e}", f"{res_a.padj_subset[_ia]:.1e}",
-              f"{res_a.affected_fraction[_ia]:.3f}",
-              f"{len(set(_dp.columns) & set(BAD))}/{len(_dp.columns)}",
-              f"{np.median(_dp.share):.1%}",
-              f"{np.median(_dp.detected_fraction):.3f}",
-              f"{_dp.cohort['detected_fraction'][1]:.3f}",
-              f"{_spurious} of {N_NULL}"],
-}))
+markdown_table(result.to_frame().filter(pl.col("gene").is_in(marker_names)).select(
+    "gene","statistic","bulk_shift","upper_tail","lower_tail","padj"), OUT, "marker-results")
 ```
 
-ARTEFACT clears BH on stage 2, and the results table alone cannot distinguish it
-from biology. Two things give it away, and both are in @fig-drivers-artefact:
-its drivers' complexity sits far below the cohort, and the gene takes roughly an
-eighth of each of their libraries. The third number in the table above is the
-one that matters most at scale: those twelve libraries also turn a majority of
-the null genes into significant subsets, so the artefact is not one false
-positive but thousands.
+## Read the distribution and the description together
+
+`bulk_shift` is the difference in medians on the log-expression scale.
+`upper_tail` and `lower_tail` compare the upper/lower decile means, then subtract
+that bulk shift. They are signed descriptions, not a second set of tests or
+estimates of the fraction of altered patients.
 
 ```{python}
-#| label: fig-drivers-artefact
-#| echo: false
-#| fig-cap: "Drivers of the planted artefact. Complexity sits far left of the cohort median and the gene's share of each library far right, which is what an artefact looks like. Compare with the previous figure."
-wade.plot_drivers(res_a, "ARTEFACT", counts_a, backend="matplotlib",
-                  width=10.0, height=3.4)
+#| label: fig-demo-bulk
+#| fig-cap: "A broadly increased gene: empirical distributions and the exact quantile-effect curve. The dashed line marks the median shift."
+result.plot_gene("Bulk increase")
 ```
-
-### One data layer, two renderers
-
-Both renderers read the same dataclass, so a figure carries the same content in
-either; they differ only in rendering. `backend="plotly"` is interactive and
-carries every statistic in the hover, `backend="matplotlib"` produces vector
-output for print. Every figure in this section accepts both — the volcano above
-is drawn by plotly in the HTML build of this document and by matplotlib in the
-PDF, from the same call and the same arrays.
-
-### Themes
 
 ```{python}
-#| label: fig-themes
-#| echo: false
-#| layout-ncol: 3
-#| fig-cap: "The three built-in themes. Every figure accepts theme=."
-#| fig-subcap: ["light", "dark", "high-contrast"]
-for _th in ("light", "dark", "high-contrast"):
-    _ft = wade.plot_gene(res, gene=[REP["subset 15% at 8x"]], theme=_th,
-                         backend="matplotlib", width=3.4, height=3.2)
-    plt.show()
-    plt.close(_ft)
+#| label: fig-demo-tail
+#| fig-cap: "A recurrent high-expression subset changes unsigned area even when the median changes little. The q-value belongs to the complete distribution comparison."
+result.plot_gene("Upper tail")
 ```
-
-A palette of your own is one call:
-
-```python
-from dataclasses import replace
-house = replace(wade.plotting.THEMES["light"], case="#7b3fa0", ctrl="#3fa07b")
-wade.plot_stages(res, theme=house)
-```
-
-## 6.5 Linked views (requires a running kernel)
-
-::: {.callout-warning appearance="simple"}
-`plot_linked` returns a plotly `FigureWidget`. A widget's click handler runs in
-the Python kernel that created it, so the figure links in Jupyter, JupyterLab,
-VS Code and Colab and does **not** survive export: in a rendered page it is a
-static image of one gene. Use `plot_volcano` and `plot_gene` separately for a
-figure that has to travel.
-:::
 
 ```{python}
-#| eval: false
-# requires: pip install 'wade[linked]'
-wade.plot_linked(res, "subset", label=8)      # then click a point
+#| label: fig-demo-opposing
+#| fig-cap: "Opposing changes contribute positive unsigned area instead of canceling. A median near zero does not imply an unchanged distribution."
+result.plot_gene("Opposing tails")
 ```
-
-## 6.6 Export
-
-Every number the figures draw is a column of the result or of a figure's
-`.table()`.
 
 ```{python}
-#| echo: false
-#| output: asis
-_v = wade.plotting.volcano_data(res, "subset", x="subset_log2_fc",
-                               label=list(REP.values()))
-_t = {k: v[_v.labelled] for k, v in list(_v.table().items())[:6]}
-md_table(pl.DataFrame(_t))
+#| label: fig-demo-patterns
+#| fig-cap: "Each point is a tested gene. Bulk direction and tail shape are descriptions; color records the single gene-level distribution call."
+result.plot_patterns(label=marker_names[:-1])
 ```
 
-```python
-res.columns()                       # dict of arrays, in the written order
-res.to_frame()                      # polars DataFrame
-wade.write_results(res, "out.tsv")  # TSV + JSON manifest
-```
+A lower bulk level and an elevated upper tail can coexist. Do not call the
+entire gene simply downregulated on the basis of its bulk description.
+Conversely, a dramatic tail can fail the distribution test, especially with
+few controls. The [transcriptome study](../archive/development-20260923/docs/transcriptome-workflow-validation.md)
+reports those limitations rather than selecting only successful examples.
 
-Exporting and plotting elsewhere is a supported path, not a fallback.
+## References, filtering and sample design
 
-# 7. Comparison with Other Methods
+For a validated control panel use
+`wade.fit_normalization(data, reference_genes=control_ids)`. Inspect both
+`reference_genes` and `used_reference_genes`. Low variance is not by itself
+evidence that a reference is biologically invariant. Sparse assays can import
+external size factors; CPM and TPM remain per-sample abundance summaries.
+See the [manual](../docs/manual.md) for alignment and normalization examples.
 
-WADE's nearest relatives are `waddR` (Wasserstein two-sample testing) and the
-outlier and subset detectors COPA, OS, ORT, MOST and LSOSS. A t-test or
-Wilcoxon test is the appropriate tool for a global shift; WADE's stage 1 is not
-intended to improve on them at that question.
+No filter threshold works universally. Combine pooled count/detection masks
+with prespecified assay requirements, without choosing the version that produces
+the most significant genes. Technical sample exclusions also precede inference.
+Batch or depth confounding is not repaired merely by fitting normalization.
 
-A fair comparison requires power curves, FDR calibration under the null, rank
-recovery, and evaluation against real background rather than simulated counts
-alone. That is the subject of `notebooks/benchmark.qmd` and is deliberately not
-attempted here.
+## Themes
 
-# 8. Performance and Scalability
-
-The timing and memory tables are in [`docs/manual.md`](../docs/manual.md) §6;
-`tools/bench_scaling.py` reproduces them.
+Each theme below is drawn directly as a separate, identically sized figure.
+There is no screenshot stretching or raster composition.
 
 ```{python}
-#| echo: false
-#| output: asis
-md_table(pl.DataFrame({
-    "configuration": [
-        f"this notebook, {counts.shape[0]:,} x {counts.shape[1]:,}, B=2000, n_boot=200",
-        "20,000 x 200, B = 2,000",
-        "5,000 x 12,000, B = 200, gene_chunk=1000",
-        "30,000 x 80,000, B = 2,000, all fast paths",
-    ],
-    "wall clock": [f"{ELAPSED:.1f} s", "about 17 s", "11.7 s", "29.7 min"],
-    "peak memory": ["not measured", "not measured", "3.7 GB", "55.6 GB"],
-}))
+#| label: fig-theme-light
+#| fig-cap: "Light theme. The same gene, data and axis definitions appear in all three theme demonstrations."
+result.plot_gene("Bulk down + tail", theme="light")
 ```
-
-Both permutation loops have Rust kernels and account for nearly all of the
-runtime; on NumPy alone the 20,000-gene configuration takes about five minutes.
-
-## 8.1 Options, and which of them change a result
-
-| option | effect | changes a reported number |
-|---|---|---|
-| `gene_chunk` | 5,000 genes: 7.2 to 3.7 GB | **no**, bit-identical, asserted elementwise |
-| `threads` (bootstrap) | 19.7 to 4.0 s at 20,000 x 200 | **no**, bit-identical at any thread count |
-| `backend="rust"` | the permutation loops | **no**, held bitwise to NumPy |
-| `max_probs` | caps the quantile grid, default 2,000 | **yes, by design**: the single deliberate change. Realized $m$ is recorded in the result |
-| `stage1="gemm"` | exact mean difference as one matrix product | allclose to 1e-12, not bitwise: BLAS blocking depends on matrix shape. Balanced designs only |
-| `fit_backend="rust"` | bisection for the fold-change fit | not bitwise: no two samplers consume randomness identically. Never auto-dispatched |
-
-A fast path that changes a number is opt-in and documents what it changes.
-`backend="auto"` never selects one.
-
-## 8.2 Large datasets
-
-| consideration | action |
-|---|---|
-| memory is budgeted, not discovered | `gene_chunk` bounds the resident matrices at no numerical cost |
-| p-values saturate at $1/(B+1)$ | at 30,000 genes BH at 0.05 needs resolution near $10^{-6}$, about the floor at default `nperms`. Filter on `padj`, rank on `subset_log2_fc` or `z_subset` |
-| detectability | `wade.detectability_floor()` reports whether a subset of a given size is resolvable at a given $n$, before the run |
-| samples not exchangeable | `strata=` restricts permutation within batch |
-| artefactual drivers | `plot_drivers` before believing a hit (Section 6.4) |
-
-## 8.3 Open problems
-
-**P-value resolution.** On a 31,000 x 83,000 cohort, 18.8% of genes sit at the
-mean-shift floor. Ordering past the floor is addressed by magnitude and the
-permutation z-scores; a calibrated tail probability is not
-(`docs/pvalue-review.md`).
-
-**Composition.** Library-size normalization couples genes, so a
-signal-saturated matrix distorts `affected_fraction` and `direction`. The
-subset test itself is invariant to a global offset; the characterization is not.
-
-**Single cell.** Sparsity is an opportunity, since a gene's sorted values are a
-run of zeros followed by the sorted non-zeros. The obstacle is statistical:
-cells are not exchangeable, donors are. A million cells from twenty donors is
-twenty samples.
-
----
 
 ```{python}
-#| label: provenance
-#| echo: false
-print(f"seed=1  ·  {counts.shape[0]:,} x {counts.shape[1]:,}  ·  "
-      f"wade {wade.__version__}  ·  numpy {np.__version__}  ·  {ELAPSED:.1f} s")
+#| label: fig-theme-dark
+#| fig-cap: "Dark theme, rendered at its native aspect ratio."
+result.plot_gene("Bulk down + tail", theme="dark")
 ```
 
-```bash
-conda activate wade
-quarto render notebooks/demo.qmd --to html     # self-contained, plotly interactive
-quarto render notebooks/demo.qmd --to typst    # PDF
+```{python}
+#| label: fig-theme-contrast
+#| fig-cap: "High-contrast theme, rendered at its native aspect ratio."
+result.plot_gene("Bulk down + tail", theme="high-contrast")
 ```
+
+## Interpretation and next work
+
+These examples demonstrate behavior, not calibrated rare-event probabilities.
+The benchmark notebooks compare the current API with frozen native method fits.
+All figures and results are candidates awaiting approval. Transcriptome-level
+rarity and predictive event significance are the next research phase after the
+production migration and release checks are complete.

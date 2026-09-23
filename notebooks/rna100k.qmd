@@ -1,510 +1,106 @@
 ---
-title: "WADE on the rna100k cohort"
+title: "RNA100k: private API and scaling workbench"
+subtitle: "WADE 0.2.0 · single-test release candidate · review pending"
 format:
   html:
-    toc: true
+    html-math-method: mathml
+    include-in-header: _mathjax-quiet.html
+    toc: false
     embed-resources: true
+    fig-dpi: 150
+    code-tools: true
+  typst:
+    toc: false
+    papersize: us-letter
 jupyter: python3
 execute:
   warning: false
+  echo: false
 ---
 
-The real-dataset workbench: ~31,000 genes × ~83,000 libraries of splice-junction
-counts, the dataset the performance work was built for.
-This notebook is the test bed for developing WADE against it and the showcase
-of the result boundary — **the data live in Dropbox and stay there**; nothing
-patient-derived is written into the repository, and results land next to the
-data.
+This private workbench remains outside release distributions. It exercises
+current normalization, filtering, permutation and export interfaces on the
+local plasma gene-count slice. It does not certify sparse or cell-free RNA
+inference, and no clinical or rare-event conclusion is drawn.
 
-Two rules it inherits:
-
-* **Memory is budgeted, not discovered.** A full-cohort run at this shape was
-  measured at **55.6 GB peak** on the synthetic twin (`docs/manual.md` §6),
-  on top of nothing — the loaders below never materialize more than they say,
-  and the full-matrix path is behind an explicit gate.
-* **The default render is small.** It runs one real contrast on a
-  column-selected slice (~0.8 GB) end to end — load, align, test, read,
-  write — in a few minutes.
-
-## The data
+The selection uses known patient identity, one sorted library per study and
+patient, and available malignant/nonmalignant metadata. Technical zero-depth
+libraries are excluded before fitting. Group-confounded studies, tissue mixtures
+and protocol effects still limit interpretation even with within-study shuffles.
 
 ```{python}
-#| label: paths
+#| label: setup
+import json,os,sys,time
 from pathlib import Path
-
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
-
 import wade
-
-DATA = Path("/Users/mkiyer/University of Michigan Dropbox/MED-mctp-iyerlab"
-            "/projects/cfrna/rna100k_rnaseq_data")
-META = Path("/Users/mkiyer/University of Michigan Dropbox/MED-mctp-iyerlab"
-            "/projects/rna100k/metadata_harmonization/cache")
-
-COUNTS_FEATHER = DATA / "cohort_sj_counts.feather"     # splice-junction counts
-GENES_XLSX = DATA / "cohort_genes.xlsx"                # row annotation, incl. the normalizer
-SAMPLES_PARQUET = META / "harmonized_samples.parquet"  # curated library metadata
-
-RESULTS = DATA / "wade_results"                        # results live beside the data
-
-#: Run the full 31k x 83k cohort. Needs ~60 GB free (measured 55.6 GB peak at
-#: this shape plus the load); leave False unless you have it.
-FULL_RUN = False
+sys.path.insert(0,str(Path.cwd().parent/"tools"))
+from notebook_support import output_dir,export_table,markdown_table,cached_wade,array_hash
+OUT=output_dir("rna100k")
+config_path=Path(os.environ["WADE_TCGA_CONFIG"])
+config=json.loads(config_path.read_text())
+def path(key):
+    p=Path(config[key]).expanduser()
+    return p if p.is_absolute() else config_path.parent/p
+samples=pl.read_parquet(path("samples"))
+scan=pl.scan_ipc(path("counts"))
+libraries=scan.collect_schema().names()
+eligible=samples.filter((pl.col("specimen_type")=="plasma") & pl.col("is_malignant").is_not_null()
+                        & pl.col("library").is_in(libraries))
+known=eligible.filter(pl.col("patient_uid").is_not_null() & (pl.col("patient_uid")!=""))
+selected=known.sort("study","patient_uid","library").unique(subset=["study","patient_uid"],keep="first",maintain_order=True)
+export_table(eligible.filter(~pl.col("library").is_in(selected["library"].to_list())),OUT,"identity-exclusions")
+genes=pl.read_excel(path("genes"))
+counts=scan.select(selected["library"].to_list()).collect().to_numpy().astype(float)
+nonempty=counts.sum(axis=0)>0
+export_table(selected.filter(pl.Series(~nonempty)),OUT,"empty-library-exclusions")
+selected=selected.filter(pl.Series(nonempty));counts=counts[:,nonempty]
+export_table(selected,OUT,"sample-order")
+qc=wade.library_qc(counts)
+export_table(selected.select("library","study","is_malignant").with_columns(**{k:pl.Series(v) for k,v in qc.items()}),OUT,"library-qc")
+cond=selected["is_malignant"].to_numpy().astype(int)
+strata=selected["study"].to_numpy()
 ```
 
-Splice-junction counts over the gene's **intron count** is the sjTPM
-normalization (`wade.tpm_like`'s docstring names exactly this pair), so the
-gene table supplies both the row labels and the normalizer. `gene_id` is the
-unique key; `gene_name` is for reading.
+Library-total normalization here is an explicitly limited diagnostic choice;
+it assumes comparable composition and is not a sparse normalization endorsement.
+The per-sample CPM display does not use other libraries. The inference call
+uses raw counts and frozen relative exposures, with a deliberately short 1,999
+cap for a scaling exercise. This cap cannot resolve isolated transcriptome-wide
+discoveries. Do not interpret its q-values as a validated biological result.
 
 ```{python}
-#| label: genes
-genes = pl.read_excel(GENES_XLSX)
-NORMALIZER = genes["gene_num_introns"].to_numpy().astype(np.float64)
-assert NORMALIZER.min() >= 1, "a zero-intron gene would break the normalizer"
-# Gene symbols are unique in this table (checked — zero duplicates), so they
-# are the labels WADE carries: every result table and plot then reads as
-# biology (KRAS, ALB, ...) rather than as Ensembl accessions. The Ensembl id
-# stays in `genes` and is joined back into anything written to disk.
-GENE_NAMES = genes["gene_name"].to_numpy()
-assert genes["gene_name"].n_unique() == genes.height, "symbols must be unique to be labels"
-print(f"{genes.height:,} genes; normalizer = gene_num_introns "
-      f"(min {int(NORMALIZER.min())}, median {int(np.median(NORMALIZER))})")
-```
-
-The harmonized metadata covers the whole rna100k effort; the cohort matrix's
-columns are the `library` keys. A handful of cohort libraries have no
-harmonized row yet — surfaced here rather than silently dropped, because a
-contrast can only use libraries the curation covers.
-
-```{python}
-#| label: samples
-cohort_libs = pl.scan_ipc(COUNTS_FEATHER).collect_schema().names()
-samples = (pl.scan_parquet(SAMPLES_PARQUET)
-             .filter(pl.col("library").is_in(cohort_libs))
-             .collect())
-unmatched = len(cohort_libs) - samples.height
-print(f"cohort libraries: {len(cohort_libs):,}; harmonized: {samples.height:,}; "
-      f"not yet harmonized: {unmatched}")
-print(samples["specimen_type"].value_counts().sort("count", descending=True).head(6))
-```
-
-## Loading counts, by the column
-
-The matrix is Int32 on disk. `load_counts` reads **only the named libraries**,
-in blocks, into a preallocated float64 array — so a 3,000-sample contrast
-costs ~0.8 GB and never touches the other 80,000 columns, and the full-cohort
-load peaks at the array itself (20.6 GB) plus one block.
-
-```{python}
-#| label: loader
-def load_counts(libraries: list[str], block: int = 4096) -> np.ndarray:
-    """(genes x libraries) float64 counts for the named libraries."""
-    out = np.empty((genes.height, len(libraries)), dtype=np.float64)
-    scan = pl.scan_ipc(COUNTS_FEATHER)
-    for s in range(0, len(libraries), block):
-        cols = libraries[s:s + block]
-        out[:, s:s + len(cols)] = scan.select(cols).collect().to_numpy()
-    return out
-```
-
-## A first contrast: malignant vs non-malignant plasma
-
-Plasma cfRNA is the lab's home question, and the cohort has 1,343 malignant
-vs 1,662 non-malignant plasma libraries (pancreas-heavy on the malignant
-side). **This is a plumbing-and-showcase contrast, not a discovery claim**:
-the plasma libraries span several studies, so study and disease are partly
-confounded and label exchangeability across studies is exactly the kind of
-assumption `docs/method.md` §10.2 warns about. A defensible analysis would permute
-within study; this notebook's job is to exercise the machinery on real data.
-
-```{python}
-#| label: contrast
-plasma = samples.filter(
-    (pl.col("specimen_type") == "plasma") & pl.col("is_malignant").is_not_null()
-)
-print(plasma["is_malignant"].value_counts(), "\n")
-print(plasma.filter(pl.col("is_malignant"))["oncotree_lineage"]
-      .value_counts().sort("count", descending=True).head(5))
-
-libs = plasma["library"].to_list()
-counts = load_counts(libs)
-print(f"\ncounts: {counts.shape}, {counts.nbytes / 2**30:.2f} GB; "
-      f"zero fraction {float((counts == 0).mean()):.2f}")
-```
-
-The condition comes from the metadata **by name** — `wade.condition` aligns
-the assignment to the matrix's columns strictly and raises on any mismatch.
-
-```{python}
-#| label: run
-#| warning: false
-import time
-
-cond = wade.condition(plasma, key="library", column="is_malignant",
-                      case=True, control=False)
-
-t0 = time.perf_counter()
-res = wade.wade(
-    counts, NORMALIZER, cond,
-    gene_names=GENE_NAMES, sample_names=libs,
-    nperms=2000, seed=1,
-    gene_chunk=4000,           # bounded memory, bit-identical (bit-identical)
-    fit_backend="rust",        # opt-in fit kernel (opt-in fit kernel)
-)
-print(f"wade() on {counts.shape[0]:,} genes x {len(libs):,} plasma libraries: "
-      f"{time.perf_counter() - t0:.0f} s   (m = {res.nprobs})")
-```
-
-(`stage1="gemm"` is not used: 1,343 v 1,662 is unbalanced, and the GEMM
-identity only holds for equal groups — the default grid path covers it.)
-
-## Reading the result
-
-```{python}
-#| label: toptable
-frame = (res.to_frame()
-         .join(genes.select("gene_id", "gene_name", "gene_type", "chrom"),
-               left_on="gene", right_on="gene_name")
-         .rename({"gene": "gene_name"}))
-sig_mean = int((res.padj_mean_shift <= 0.05).sum())
-sig_subset = int((res.padj_subset <= 0.05).sum())
-print(f"BH 0.05: {sig_mean:,} mean-shift genes, {sig_subset:,} subset genes")
-
-SHOW = ["gene_name", "gene_type", "subset_log2_fc", "affected_fraction",
-        "direction", "log2_fc", "z_subset", "z_mean_shift", "padj_subset",
-        "padj_mean_shift"]
-pl.Config.set_tbl_rows(40)
-```
-
-With p-values saturated at this cohort size, the working recipe is
-**filter by `padj`, rank by magnitude**. `subset_log2_fc` is the subset's
-magnitude — the log2 fold change within the affected fraction, quantile-
-matched against what the controls themselves do at those extremes — and
-`z_subset` / `z_mean_shift` are the permutation z-scores (GSEA's NES, in z
-form), which keep ordering genes long after the p-values tie at the floor.
-
-**The largest distinctive subsets** — significant, minority-fraction, ranked
-by how many folds the affected samples sit above the matched control
-quantiles:
-
-```{python}
-#| label: top-subset-magnitude
-(frame.filter((pl.col("padj_subset") <= 0.05) & (pl.col("affected_fraction") < 0.5))
- .sort("subset_log2_fc", descending=True).select(SHOW).head(40))
-```
-
-**The strongest mean shifts**, ranked by fold change among the significant:
-
-```{python}
-#| label: top-mean-magnitude
-(frame.filter(pl.col("padj_mean_shift") <= 0.05)
- .sort("log2_fc", descending=True).select(SHOW).head(40))
-```
-
-**The z-ranking**, which needs no filter at all and never ties:
-
-```{python}
-#| label: top-z
-frame.sort("z_subset", descending=True, nulls_last=True).select(SHOW).head(40)
-```
-
-The **full annotated table** — every gene, symbols first, Ensembl ids and
-coordinates joined back in — goes beside the data for browsing in anything:
-
-```{python}
-#| label: annotated
-RESULTS.mkdir(exist_ok=True)
-annotated = frame.select(["gene_name", "gene_id", "gene_type", "chrom",
-                          *[c for c in frame.columns
-                            if c not in ("gene_name", "gene_id", "gene_type", "chrom")]])
-annotated.write_csv(RESULTS / "plasma_malignant_vs_nonmalignant_annotated.tsv",
-                    separator="\t")
-print(f"wrote {annotated.height:,} genes x {annotated.width} columns to "
-      f"plasma_malignant_vs_nonmalignant_annotated.tsv")
+#| label: current-api
+#| output: false
+norm=wade.fit_normalization(counts,method="library",gene_names=genes["gene_name"].to_numpy(),sample_names=selected["library"].to_numpy())
+keep=wade.filter_counts(counts,min_count=3,min_samples=2)
+start=time.perf_counter()
+res=cached_wade(counts,cond,normalization=norm,test_genes=keep,strata=strata,
+                gene_names=genes["gene_name"].to_numpy(),sample_names=selected["library"].to_numpy(),max_permutations=1999,seed=1)
+wade.write_results(res,OUT/"diagnostic-all-genes.tsv")
+_ = (OUT/"timing.json").write_text(json.dumps(dict(seconds=time.perf_counter()-start,genes=int(res.tested.sum()),
+    samples=len(cond),max_permutations=1999,capped=int(np.sum(res.tested & (res.n_exceedances<20))),
+    count_sha256=array_hash(counts),discovery_claim=False),indent=2)+"\n")
 ```
 
 ```{python}
-#| label: fig-volcano
-#| fig-cap: "Both stages. Left: the ordinary test. Right: 'a global shift does not explain this'."
-wade.plot_volcano(res, stage="both", label=6)
+#| label: accounting
+#| output: asis
+markdown_table(selected.group_by("study","is_malignant").len().sort("study","is_malignant"),OUT,"cohort-accounting")
 ```
 
 ```{python}
-#| label: fig-stages
-#| fig-cap: "What kind of difference: the two stages against each other, coloured by affected_fraction."
-wade.plot_stages(res)
+#| label: fig-private-qc
+#| fig-cap: "Depth and complexity of the selected private libraries. This figure is a technical diagnostic and remains local."
+fig,ax=plt.subplots(figsize=(7,4.5),layout="constrained")
+for group,color,label in [(0,"#d99143","Nonmalignant"),(1,"#2675ac","Malignant")]:
+    mask=cond==group
+    ax.scatter(np.log10(qc["depth"][mask]),qc["n_detected"][mask],s=10,alpha=.4,color=color,label=label)
+ax.set(xlabel="Gene-count depth, log10",ylabel="Detected genes")
+ax.legend()
+fig
 ```
-
-```{python}
-#| label: fig-gene
-#| fig-cap: "The largest distinctive subset, in full: quantile pair, difference, log-ratio curve."
-top = (frame.filter((pl.col("padj_subset") <= 0.05)
-                    & (pl.col("affected_fraction") < 0.5))
-       .sort("subset_log2_fc", descending=True).head(1))
-wade.plot_gene(res, gene=top["gene_name"].to_list() if top.height else [0])
-```
-
-Two honesty checks worth keeping in view on a cohort this size:
-
-```{python}
-#| label: diagnostics
-# 1. The p-value floor (`docs/pvalue-review.md`): at ~31k genes, BH needs resolution
-#    near the empirical/GPD floor, and genes piling up there stop ranking.
-floor = 1.0 / (2000 * 250)
-at_floor = int((res.p_mean_shift <= floor * 1.001).sum())
-print(f"mean-shift p-values at the resolution floor: {at_floor:,} "
-      f"({at_floor / len(res.gene):.1%} of genes)")
-
-# 2. Depth by group: library sizes span ~0.8M-90M in this cohort. Depth that
-#    is group-associated is a batch confound no normalization removes.
-depth = counts.sum(axis=0)
-case = np.asarray(res.cond) == 1
-print(f"median depth  malignant {np.median(depth[case]) / 1e6:.1f}M   "
-      f"non-malignant {np.median(depth[~case]) / 1e6:.1f}M")
-```
-
-On what WADE does and does not do about depth, precisely. Library-size
-normalization removes depth's **first moment** — a 10M-count library and a
-1M-count library land on the same scale. Binomial thinning **did** run in
-the calls above, but it is stage 2's
-per-gene *fold-change* correction: it makes the two groups exchangeable
-under the fitted global shift so the subset null is honest; it does not
-equalize depth. What no per-gene correction touches is depth's **second
-moment**: after normalization, a shallow library's values are noisier than a
-deep one's, so **group-associated** depth is a genuine distributional
-difference between the groups — technical, but real — and a distributional
-test will see it. That is the case for a depth-equalizing preprocessing step
-(thin every library to a common depth before testing — exact for counts, at
-the price of discarded reads), which is queued as a measured experiment in
-`ISSUES.md` rather than assumed to help.
-
-Results and the manifest go **beside the data**, never into the repository:
-
-```{python}
-#| label: write
-RESULTS.mkdir(exist_ok=True)
-out = wade.write_results(res, RESULTS / "plasma_malignant_vs_nonmalignant.tsv")
-print("wrote", out.name, "and", out.with_suffix("").with_suffix(".manifest.json").name)
-```
-
-## Before interpreting: two falsification checks
-
-A result where most of the transcriptome is "subset-significant" demands a
-bug check before any story about technical variability. Two controls, both
-on the same data:
-
-**Permuted labels.** Shuffle malignant/non-malignant across the same 3,005
-plasma libraries and rerun. Everything about the data — depth spread,
-study mixture, sparsity — is unchanged; only the association between label
-and everything else is broken. A machinery bug that manufactures subset
-significance would fire here too; a calibrated test must return to its
-nominal level.
-
-```{python}
-#| label: perm-null
-rng = np.random.default_rng(99)
-cond_perm = rng.permutation(np.asarray(res.cond))
-res_null = wade.wade(counts, NORMALIZER, cond_perm,
-                     gene_names=GENE_NAMES, sample_names=libs,
-                     nperms=2000, seed=1, gene_chunk=4000, fit_backend="rust")
-print(f"permuted labels — BH 0.05: "
-      f"{int((res_null.padj_mean_shift <= 0.05).sum()):,} mean-shift, "
-      f"{int((res_null.padj_subset <= 0.05).sum()):,} subset; "
-      f"raw p_subset < 0.05 for {float((res_null.p_subset < 0.05).mean()):.1%} of genes")
-```
-
-**One study only.** `pw_pdac_bloodev` has both classes inside a single
-study (283 pancreatic-cancer v 117 non-malignant plasma), so the study and
-protocol axes are held fixed. If the pan-plasma saturation were mostly
-cross-study structure, this contrast should come back far sparser — and
-whatever survives is the more believable ranking.
-
-```{python}
-#| label: within-study
-pdac = plasma.filter(pl.col("study") == "pw_pdac_bloodev")
-libs_p = pdac["library"].to_list()
-counts_p = load_counts(libs_p)
-cond_p = wade.condition(pdac, key="library", column="is_malignant",
-                        case=True, control=False)
-res_p = wade.wade(counts_p, NORMALIZER, cond_p,
-                  gene_names=GENE_NAMES, sample_names=libs_p,
-                  nperms=2000, seed=1, gene_chunk=4000, fit_backend="rust")
-depth_p = counts_p.sum(axis=0)
-case_p = np.asarray(res_p.cond) == 1
-print(f"pw_pdac_bloodev ({int(case_p.sum())} v {int((~case_p).sum())}) — BH 0.05: "
-      f"{int((res_p.padj_mean_shift <= 0.05).sum()):,} mean-shift, "
-      f"{int((res_p.padj_subset <= 0.05).sum()):,} subset")
-print(f"median depth  case {np.median(depth_p[case_p]) / 1e6:.1f}M   "
-      f"control {np.median(depth_p[~case_p]) / 1e6:.1f}M")
-(res_p.to_frame()
- .filter((pl.col("padj_subset") <= 0.05) & (pl.col("affected_fraction") < 0.5))
- .sort("subset_log2_fc", descending=True)
- .select("gene", "subset_log2_fc", "affected_fraction", "direction",
-         "log2_fc", "z_subset", "padj_subset").head(25))
-```
-
-## Who drives a subset? The check that reversed a reading
-
-The magnitude ranking's top of the table invites a story, and this is where
-one gets tested. The first read of it looked like Ewing sarcoma biology —
-**FLI1** at #1 and **EWSR1** at #4, the two halves of the canonical *EWSR1–FLI1*
-fusion, each as a ~1.7% subset at 20–40×. That reading was wrong, and the
-check below is what killed it: **the same ~20 libraries top FLI1, EWSR1,
-TRGC2 and LYVE1 alike** (FLI1 and the unrelated TRGC2 share 24 of their top
-25 — *more* than FLI1 and EWSR1's 23), all from one study, with scattered
-diagnoses (PRAD, PAAD, EPM, MBL, CHOL). A coherent fusion would not do that;
-a set of anomalous libraries would.
-
-The mechanism is library composition, not normalization: those libraries
-detect **5,563 genes against 11,114** elsewhere and carry **36% of their mass
-in ten genes** (cohort median 15%), with raw FLI1 junction counts of ~297,000
-against ~1,600 elsewhere. Blood-cell transcripts dominating a plasma prep —
-FLI1 (megakaryocytic), TRGC2 (T-cell receptor), LYVE1 (macrophage) — is the
-signature of leukocyte carry-over, and whatever its cause, such a library is
-an extreme outlier in *thousands of genes at once*. The subset stage then
-faithfully reports a subset in every one of them.
-
-**ETV4 is the counter-example, and it survives every check.** Zero overlap
-with the artefact libraries; its 25 top libraries have ordinary complexity
-(10,483 genes detected, 13.9% top-10 share) and *below*-median depth
-(2.1M) — so neither depth nor complexity explains it; median ETV4 across all
-3,005 plasma libraries is **0**, and its top 25 are **25 distinct patients,
-all pancreatic adenocarcinoma, replicated across two independent studies**.
-An ETS-family oncogene surfacing as a rare, high-magnitude plasma subset in
-PDAC is the cancer-outlier pattern WADE exists to find.
-
-The generalizable lesson is the diagnostic, not the gene: **ask which samples
-drive a gene's subset, and how often those samples drive everything else.**
-
-```{python}
-#| label: drivers
-counts_pos = counts > 0
-detected = counts_pos.sum(axis=0)
-share10 = np.sort(res.tpm, axis=0)[::-1][:10].sum(axis=0) / res.tpm.sum(axis=0)
-
-case_cols = np.flatnonzero(np.asarray(res.cond) == 1)
-K = np.clip(np.ceil(res.affected_fraction * res.nprobs).astype(int), 1, case_cols.size)
-up = np.nan_to_num(res.direction) > 0
-participation = np.zeros(case_cols.size)
-drivers = {}
-for g in range(res.tpm.shape[0]):
-    if not up[g]:
-        continue
-    row = res.tpm[g, case_cols]
-    idx = np.argpartition(-row, min(K[g], row.size - 1))[:K[g]]
-    participation[idx] += 1
-    if res.gene[g] in ("FLI1", "EWSR1", "TRGC2", "ETV4"):
-        drivers[res.gene[g]] = idx
-
-print(f"library participation in affected subsets (of {int(up.sum()):,} up-genes):")
-print(f"  median case library {np.median(participation):,.0f}   "
-      f"worst {participation.max():,.0f}   "
-      f"expected if uniform {(K[up].sum() / case_cols.size):,.0f}")
-print("\ngene            drivers  median driver participation  median complexity")
-for g, idx in drivers.items():
-    cc = case_cols[idx]
-    print(f"  {g:<12} {len(idx):5d}   {np.median(participation[idx]):>12,.0f}"
-          f"              {np.median(detected[cc]):>8,.0f}")
-print(f"\n  cohort median: participation {np.median(participation):,.0f}, "
-      f"genes detected {np.median(detected):,.0f}, top-10 share {np.median(share10):.1%}")
-```
-
-**Read that table against the hypothesis it was built to test, because it
-refutes half of it.** The tempting statistic — "how often do this gene's
-drivers drive *everything*?" — does **not** flag the artefact: FLI1's and
-TRGC2's drivers participate in 375 of 6,769 up-gene subsets against a cohort
-median of 1,769, i.e. *far below* average, while ETV4's sit slightly above at
-1,944. The reason is mechanical: a low-complexity library is zero in ~25,000
-genes, so it ranks at the **bottom** of most genes' orderings and can only be
-extreme in the few thousand it detects. Cross-gene recurrence is a real
-phenomenon here — the worst library sits in 3,583 of 6,769 subsets, twice the
-median — but it is a *different* set of libraries, and it is not what makes
-FLI1 an artefact.
-
-What separates them cleanly is the rightmost column: **the drivers' own
-library complexity.** FLI1, EWSR1 and TRGC2 are driven by libraries detecting
-~5,600 genes; ETV4 by libraries detecting 10,545, against a cohort median of
-11,096. So the discriminating question is not "do these samples drive
-everything" but **"are these samples ordinary libraries?"** — which makes
-per-library QC (complexity, top-10 mass share, depth) the load-bearing
-diagnostic, and driver attribution the substrate that lets a gene inherit its
-drivers' QC profile. That is now the top item in `ISSUES.md`, in that
-corrected form.
-
-## The full cohort, when you mean it
-
-The gate, not a default: ~20.6 GB for the matrix plus WADE's residents —
-**measured 55.6 GB peak at this exact shape** on the synthetic twin
-(`docs/manual.md` §6, ~30 min at B = 2,000 with `fit_backend="rust"` and,
-on a balanced design, `stage1="gemm"`). Edit the contrast; the template runs
-whatever the metadata can define.
-
-```{python}
-#| label: full
-if FULL_RUN:
-    chosen = samples.filter(
-        (pl.col("specimen_type") == "tissue")
-        & pl.col("sample_class").is_in(["tumor", "normal_adjacent"])
-    )
-    libs_full = chosen["library"].to_list()
-    counts_full = load_counts(libs_full)
-    cond_full = wade.condition(chosen, key="library", column="sample_class",
-                               case="tumor", control="normal_adjacent")
-    res_full = wade.wade(counts_full, NORMALIZER, cond_full,
-                         gene_names=GENE_NAMES, sample_names=libs_full,
-                         nperms=2000, seed=1, gene_chunk=2000,
-                         fit_backend="rust")
-    wade.write_results(res_full, RESULTS / "tissue_tumor_vs_normal_adjacent.tsv")
-else:
-    print("FULL_RUN = False — flip it with ~60 GB free.")
-```
-
-## Reading the smoke run honestly
-
-The first renders of this notebook (2026-08-20) found **most of the
-transcriptome "subset-significant"** on the plasma contrast, with **18.8% of
-genes at the mean-shift p-value floor** and a **1.7× group-associated depth
-difference** (malignant median 8.1M vs non-malignant 4.8M splice-junction
-counts). The falsification section above says what that is and is not:
-
-* **It is not a bug.** On permuted labels — same matrix, same depth spread,
-  same study mixture — significance collapsed to nominal (0 mean-shift and
-  53 subset genes at BH 0.05; raw `p_subset < 0.05` for 3.9% of genes,
-  against a nominal 5%). The saturation tracks the actual labels.
-* **It is not only cross-study structure.** The single-study contrast
-  (`pw_pdac_bloodev`, 283 v 117) still called ~70% of genes at BH 0.05 —
-  with its own, *reversed* 1.3× depth imbalance. Holding study fixed does
-  not deflate it.
-* **What it is:** at n in the hundreds-to-thousands, the subset stage's
-  null — *one* global fold change explains the whole distribution — is a
-  point null, and every real deviation from it, however small, biological
-  or technical, becomes significant. Significance has saturated as an
-  instrument here. **The operative outputs are the rankings and the
-  descriptors** (`subset_stat`, `affected_fraction`, `direction`,
-  `log2_fc`), which is exactly the user's stated priority: are the
-  top-ranked genes the true ones?
-
-The follow-ups this motivates, in order:
-
-* **A rank-recovery benchmark on real background** — plant known subset and
-  global signals into real non-malignant plasma libraries (semi-synthetic:
-  the background keeps every technical wart) and measure whether the
-  subset ranking puts the planted genes on top, and how far down the
-  technical tail begins. This is the direct test of "the best genes are
-  the best genes", and it is the priority.
-* **Depth as a confound, measured** — group-associated depth appears in
-  both contrasts above (1.7× one way, 1.3× the other). The planned
-  experiment: planted depth imbalance between otherwise-identical groups,
-  false-positive rates for both stages, and candidate guards — led by
-  depth-equalizing binomial thinning, the count-exact version of adding
-  Poisson noise.
-* **P-value resolution** (`docs/pvalue-review.md`) — 18.8% of genes at the floor is
-  the predicted pile-up, observed; the saddlepoint route matters most
-  because it would also sharpen the *ranking* the first bullet cares about.
-
-And two facts for the performance roadmap: **47% zeros** (real sparsity,
-but not single cell's >90% — the §5.1 zero-run walk would roughly halve the
-subset stage, not decimate it), and **depth spanning 0.8M–89M** across the
-cohort, 17× between the 5th and 95th percentiles.

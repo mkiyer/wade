@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "Please cite the archived software version used in your analysis."
+type: software
+title: "WADE: Wasserstein Area Differential Expression"
+authors:
+  - family-names: Iyer
+    given-names: Matthew
+version: 0.2.0
+repository-code: "https://github.com/mkiyer/wade"
+license: GPL-3.0-only
+abstract: "Exact empirical Wasserstein distribution tests for RNA-seq, with descriptive bulk and tail effects."

@@ -21,7 +21,14 @@ notebooks/*.pdf
 notebooks/*.quarto_ipynb
 notebooks/*_files/
 notebooks/.quarto/
+notebooks/results/
 .quarto/
+
+# Local release executions, data snapshots, dependencies and review outputs.
+.release/
+
+# Local historical studies and source snapshots; retained on disk, not versioned.
+/archive/
 
 # Editors and OS
 .vscode/

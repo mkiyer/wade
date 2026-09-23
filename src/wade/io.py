@@ -222,6 +222,16 @@ def as_counts(
         available — labels are optional throughout.
     """
     if isinstance(obj, Counts):
+        if gene_names is not None or sample_names is not None or genes != "rows":
+            raise ValueError("Counts already carries labels and orientation; change them explicitly before analysis")
+        if obj.values.ndim != 2:
+            raise ValueError("Counts.values must be genes x samples")
+        for labels, size in ((obj.gene_names, obj.shape[0]), (obj.sample_names, obj.shape[1])):
+            if np.asarray(labels).shape != (size,) or _duplicates(np.asarray(labels)):
+                raise ValueError("Counts identifiers must be unique and match the matrix shape")
+        if any(np.asarray(v).shape != (obj.shape[0],) for v in obj.meta.values()):
+            raise ValueError("Counts metadata must contain one value per gene")
+        _locate_bad_counts(obj.values, obj.gene_names, obj.sample_names)
         return obj
     if genes not in ("rows", "columns"):
         raise ValueError(f"genes must be 'rows' or 'columns'; got {genes!r}")
@@ -305,8 +315,17 @@ def _locate_bad_counts(values, gene_names, sample_names) -> None:
 
 
 def _duplicates(arr: np.ndarray) -> list:
-    vals, counts = np.unique(arr.astype(object), return_counts=True)
-    return [v for v, c in zip(vals, counts) if c > 1]
+    seen, duplicates = set(), []
+    for value in arr.tolist():
+        if value is None or (isinstance(value, (float, np.floating)) and not np.isfinite(value)):
+            raise ValueError("identifiers cannot be missing or non-finite")
+        try:
+            if value in seen:
+                duplicates.append(value)
+            seen.add(value)
+        except TypeError as e:
+            raise ValueError("identifiers must be hashable") from e
+    return duplicates
 
 
 # ---------------------------------------------------------------------------
@@ -435,142 +454,37 @@ def condition(
 # Results out
 
 
-#: The written column order. ``neglog10_p_*`` is what a volcano plots;
-#: ``z_*`` are the permutation z-scores, the ranking that keeps working when
-#: p-values pile up at the resolution floor; ``nexc_*`` is the number of null
-#: draws at or beyond the observed statistic and ``refined_*`` says whether
-#: that stage's p-value was counted from permutations or read off the GPD
-#: tail fit. Bootstrap intervals follow as ``*_lo`` / ``*_hi`` pairs.
 RESULT_COLUMNS = (
-    "gene", "case_mean", "ctrl_mean", "mean_shift", "log2_fc",
-    "p_mean_shift", "padj_mean_shift", "neglog10_p_mean_shift", "z_mean_shift",
-    "nexc_mean_shift", "refined_mean_shift",
-    "subset_stat", "p_subset", "padj_subset", "neglog10_p_subset", "z_subset",
-    "nexc_subset", "refined_subset",
-    "affected_fraction", "subset_log2_fc", "direction", "w1",
+    "gene", "status", "statistic", "pvalue", "padj", "bulk_shift", "upper_tail", "lower_tail",
+    "n_permutations", "n_exceedances",
 )
 
-#: The descriptors that can carry a bootstrap interval, in written order.
-CI_COLUMNS = ("affected_fraction", "direction", "subset_log2_fc", "log2_fc", "mean_shift")
+
+def result_columns(res):
+    return {name: getattr(res, name) for name in RESULT_COLUMNS}
 
 
-def _permutation_space_record(res) -> dict | None:
-    """How much permutation freedom the design had — unrestricted, or
-    restricted by ``strata``. Recorded because a stratified design can have a
-    permutation space too small to support the p-values reported beside it."""
-    if res.cond is None:
-        return None
-    from .permutation import permutation_space
-
-    space = permutation_space(res.cond, res.params.get("strata"))
-    return {
-        "restricted": res.params.get("strata") is not None,
-        "n_strata": space["n_strata"],
-        "log10_space": round(space["log10_space"], 3),
-        "p_floor": space["p_floor"],
-        "uninformative_strata": space["uninformative_strata"],
-    }
-
-
-def _neglog10(p):
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return -np.log10(np.asarray(p, dtype=np.float64))
-
-
-def result_columns(res) -> dict:
-    """The result as a dict of equal-length arrays in :data:`RESULT_COLUMNS`
-    order, followed by the bootstrap intervals. The single place the table
-    is assembled: :meth:`wade.WadeResult.columns`, :func:`write_results` and
-    the plotting layer all read this."""
-    cols = {
-        "gene": res.gene, "case_mean": res.case_mean, "ctrl_mean": res.ctrl_mean,
-        "mean_shift": res.mean_shift, "log2_fc": res.log2_fc, "w1": res.w1,
-        "p_mean_shift": res.p_mean_shift, "padj_mean_shift": res.padj_mean_shift,
-        "neglog10_p_mean_shift": _neglog10(res.p_mean_shift),
-        "z_mean_shift": res.z_mean_shift,
-        "nexc_mean_shift": res.nexc_mean_shift, "refined_mean_shift": res.refined_mean_shift,
-    }
-    if res.subset is not None:
-        cols.update({
-            "subset_stat": res.subset.statistic,
-            "p_subset": res.p_subset, "padj_subset": res.padj_subset,
-            "neglog10_p_subset": _neglog10(res.p_subset),
-            "z_subset": res.z_subset,
-            "nexc_subset": res.nexc_subset, "refined_subset": res.refined_subset,
-            "affected_fraction": res.subset.affected_fraction,
-            "subset_log2_fc": res.subset.subset_log2_fc,
-            "direction": res.subset.direction,
-        })
-    ordered = {k: cols[k] for k in RESULT_COLUMNS if cols.get(k) is not None}
-    for name in CI_COLUMNS:
-        ci = getattr(res, f"ci_{name}")
-        if ci is not None:
-            ordered[f"{name}_lo"] = ci[0]
-            ordered[f"{name}_hi"] = ci[1]
-    return ordered
-
-
-def manifest(res, *, alpha: float = 0.05) -> dict:
-    """What produced this result — parameters, shapes, versions, timestamp.
-
-    The timestamp makes the manifest deliberately **not** byte-reproducible.
-    Provenance is what it is for; the result table beside it is reproducible
-    from the seed.
-    """
+def manifest(res, *, alpha=0.05):
+    """The complete tested family, preprocessing, sample design and MC records."""
     from datetime import datetime, timezone
-
     from . import __version__
-
-    p = dict(res.params)
-    out = {
-        "wade_version": __version__,
-        "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "numpy_version": np.__version__,
-        "run": {
-            "nperms": p.get("nperms"),
-            "seed": p.get("seed"),
-            "alternative": p.get("alternative"),
-            "n_exc_min": p.get("n_exc_min"),
-            "n_tail": p.get("n_tail"),
-            "n_boot": p.get("n_boot"),
-            "normalizer": p.get("normalizer"),
-            "noise": p.get("noise"),
-            "norm_factor": p.get("norm_factor"),
-            "pseudocount": p.get("pseudocount"),
-            "subset": p.get("subset"),
-            "lib_sizes_supplied": p.get("lib_sizes_supplied"),
-            "perms_supplied": p.get("perms_supplied"),
-            # The two opt-in fast paths change reported numbers, so a
-            # manifest without them could not reproduce the run.
-            "stage1": p.get("stage1"),
-            "fit_backend": p.get("fit_backend"),
-            "gene_chunk": p.get("gene_chunk"),
-        },
-        "design": {
-            "n_genes": int(res.gene.shape[0]),
-            "n_case": p.get("n_case"),
-            "n_ctrl": p.get("n_ctrl"),
-            "nprobs": res.nprobs,
-            "max_probs": p.get("max_probs"),
-            "permutation_space": _permutation_space_record(res),
-            "case_label": p.get("case_label"),
-            "control_label": p.get("control_label"),
-            "condition_column": p.get("condition_column"),
-        },
-        "results": {
-            "alpha": alpha,
-            "n_significant_mean_shift": int(np.sum(np.nan_to_num(res.padj_mean_shift, nan=np.inf) <= alpha)),
-        },
-    }
-    if res.padj_subset is not None:
-        out["results"]["n_significant_subset"] = int(
-            np.sum(np.nan_to_num(res.padj_subset, nan=np.inf) <= alpha))
-    try:
-        import polars as pl
-        out["polars_version"] = pl.__version__
-    except ImportError:                                     # pragma: no cover
-        pass
-    return out
+    if not np.isfinite(alpha) or not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    genes = res.gene.tolist()
+    references = set(res.normalization.used_reference_genes)
+    tested = res.tested
+    return dict(
+        wade_version=__version__, created_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        numpy_version=np.__version__, run=dict(res.params), normalization=res.normalization.to_dict(),
+        design=dict(genes=genes, sample_names=res.sample_names.tolist(), condition=res.cond.tolist(),
+                    n_case=int(res.cond.sum()), n_control=int((res.cond == 0).sum()),
+                    n_tested=int(tested.sum()), status=res.status.tolist(),
+                    tested_reference_genes=[g for g, keep in zip(genes, tested)
+                                            if keep and g in references]),
+        resampling=dict(n_permutations=res.n_permutations.tolist(), n_exceedances=res.n_exceedances.tolist(),
+                        rule="h/T at the h-th inclusive exceedance; otherwise (K+1)/(B+1) at cap B"),
+        results=dict(alpha=alpha, n_significant=int(np.sum(res.padj <= alpha)),
+                     minimum_discovery_rank=int(np.ceil(tested.sum() * res.params["minimum_pvalue"] / alpha))))
 
 
 _WRITERS = {

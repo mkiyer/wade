@@ -54,9 +54,9 @@ class Theme:
     case: str
     #: The control group.
     ctrl: str
-    #: A quantity with a floor and a ceiling, ``affected_fraction`` above all.
+    #: A quantity with a floor and a ceiling, the subset fractions above all.
     sequential: str
-    #: A signed quantity read against zero, ``direction`` above all.
+    #: A signed quantity read against zero, a log₂ fold change above all.
     diverging: str
     font: str
     plotly_template: str
@@ -106,41 +106,5 @@ THEMES = {
         sequential="cividis", diverging="RdBu_r",
         font=_SANS, plotly_template="plotly_white",
     ),
-}
-
-#: ``affected_fraction`` is a fraction, ``direction`` a signed coherence.
-_COLOR_SPECS = {
-    "affected_fraction": dict(label="affected fraction", role="sequential", range=(0.0, 1.0)),
-    "direction": dict(label="direction", role="diverging", range=(-1.0, 1.0)),
-}
-
-_STAGE_LABELS = {"mean_shift": "mean shift", "subset": "subset"}
-
-#: Axis labels for the columns worth plotting. Anything else falls back to its
-#: own name, so a new statistic is plottable the day it exists.
-_AXIS_LABELS = {
-    "log2_fc": "log₂ fold change (case / control)",
-    "subset_log2_fc": "subset log₂ fold change (within the affected fraction)",
-    "mean_shift": "mean shift (TPM-like units)",
-    "affected_fraction": "affected fraction",
-    "direction": "direction",
-    "z_mean_shift": "z, mean shift vs its permutation null",
-    "z_subset": "z, subset vs its permutation null",
-    "subset_stat": "subset statistic",
-    "w1": "1-Wasserstein distance",
-    "case_mean": "case mean", "ctrl_mean": "control mean",
-}
-
-
-def _axis_label(name: str) -> str:
-    return _AXIS_LABELS.get(name, name)
-
-
-#: The README's reading table, keyed by (mean-shift significant, subset significant).
-QUADRANTS = {
-    (True, False): "global shift",
-    (True, True): "subset, strong enough to move the mean",
-    (False, True): "distributional change, no net mean shift",
-    (False, False): "not differential",
 }
 
