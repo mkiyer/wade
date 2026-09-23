@@ -22,7 +22,7 @@ point-method evidence; it does not validate a future kernel procedure.
 Notebook builds use isolated snapshots and verified computation caches. An
 inference change requires fresh results; revised figures or prose require review.
 The private workbench and local data remain excluded from distribution. Review
-hubs link the dated baseline assessment and the current release plan separately.
+hubs link the current scientific assessment and release queue.
 
 The old scaling benchmark, legacy comparator cache importer and stage-specific
 p-value tools were archived because they still refer to retired APIs. They are

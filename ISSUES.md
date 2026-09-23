@@ -7,7 +7,7 @@ The [full prior discussion](archive/development-20260923/ISSUES.md) is archived.
 
 | Issue | Remaining work |
 | --- | --- |
-| 29 — Biomarker objective and kernels | Implement the agreed truth-recovery/failure-replay benchmark, then derive and validate one normalized measurement-kernel procedure. Direction, log/linear scale, localization and uncertainty need explicit targets. |
+| 29 — Biomarker objective and kernels | Gate-B instruments and depth-null replay are implemented. The upper walk fails as a general prevalence estimator even without counting noise. Complete the remaining mechanism replays and validate one measurement-kernel procedure; current Beta candidates remain unselected. |
 | 22 — Calibration | Validate the selected complete kernel workflow at transcriptome scale. The two-stage fitted-bulk correction is retired; reopening it is not the next task. |
 | 26 — Normalization | Validate RLE/internal controls, fitted-factor uncertainty, reference/test overlap and filtering within the selected workflow. No automatic control nomination is selected. |
 | 25 — External comparisons | Compare with native DESeq2/edgeR and separately defined OUTRIDER/related outlier tasks. Evaluate effects and subsets as well as detection. |

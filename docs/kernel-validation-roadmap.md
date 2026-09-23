@@ -207,7 +207,7 @@ choices remain open. Keep the current production baseline and original studies
 as identifiable comparisons. No new scientific benchmark or model selection
 was performed during this reset.
 
-### B. Build the small truth-recovery and failure-replay benchmark — next
+### B. Build the small truth-recovery and failure-replay benchmark
 
 Before another model sweep, implement the scorecard on the saved simulations.
 Start with transparent null, broad-shift, shared-tail and minority-spike examples;
@@ -226,6 +226,87 @@ This is a diagnostic benchmark on reused data, not fresh confirmation.
 **Gate:** we can explain what each estimator measures, verify truth accounting,
 and identify which false-positive problem the proposed kernel must address.
 Do not choose a new prior just because it wins a detection table.
+
+**Executed instrument gate, 2026-09-23.** The
+[runner and definitions](../research/README.md#gate-b-assessment) now implement the
+[frozen protocol](../research/protocols/truth-recovery.json). The accepted
+[local artifact](../.release/0.2.0/truth-recovery-20260923-v4/completion.json)
+contains source/input hashes, 1,728 profile rows (including latent controls),
+per-cohort scorecards, coverage/width, normalization errors and null replays.
+There are four saved biological cohorts: Gamma and correlated lognormal at
+250:250 and 50:500, each with all 36 original profiles at full depth and with
+5% of libraries retaining 1/1,000 of their reads. This is reused-data diagnosis,
+not independent confirmation; profiles within a cohort are not independent
+replicates. No production behavior or statistical candidate changed.
+
+The most consequential finding is independent of kernels. In an exact example,
+90% of cases have precisely the control distribution and 10% are extreme spikes.
+The maximum upper walk selects **99.1%**, because the mixture moves quantiles
+throughout the distribution. With continuous first-order dominance it can select
+the entire cohort. On the saved latent 10%-at-4-fold profiles, its mean selected
+fraction is **94.6%**, before count noise. Above a depressed bulk it selects
+10.0% on average. The latter favorable case cannot justify using the walk as a
+general prevalence estimator. A selected-tail fold contrast likewise differs
+from the planted component fold contrast. The
+[analytic illustration](../.release/0.2.0/truth-recovery-20260923-v4/review/walk-limit.png)
+has been visually checked; user approval is pending.
+
+The current-code false-positive replay holds linear upward area, equal patient
+mass and library-total scaling fixed in a two-category count experiment:
+
+| Case/control depth ratio | Current label permutation | Saved fitted actual-depth null, same point statistic |
+| --- | ---: | ---: |
+| 1/4 | 23/24 null rejections | 1/24 |
+| 1 | 0/24 | 0/24 |
+| 4 | 23/24 | 1/24 |
+
+Observed areas and all saved bootstrap/oracle point areas reproduce with the
+current implementation. The current permutation column uses a new fixed bank;
+the archived permutation bank gives the same aggregate counts. The fitted null
+was reused, not refitted or selected here. These are nominal 0.05 single-gene
+rejections; 1/24 has a wide exact 95% interval, approximately 0.1–21.1%.
+This isolates a calibration problem when depth tracks condition. It is separate
+from minority thinning independent of group and from the retired bulk correction.
+
+With the transcriptome panels, every arm shares RLE and the same saved label
+banks. At full depth all five arms call 79/96 upward alternatives and 2/32 nulls.
+For the severe minority-depth intervention:
+
+| Representation | Upward calls | Null calls | Mean-ratio log2 MAE versus latent truth |
+| --- | ---: | ---: | ---: |
+| Normalized points | 71/96 | 2/32 | 0.123 |
+| Binomial–Beta, h=1, full kernels | 29/96 | 3/32 | 0.342 |
+| Binomial–Beta, h=0.5, full kernels | 32/96 | 3/32 | 0.308 |
+
+Mean-only controls call 29/96 and 34/96 respectively; their whole-group mean
+contrasts equal those of their full kernels. RLE's case-minus-control factor
+error stays below 0.009 log2 in these eight matrices. The new measurements
+therefore support a location problem for these candidates in this stress case,
+not a missing normalization transform. This deliberately severe intervention
+is an operating-boundary diagnostic, not a typical bulk cohort or an argument
+against uncertainty modeling generally.
+
+In shallow libraries, central 95% Beta intervals cover latent truth in 43.8%
+(h=1) and 84.2% (h=0.5) of the 3,744 patient–gene measurements, despite large
+widths. Full-depth coverage is 93.8% and 94.8%. These are descriptive coverage
+fractions across dependent measurements under the saved biological generators,
+not prior-averaged calibration certificates. Positive width alone is insufficient.
+
+The instruments caught inaccurate inverse-Beta values for a large asymmetric
+shape. CDF checks and bisection now guard those requests; the initial incomplete
+runs remain local evidence. Area errors use the bounded CDF integrator. Kernel
+descriptions compare 64 and 128 nodes per patient, with transport bounds and
+floating-point allowances. In 8/576 kernel descriptions the selected fraction
+changes by more than one percentage point; the maximum is 9.2 points. These
+cutoffs remain numerically unresolved as precise estimates, even aside from
+their conceptual prevalence limitation. No p-value uses this quadrature.
+
+**Decision:** the instruments expose failures that a detection-only benchmark
+misses. They do not pass either kernel for release. Finish the bounded
+normalization/raw-noise failure replays, clarify what localization may claim,
+and then use these instruments to evaluate a justified measurement candidate.
+Weak-subset power loss and singleton fitted-reference collapse remain explicitly
+preserved historical sentinels; neither legacy fitter was rerun in this gate.
 
 ### C. Derive and validate one measurement candidate at a time
 

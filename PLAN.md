@@ -29,13 +29,20 @@ this reset.
 - [x] Agree on the sequence and specification, including what “fold change” and “affected
   subset” mean. Prior choice, technical dispersion and null calibration remain
   open; neither another fixed prior nor a fitted population reference is selected.
-- [ ] Build the small truth-recovery and failure-replay benchmark on saved data:
-  abundance curves/areas, explicit fold contrasts, subset fraction, and patient
-  membership, alongside calibration and detection. Check noiseless examples
-  first and distinguish identifiable descriptions from latent component estimates.
-- [ ] Reproduce relevant historical false positives with the current matched
-  point baseline. Separate normalization, raw-noise offsets, depth-associated
-  sampling and the retired fitted-bulk subset test. Preserve negative results.
+- [x] Build and execute the bounded truth-recovery instruments: analytic examples,
+  four saved transcriptomes, two depth states, all 36 original profiles, shared
+  RLE, both Beta candidates and their mean controls. Measure effects, membership,
+  coverage/width and detection with numerical checks. See [gate B](docs/kernel-validation-roadmap.md#b-build-the-small-truth-recovery-and-failure-replay-benchmark).
+- [x] Replay 72 depth-associated null datasets through the current point statistic.
+  Reproduce the confounded-depth false calls and the separate count-aware-null
+  result; neither is transcriptome FDR certification.
+- [ ] Resolve the localization target: the maximum upper walk does not generally
+  estimate planted prevalence, even on exact latent abundances. Retain it as a
+  curve description while evaluating component claims separately.
+- [ ] Complete bounded normalization-failure and raw-noise replays. The RLE error
+  audit on the four current matrices is complete; it is not a replay of the older
+  failure settings. Keep retired fitted-bulk failures distinct. Weak-subset and
+  singleton-collapse records remain historical sentinels, not newly fitted results.
 
 ## Then: select and validate one complete procedure
 
@@ -43,6 +50,8 @@ this reset.
   abundance target, inference/prior rule, normalization and null. Check
   zero/one/many-read uncertainty, location, predictive behavior and precise spikes.
   Compare full kernels with their own means and matched normalized points.
+  The current Beta candidates have not passed: severe-depth mean shifts and
+  shallow-library interval coverage remain unresolved.
 - [ ] Freeze the usable candidate, metrics, acceptance margins, replication
   target and fresh seeds before confirmation. Validate realistic large-cohort
   bulk settings first; report operating boundaries separately.
