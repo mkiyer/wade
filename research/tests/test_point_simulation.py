@@ -10,17 +10,17 @@ from wade_research.point_simulation import datasets, generate
 
 @pytest.mark.parametrize("biology", ["gamma", "correlated_lognormal"])
 def test_population_truth_membership_and_null_sentinels(biology):
-    cfg = json.loads((Path(__file__).parents[1]/"protocols/point-comparison.json").read_text())
+    cfg = json.loads((Path(__file__).parents[1]/"protocols/confirmation.json").read_text())
     cfg = dict(cfg, genes=256)
     settings = dict(next(datasets(cfg)), panel="mixed", biology=biology)
     data = generate(cfg, settings)
     assert data['counts'].dtype.kind in 'iu'
-    assert data['altered'].sum() == 48
-    assert data['mean_altered'].sum() == 40
+    assert data['altered'].sum() == 60
+    assert data['mean_altered'].sum() == 52
     for profile in ('mean_preserving_subset_10pct_4x', 'same_mean_wider'):
         np.testing.assert_allclose(data['population_log2_ratio'][data['profile'] == profile], 0, atol=1e-15)
-    selected = data['profile'] == 'bulk_half_subset_up_10pct_4x'
-    np.testing.assert_allclose(data['population_log2_ratio'][selected], np.log2(.85))
+    selected = data['profile'] == 'bulk_half_subset_up_10pct_32x'
+    np.testing.assert_allclose(data['population_log2_ratio'][selected], np.log2(.9*.5 + .1*32))
     assert data['perturbed'][selected].all()
     np.testing.assert_array_equal(data['enriched'][selected].sum(axis=1), 25)
     assert not data['altered'][:64].any()
@@ -33,7 +33,7 @@ def test_population_truth_membership_and_null_sentinels(biology):
 
 
 def test_registry_has_independent_seeds_and_fixed_balanced_biology():
-    cfg = json.loads((Path(__file__).parents[1]/"protocols/point-comparison.json").read_text())
+    cfg = json.loads((Path(__file__).parents[1]/"protocols/confirmation.json").read_text())
     rows = list(datasets(cfg))
     assert len(rows) == 120
     assert len({tuple(r['seed']) for r in rows}) == 120

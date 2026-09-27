@@ -49,7 +49,7 @@ def scatter(spec):
     t = spec["theme"]
     fig, ax = plt.subplots(figsize=(7, 4.8), layout="constrained")
     for mask, color, name in [(spec["keep"] & ~spec["significant"], t.muted, "Not called"),
-                              (spec["significant"], t.case, f"Distribution q ≤ {spec['alpha']:g}")]:
+                              (spec["significant"], t.case, spec["called"])]:
         ax.scatter(spec["x"][mask], spec["y"][mask], s=15, c=color, alpha=.65, linewidths=0, label=name, rasterized=True)
     ax.axvline(0, color=t.axis, linewidth=.8)
     if spec["kind"] == "volcano":

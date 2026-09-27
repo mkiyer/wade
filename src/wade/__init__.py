@@ -1,4 +1,4 @@
-"""WADE: one exact Wasserstein distribution test, with descriptive bulk and tails."""
+"""WADE: upward and downward Wasserstein areas between case and control expression."""
 from importlib.metadata import version as _version, PackageNotFoundError
 try:
     __version__ = _version("wade-rnaseq")

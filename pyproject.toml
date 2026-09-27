@@ -7,7 +7,7 @@ build-backend = "maturin"
 # project); the import name is `wade`.
 name = "wade-rnaseq"
 version = "0.2.0"
-description = "Exact Wasserstein distribution tests for RNA-seq, with descriptive bulk and tail effects"
+description = "Directional Wasserstein-area tests for RNA-seq biomarker discovery: bulk shifts and raised or lowered subsets"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-only"

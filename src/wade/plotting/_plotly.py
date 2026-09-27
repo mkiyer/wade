@@ -39,7 +39,7 @@ def scatter(spec):
     t = spec["theme"]
     fig = go.Figure()
     for mask, color, name in [(spec["keep"] & ~spec["significant"], t.muted, "Not called"),
-                              (spec["significant"], t.case, f"Distribution q ≤ {spec['alpha']:g}")]:
+                              (spec["significant"], t.case, spec["called"])]:
         fig.add_trace(go.Scattergl(x=spec["x"][mask], y=spec["y"][mask], text=spec["gene"][mask], mode="markers",
                                   marker=dict(color=color,size=6,opacity=.65),name=name,
                                   hovertemplate="%{text}<br>x=%{x:.3g}<br>y=%{y:.3g}<extra></extra>"))

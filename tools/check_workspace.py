@@ -36,7 +36,7 @@ def check():
                 errors.append(f"{path.relative_to(ROOT)} imports archived code: {module}")
             if path.is_relative_to(ROOT / "src") and first in {"research", "wade_research", "tools"}:
                 errors.append(f"Production imports development code: {path.relative_to(ROOT)}: {module}")
-    documents = [ROOT / n for n in ("README.md", "CONTRIBUTING.md", "PLAN.md", "ISSUES.md")]
+    documents = [ROOT / n for n in ("README.md", "CONTRIBUTING.md", "ISSUES.md")]
     for folder in ("docs", "research", "tools"):
         documents.extend((ROOT / folder).rglob("*.md"))
     documents += list((ROOT / "notebooks").glob("*.qmd"))

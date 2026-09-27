@@ -35,7 +35,7 @@ def test_supplied_factors_are_centered_once_and_align_by_name():
     np.testing.assert_array_equal(selected.size_factors,norm.size_factors[[5,1,2,3]])
     res=wade.wade_contrast(x,["f","b"],["c","d"],normalization=norm,max_permutations=21)
     np.testing.assert_array_equal(res.normalization.size_factors,selected.size_factors)
-    np.testing.assert_allclose(res.expression,np.log2(x.values[:,[5,1,2,3]]/selected.size_factors+1))
+    np.testing.assert_allclose(res.expression,x.values[:,[5,1,2,3]]/selected.size_factors)
     assert res.normalization.fit_sample_names==tuple("abcdef")
 
 

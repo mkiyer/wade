@@ -12,7 +12,16 @@ class GeneDetail:
     case_quantiles: np.ndarray
     control_quantiles: np.ndarray
     effect: np.ndarray
-    cumulative_area: np.ndarray
+
+    @property
+    def area_up(self):
+        """Integral of the case-minus-control quantile difference where it is positive."""
+        return float(np.maximum(self.effect, 0) @ np.diff(self.probability))
+
+    @property
+    def area_down(self):
+        """Integral of the control-minus-case quantile difference where it is positive."""
+        return float(np.maximum(-self.effect, 0) @ np.diff(self.probability))
 
 
 def gene_detail(expression, cond):
@@ -24,9 +33,7 @@ def gene_detail(expression, cond):
     edges = np.unique(np.r_[np.arange(len(a)+1)/len(a), np.arange(len(b)+1)/len(b)])
     mid = (edges[:-1] + edges[1:]) / 2
     qa, qb = a[np.minimum((mid*len(a)).astype(int),len(a)-1)], b[np.minimum((mid*len(b)).astype(int),len(b)-1)]
-    effect = qa-qb
-    area = np.r_[0, np.cumsum(np.abs(effect)*np.diff(edges))]
-    return GeneDetail(edges, qa, qb, effect, area)
+    return GeneDetail(edges, qa, qb, qa-qb)
 
 
 def library_qc(counts, *, top_n=10):

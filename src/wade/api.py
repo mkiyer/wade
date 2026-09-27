@@ -1,31 +1,40 @@
-"""One distribution test per gene, followed by descriptive effects."""
+"""Upward and downward area tests per gene, followed by descriptive effects."""
 from dataclasses import dataclass
 import numpy as np
 
 from ._descriptions import describe
-from ._wasserstein import STOP_EXCEEDANCES, infer, log_expression, resolve_backend
+from ._wasserstein import DIRECTIONS, SCALES, STOP_EXCEEDANCES, expression, infer, resolve_backend
 from .io import Condition, Counts, as_counts, result_columns
 from .normalize import Normalization, _fingerprint, _indices, _named, fit_normalization
 from .permutation import permutation_space, strata_indices, validate_labels
 from .pvalues import bh_adjust
 
-DEFAULT_MAX_PERMUTATIONS = 499_999
+# Floor 1e-6: an isolated BH discovery at q <= 0.05 stays possible for up to
+# 50,000 gene-direction tests, i.e. a 25,000-gene direction="both" analysis.
+DEFAULT_MAX_PERMUTATIONS = 999_999
+_ACTIVE = {"both": (True, True), "up": (True, False), "down": (False, True)}
 
 
 @dataclass
 class WadeResult:
-    """A gene's q-value tests its distribution, not the sign of a description.
+    """Each gene's upward and downward areas, with the declared hypothesis's q-values.
 
-    bulk_shift is the case minus control median of log2(count/size_factor+1).
-    upper_tail/lower_tail are the corresponding upper/lower decile mean
-    differences minus bulk_shift. Both are signed descriptive contrasts.
-    No tail p-values or sample outlier probabilities are inferred.
+    area_up integrates case-minus-control quantile differences where cases are
+    higher; area_down where they are lower; both on params["scale"]. padj_up and
+    padj_down share one BH family for direction="both", or cover the tested
+    genes for one direction (the other is NaN). bulk_shift is the case minus
+    control median of log2(count/size_factor+1); upper_tail/lower_tail are
+    upper/lower decile mean differences minus bulk_shift. Descriptions carry
+    no p-values, and no sample outlier probabilities are inferred.
     """
     gene: np.ndarray
-    statistic: np.ndarray
-    pvalue: np.ndarray
-    padj: np.ndarray
     status: np.ndarray
+    area_up: np.ndarray
+    area_down: np.ndarray
+    pvalue_up: np.ndarray
+    pvalue_down: np.ndarray
+    padj_up: np.ndarray
+    padj_down: np.ndarray
     bulk_shift: np.ndarray
     upper_tail: np.ndarray
     lower_tail: np.ndarray
@@ -44,7 +53,8 @@ class WadeResult:
 
     def __repr__(self):
         return (f"WadeResult(genes={len(self.gene)}, tested={int(self.tested.sum())}, "
-                f"case={int(self.cond.sum())}, control={int((self.cond == 0).sum())})")
+                f"case={int(self.cond.sum())}, control={int((self.cond == 0).sum())}, "
+                f"direction={self.params['direction']!r}, scale={self.params['scale']!r})")
 
     def columns(self):
         return result_columns(self)
@@ -68,8 +78,26 @@ class WadeResult:
         raise KeyError(f"unknown gene {gene!r}")
 
     def gene_detail(self, gene):
+        """Exact quantile intervals on the test scale; their areas are area_up/area_down."""
         from .diagnostics import gene_detail
         return gene_detail(self.expression[self.gene_index(gene)], self.cond)
+
+    def drivers(self, gene, direction="up"):
+        """Case samples beyond every control, most extreme first.
+
+        "up" returns cases above the highest control, "down" cases below the
+        lowest. A description of who carries the area, not an outlier test.
+        """
+        if direction not in DIRECTIONS:
+            raise ValueError("direction must be 'up' or 'down'")
+        x, case = self.expression[self.gene_index(gene)], self.cond == 1
+        if direction == "up":
+            keep = case & (x > x[~case].max())
+            order = np.argsort(-x[keep], kind="stable")
+        else:
+            keep = case & (x < x[~case].min())
+            order = np.argsort(x[keep], kind="stable")
+        return self.sample_names[keep][order]
 
     def plot_gene(self, gene, **kwargs):
         from .plotting import plot_gene
@@ -90,26 +118,42 @@ def _positive_int(value, name):
     return int(value)
 
 
-def wade(counts, cond, *, normalization="rle", test_genes=None,
+def wade(counts, cond, *, direction="both", scale="linear", normalization="rle", test_genes=None,
          max_permutations=DEFAULT_MAX_PERMUTATIONS, seed=1, strata=None,
          gene_names=None, sample_names=None, gene_chunk=None, backend="auto"):
-    """Test distribution differences on raw counts (genes x samples).
+    """Test upward and downward expression differences on raw counts (genes x samples).
+
+    area_up integrates the case-minus-control quantile differences where cases
+    are higher. Quantiles where cases are lower add nothing to it instead of
+    cancelling it, so a subset raised above a lowered bulk keeps its evidence;
+    area_down is the mirror image, and area_up - area_down is the mean difference.
+
+    direction="both" tests both areas in one pass with shared label draws: a
+    discovery hypothesis with one BH family over every tested gene-direction
+    pair. direction="up" or "down" tests one declared direction, and BH covers
+    the tested genes. scale="linear" uses count/size_factor; "log" uses
+    log2(count/size_factor+1). Choose both before looking at results.
 
     The default fits RLE before excluding all-zero genes from testing. Pass
     test_genes as gene IDs or a pooled Boolean mask to define a smaller family
     without changing normalization. A fitted Normalization supports validated
     reference genes, external factors, and reuse across contrasts.
 
-    Exact empirical W1 uses log2(count/size_factor+1). Independent random label
-    shuffles preserve group sizes and optional strata. A gene stops at its
-    20th inclusive exceedance or max_permutations; BH covers the entire tested
-    family once. The minimum Monte Carlo p-value is 1/(max_permutations+1).
-    Small budgets are useful for exploration but limit transcriptome discovery.
+    Independent random label shuffles preserve group sizes and optional strata.
+    Each direction stops at its 20th inclusive exceedance or max_permutations.
+    The minimum Monte Carlo p-value is 1/(max_permutations+1). Small budgets
+    are useful for exploration but limit transcriptome discovery.
 
     Samples must be independent exchangeable units under the null, conditional
-    on any strata. Normalization does not remove batch/depth confounding.
-    gene_chunk and backend affect computation, not the statistical procedure.
+    on any strata. Normalization does not remove batch/depth confounding; the
+    run record reports median size factors per group. gene_chunk and backend
+    affect computation, not the statistical procedure.
     """
+    if direction not in _ACTIVE:
+        raise ValueError("direction must be 'both', 'up' or 'down'")
+    if scale not in SCALES:
+        raise ValueError("scale must be 'linear' or 'log'")
+    active = _ACTIVE[direction]
     maximum = _positive_int(max_permutations, "max_permutations")
     selected_backend = resolve_backend(backend)
     data = as_counts(counts, gene_names=gene_names, sample_names=sample_names)
@@ -150,32 +194,41 @@ def wade(counts, cond, *, normalization="rle", test_genes=None,
     if isinstance(seed, (np.random.Generator, np.random.BitGenerator, np.random.SeedSequence)):
         raise TypeError("seed must be an integer, an integer sequence, or None")
     seed = np.asarray(seed).tolist()
-    expression = np.empty(data.shape, float)
-    statistic, pvalue = np.full(g, np.nan), np.full(g, np.nan)
-    exceed, tried = np.zeros(g, np.uint64), np.zeros(g, np.uint64)
+    values = np.empty(data.shape, float)
+    area, pvalue = np.full((g, 2), np.nan), np.full((g, 2), np.nan)
+    exceed, tried = np.zeros((g, 2), np.uint64), np.zeros((g, 2), np.uint64)
     bulk, upper, lower = np.empty(g), np.empty(g), np.empty(g)
     for start in range(0, g, chunk):
         rows = slice(start, min(start + chunk, g))
-        x = log_expression(data.values[rows], fitted.size_factors)
-        expression[rows] = x
-        bulk[rows], upper[rows], lower[rows] = describe(x, labels)
+        x = expression(data.values[rows], fitted.size_factors, scale)
+        values[rows] = x
+        bulk[rows], upper[rows], lower[rows] = describe(x if scale == "log" else np.log2(x + 1), labels)
         local = np.flatnonzero(tested[rows])
         if len(local):
             idx = start + local
-            statistic[idx], pvalue[idx], exceed[idx], tried[idx] = infer(
-                x[local], labels, maximum=maximum, seed=seed, strata=strata,
+            area[idx], pvalue[idx], exceed[idx], tried[idx] = infer(
+                x[local], labels, active=active, maximum=maximum, seed=seed, strata=strata,
                 backend=selected_backend, batch=batch)
-    params = dict(algorithm="log-w1-besag-clifford-v1", expression="log2(count / size_factor + 1)",
+    padj = np.full((g, 2), np.nan)
+    columns = [d for d, on in enumerate(active) if on]
+    padj[:, columns] = bh_adjust(pvalue[:, columns].ravel()).reshape(g, len(columns))
+    factors = fitted.size_factors
+    params = dict(algorithm="directional-area-besag-clifford-v1", direction=direction, scale=scale,
+                  expression="count / size_factor" if scale == "linear" else "log2(count / size_factor + 1)",
+                  family="every tested gene-direction pair" if direction == "both" else f"tested genes, {direction} only",
+                  hypotheses=int(len(columns) * tested.sum()),
                   max_permutations=maximum, stop_exceedances=min(STOP_EXCEEDANCES, maximum),
                   minimum_pvalue=1 / (maximum + 1), seed=seed, strata=None if strata is None else strata.tolist(),
                   backend=selected_backend, gene_chunk=chunk, permutation_batch=batch,
                   counts_sha256=_fingerprint(data), permutation_space=space,
+                  size_factor_median=dict(case=float(np.median(factors[labels == 1])),
+                                          control=float(np.median(factors[labels == 0]))),
                   test_selection="nonzero" if test_genes is None else "explicit; all-zero genes excluded",
-                  description="median shift; signed decile mean differences minus median shift")
+                  description="log2 median shift; decile mean differences minus the median shift")
     if isinstance(cond, Condition):
         params.update(case_label=cond.case, control_label=cond.control, condition_column=cond.column)
-    return WadeResult(data.gene_names.copy(), statistic, pvalue, bh_adjust(pvalue), status,
-                      bulk, upper, lower, tried, exceed, expression, labels.copy(),
+    return WadeResult(data.gene_names.copy(), status, area[:, 0], area[:, 1], pvalue[:, 0], pvalue[:, 1],
+                      padj[:, 0], padj[:, 1], bulk, upper, lower, tried, exceed, values, labels.copy(),
                       data.sample_names.copy(), fitted, params, dict(data.meta))
 
 

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "phase": "Confirmation of the selected public procedure on fresh seeds. Frozen before generation; results do not change the procedure.",
+  "procedure": {
+    "call": "wade.wade(counts, cond, direction='both', scale='linear', normalization=RLE fit on the complete matrix, test_genes=wade.filter_counts(counts, min_count=3, min_samples=2), seed=permutation_seed)",
+    "max_permutations": 999999,
+    "alpha": 0.05
+  },
+  "comparator": "One-sided Wilcoxon rank-sum per direction (asymptotic, tie-corrected) on the same normalized counts and test mask; one BH family over both directions, as for WADE",
+  "genes": 16384,
+  "allocations": [[250, 250], [500, 50], [50, 500]],
+  "panels": ["complete_null", "mixed"],
+  "replicates_per_cell": 20,
+  "biology": ["gamma", "correlated_lognormal"],
+  "seed_root": 2026092702,
+  "null": "Independent biological patients; exposures independent of condition; no injected group confounding",
+  "generator": {
+    "background_mean_range": [0.05, 1000],
+    "biological_cv2_range": [0.2, 1.0],
+    "exposure_log_sd": 0.35,
+    "lognormal_modules": 64,
+    "within_module_log_correlation": 0.2,
+    "reference_controls": 64,
+    "all_zero_genes": 1,
+    "profile_means": [0.5, 5, 50, 500],
+    "profiles": ["bulk_up_1.5x", "bulk_down_two_thirds", "subset_up_5pct_4x", "subset_up_10pct_4x",
+                 "subset_up_20pct_4x", "subset_up_10pct_16x", "subset_down_10pct_quarter",
+                 "bulk_half_subset_up_10pct_8x", "bulk_half_subset_up_10pct_32x",
+                 "bulk_half_subset_up_10pct_128x", "bulk_half_subset_up_10pct_1024x",
+                 "same_mean_wider", "mean_preserving_subset_10pct_4x", "opposing_20pct", "singleton_up_16x"],
+    "shared_tail_null_profiles": 4,
+    "retired": "bulk_half_subset_up_10pct_4x: below the information limit (2026-09-27 review); replaced by the 8-1024x raised-subset series"
+  },
+  "intended_direction": {
+    "up": ["bulk_up_1.5x", "subset_up_5pct_4x", "subset_up_10pct_4x", "subset_up_20pct_4x", "subset_up_10pct_16x",
+           "bulk_half_subset_up_10pct_8x", "bulk_half_subset_up_10pct_32x", "bulk_half_subset_up_10pct_128x",
+           "bulk_half_subset_up_10pct_1024x", "mean_preserving_subset_10pct_4x", "singleton_up_16x"],
+    "down": ["bulk_down_two_thirds", "subset_down_10pct_quarter"],
+    "either": ["same_mean_wider", "opposing_20pct"]
+  },
+  "endpoints": {
+    "calibration": "Per matrix: false gene-direction calls on unaltered genes (background and shared-tail nulls) over all gene-direction calls; complete-null any-call rate",
+    "power": "Share of each profile x abundance called in its intended direction, and in the other direction, over all replicates",
+    "direction_errors": "Up calls on bulk_down_two_thirds and down calls on bulk_up_1.5x"
+  }
+}

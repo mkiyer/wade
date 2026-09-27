@@ -455,8 +455,8 @@ def condition(
 
 
 RESULT_COLUMNS = (
-    "gene", "status", "statistic", "pvalue", "padj", "bulk_shift", "upper_tail", "lower_tail",
-    "n_permutations", "n_exceedances",
+    "gene", "status", "area_up", "area_down", "pvalue_up", "pvalue_down", "padj_up", "padj_down",
+    "bulk_shift", "upper_tail", "lower_tail",
 )
 
 
@@ -481,10 +481,12 @@ def manifest(res, *, alpha=0.05):
                     n_tested=int(tested.sum()), status=res.status.tolist(),
                     tested_reference_genes=[g for g, keep in zip(genes, tested)
                                             if keep and g in references]),
-        resampling=dict(n_permutations=res.n_permutations.tolist(), n_exceedances=res.n_exceedances.tolist(),
-                        rule="h/T at the h-th inclusive exceedance; otherwise (K+1)/(B+1) at cap B"),
-        results=dict(alpha=alpha, n_significant=int(np.sum(res.padj <= alpha)),
-                     minimum_discovery_rank=int(np.ceil(tested.sum() * res.params["minimum_pvalue"] / alpha))))
+        resampling=dict(columns=["up", "down"], n_permutations=res.n_permutations.tolist(),
+                        n_exceedances=res.n_exceedances.tolist(),
+                        rule="per direction: h/T at the h-th inclusive exceedance; otherwise (K+1)/(B+1) at cap B"),
+        results=dict(alpha=alpha, family=res.params["family"], hypotheses=res.params["hypotheses"],
+                     n_significant=dict(up=int(np.sum(res.padj_up <= alpha)), down=int(np.sum(res.padj_down <= alpha))),
+                     minimum_discovery_rank=int(np.ceil(res.params["hypotheses"] * res.params["minimum_pvalue"] / alpha))))
 
 
 _WRITERS = {

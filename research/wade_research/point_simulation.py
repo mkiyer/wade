@@ -69,9 +69,9 @@ def generate(protocol, settings):
             multiplier[member] = 16
         elif pattern == "subset_down_10pct_quarter":
             multiplier[member] = .25
-        elif pattern == "bulk_half_subset_up_10pct_4x":
+        elif pattern.startswith("bulk_half_subset_up_10pct_"):
             multiplier[:] = .5
-            multiplier[member] = 4
+            multiplier[member] = float(pattern.rsplit("_", 1)[1].rstrip("x"))
         elif pattern == "same_mean_wider":
             if z is None:
                 latent[gene, :nc] = rng.gamma(1/(4*cv2[gene]), means[gene]*4*cv2[gene], nc)
