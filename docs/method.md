@@ -1,107 +1,96 @@
 # WADE 0.2.0 method
 
-This page describes the current public baseline. The directional point candidate
-is specified in [PLAN.md](../PLAN.md); it has not yet replaced this implementation.
-The user has rejected unsigned-only discovery as the release objective. This
-page documents existing behavior, not an approved biomarker-discovery method.
+## Expression
 
-One question: does a gene's expression distribution differ between two groups?
-The test is unsigned empirical Wasserstein distance. Bulk and tail descriptions
-follow the test and are not additional hypotheses.
+Fit label-independent size factors s_j on a declared normalization universe
+(RLE by default: genes positive in every fit sample, their geometric means,
+column medians of log ratios, centered to geometric mean one). The tested
+expression of gene g in sample j is
 
-## Preprocessing and null
+\[x_{gj}=c_{gj}/s_j \quad(\texttt{scale="linear"})
+\qquad\text{or}\qquad x_{gj}=\log_2(c_{gj}/s_j+1)\quad(\texttt{scale="log"}).\]
 
-Fit label-independent sample factors on a declared normalization universe after
-initial QC. RLE uses genes positive in every fit sample, their geometric means,
-and column medians of log ratios, centered to geometric mean one. Explicit
-validated reference IDs may restrict that universe. No automatic control
-discovery or noise is applied. The expression is
+The test gene mask is fixed after fitting and never refits the factors.
 
-\[x_{gj}=\log_2(c_{gj}/s_j+1).\]
+## Areas
 
-Fix the later test-gene mask without refitting factors. Under the null, labels
-must be exchangeable for the preprocessed data conditional on any strata.
-A label-invariant procedure is necessary but cannot create exchangeability
-when depth, technical effects, dependence or sample selection violates it.
+Let Q₁ and Q₀ be the empirical quantile functions of cases and controls, and
+F₁, F₀ their CDFs. The two areas are
 
-## Exact distance
+\[A_\uparrow=\int_0^1 \max\{Q_1(u)-Q_0(u),0\}\,du=\int \max\{F_0(x)-F_1(x),0\}\,dx,\]
+\[A_\downarrow=\int_0^1 \max\{Q_0(u)-Q_1(u),0\}\,du=\int \max\{F_1(x)-F_0(x),0\}\,dx.\]
 
-For empirical group CDFs, the statistic is
+Both integrals describe the same region between the two curves, so each form
+is exact. A↑ + A↓ is the Wasserstein-1 distance and A↑ − A↓ is the difference
+in means. Quantiles where cases are lower add nothing to A↑ rather than
+subtracting from it, which is why a raised subset survives a lowered bulk: for
+controls [10, 10, 10, 10] and cases [2, 2, 2, 30], A↑ = 5, A↓ = 6, while the
+mean difference is −1.
 
-\[W_g=\int |F_{1g}(x)-F_{0g}(x)|\,dx
-       =\int_0^1 |Q_{1g}(p)-Q_{0g}(p)|\,dp.\]
+Sort the N pooled values; let d_k be the gap between sorted values k and k+1,
+and a_k the number of cases among the first k. With n₁ cases and n₀ controls,
+the scaled CDF difference over gap k is m_k = n₁k − N a_k, and
 
-Sort all N observations. Let d_k be the gap between sorted observations k and
-k+1, and a_k the cumulative number of cases through k. With n1 cases and n0
-controls, calculate
+\[A_\uparrow=\frac{1}{n_1n_0}\sum_{k=1}^{N-1}\max(m_k,0)\,d_k,\qquad
+A_\downarrow=\frac{1}{n_1n_0}\sum_{k=1}^{N-1}\max(-m_k,0)\,d_k.\]
 
-\[W_g=\frac{1}{n_1n_0}\sum_{k=1}^{N-1}|N a_k-n_1 k|d_k.\]
+Each group keeps its own empirical mass; there is no common quantile grid,
+smoothing, trimming or interpolation. Ties have zero gaps.
 
-Each group has its own empirical probability masses. No common coarse quantile
-grid, smoothing, endpoint trimming, or interpolation is used for inference.
-Ties have zero gaps. Absolute area prevents opposing changes from canceling.
-An exact distance does not mean an exhaustively enumerated permutation test.
+## Permutation test
 
-## Resampling
+Label shuffles preserve group sizes and, with strata, each stratum's case
+count. Every gene uses the same stream of shuffles, so results do not depend
+on chunking. The pooled values are sorted once per gene, and each shuffle
+yields both areas from one pass over the sorted values.
 
-Generate independent label shuffles with replacement, retaining group sizes
-and stratum counts. Use the same schedule for all genes and chunks. Sort each
-gene once and accumulate exact W1 for each permitted assignment.
+A shuffle counts as an exceedance when its area is at least the observed area
+times 1 − 100ε (a conservative tolerance for floating-point ties). Each
+direction has its own Besag–Clifford record: it stops at the h = 20th
+exceedance, drawn at shuffle T, with p = h/T, or it finishes the cap B with K
+exceedances and p = (K + 1)/(B + 1). The default cap is B = 999,999. Under
+exchangeability the rule is valid: the probability that p ≤ α is at most α
+at every attainable α ([Besag, §2.2.2](https://imsarchives.nus.edu.sg/oldwww/Programs/mcmc/files/besag_tl.pdf)).
+A direction that is not tested draws nothing and has no p-value.
 
-The inclusive comparison uses the observed numerator times
-`1 - 100 * numpy.finfo(float).eps`, a small conservative tolerance for numerical
-ties. The observed and null sums use the same sequential order. Native Rust and
-readable NumPy implementations are checked against independent SciPy distances.
+## Hypothesis families
 
-Use a prespecified Besag–Clifford stopping count h=20 and cap B=499,999 by
-default. If the h-th exceedance arrives at draw T, p=h/T; otherwise finish B
-and use p=(K+1)/(B+1). The actual crossing within a batch is the stopping time.
-For B<20 use h=B. The rule is justified under exchangeability, with inclusive
-ties conservative; arbitrary early stopping of a counted p-value is not valid.
-See [Besag's treatment, §2.2.2](https://imsarchives.nus.edu.sg/oldwww/Programs/mcmc/files/besag_tl.pdf)
-and the [modern sequential Monte Carlo treatment, §2.1](https://academic.oup.com/jrsssb/article/87/4/1200/8106328).
+`direction="both"` is a discovery hypothesis. Both directions are tested from
+the same shuffles, and one BH adjustment covers every tested gene-direction
+pair (2G hypotheses for G tested genes). `direction="up"` or `"down"` is a
+declared one-directional hypothesis with one BH adjustment over the G tested
+genes. Excluded genes have no p-values or q-values in either case.
 
-A useful independent finite check integrates over a continuous uniform null
-rank. Stopping at T=t has mass h/[t(t+1)] for t=h,...,B. Each capped K<h
-outcome has mass 1/(B+1). The resulting p-value CDF lies at or below the
-identity at every attainable threshold. Tests verify this property as well as
-inclusive ties, exact crossing, cap exhaustion and invalid partial records.
+The null is exchangeability of the labels, equivalently equality of the two
+expression distributions. A pure downward shift leaves A↑ near zero, so it
+rarely produces an upward call; the confirmation measured no wrong-direction
+calls on whole-cohort shifts. BH is not guaranteed under arbitrary dependence;
+the validation includes correlated gene modules.
 
-Apply BH once over every retained gene. Excluded genes have no p-value or q-value.
-Separate chunks do not create separate correction families. BH is not a general
-guarantee under arbitrary gene dependence; the empirical confirmation includes
-correlated modules and reports replicate-level uncertainty.
+## Descriptions
 
-## Descriptive effects
+The bulk shift is median(case) − median(control) of log2(count/s + 1), with
+the ordinary average at even group sizes. The upper and lower tails integrate
+each empirical quantile function over [0.9, 1] or [0, 0.1], take case minus
+control, and subtract the bulk shift; fractional boundaries are integrated
+exactly. These descriptions use log2 whatever the tested scale, so they are
+comparable across genes. They are fixed summaries, not tests or prevalence
+estimates.
 
-Define the bulk shift as median(case log expression) minus median(control log
-expression), using the ordinary average of the two central observations at
-even group sizes. Define upper/lower contrasts by averaging each empirical
-quantile function over [0.9,1] or [0,0.1], taking case minus control, and then
-subtracting the bulk shift. Fractional quantile boundaries are integrated
-exactly. These fixed descriptions introduce no new inferential fit.
+## Implementation
 
-A constant log-expression translation yields that bulk shift and zero residual
-decile differences. A bulk decrease with an upper tail may have opposite-signed
-bulk and upper descriptions. Neither descriptor receives a separate p-value,
-confidence interval, biological prevalence estimate or sample membership call.
+The native Rust kernel and the readable NumPy path perform the same ordered
+sums and give identical stopping records; tests check both against an exact
+rational-arithmetic oracle that integrates the quantile functions instead.
+Genes are processed in bounded chunks, with no genes × permutations matrix.
+Sorting is O(G N log N); after that, work is proportional to the shuffles each
+gene and direction actually uses, so strongly changed genes dominate runtime.
 
-## Implementation and limits
+## Limits
 
-The engine retains log expression and processes bounded gene chunks and
-shuffle batches. It does not materialize a gene-by-permutation null matrix.
-Sorting is O(G N log N); subsequent work scales with completed gene-permutation
-sample evaluations. Genes with strong differences often reach the full cap.
-A lower cap improves runtime at a documented resolution cost.
-
-The production migration removes signed-mean discovery, fitted-fold/thinning
-subset nulls, GPD extrapolation, separate stage q-values and their old result
-schema. Historical sources and tests are preserved in the pre-migration archive.
-No backwards compatibility aliases disguise the changed inferential target.
-
-Conditional label tests do not answer how unusual a 10-log2 event is across
-all genes. Few controls can limit recurrent-tail power despite extreme
-amplitude. Those limitations are measured in the
-[transcriptome confirmation](../archive/development-20260923/docs/transcriptome-workflow-validation.md). Predictive
-rare-event inference is explicitly the next research phase after production
-and release validation, not an additional claim of the current test.
+Within one gene, k cases above every control can reach at best
+p = C(n₁, k) / C(n₁ + n₀, k), whatever their amplitude. Borrowing information
+across genes to judge how unusual an amplitude is would need a model of
+transcriptome-wide variation; this release does not attempt it. Batch or depth
+confounded with the groups breaks exchangeability, which neither normalization
+nor permutation repairs.

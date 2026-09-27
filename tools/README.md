@@ -1,30 +1,11 @@
-# Operational tools
+# Tools
 
-This directory contains package, notebook, data-input and release helpers.
-Candidate point validation and deferred kernel work live in [research/](../research/README.md); completed study
-runners and superseded benchmarks are in the [development archive](../archive/development-20260923/README.md).
-No current helper imports an archived prototype.
-
-| Task | Tools |
+| Tool | Purpose |
 | --- | --- |
-| Notebook execution and review | `render_release.py`, `review_notebook.py`, `notebook_support.py`, `audit_notebook_exports.py` |
-| TCGA inputs and examples | `fetch_tcga_annotations.py`, `tcga_examples.py` |
-| Reference inputs and verified comparisons | `fetch_reference_counts.py`, `refresh_comparisons.py`, `comparison_support.py`, `score_outlier_reference.py`, `seal_reference_results.py` |
-| Independent comparison checks | `audit_comparisons.py`, `audit_outlier_comparison.py`, `check_production_reference.py` |
-| Production replay and release review | `review_production.py`, `assemble_release_review.py`, `smoke_install.py` |
-| Workspace boundaries and documentation links | `check_workspace.py` |
+| `fetch_tcga_annotations.py` | Download and freeze the public TCGA annotations used by the examples |
+| `tcga_examples.py`, `notebook_support.py` | Load, filter and cache the TCGA example analyses for the notebooks |
+| `smoke_install.py` | Check an installed wheel: native kernel present, identical to the NumPy path |
+| `check_workspace.py` | Check import boundaries, documentation links and distribution exclusions |
 
-Use the [notebook guide](../docs/notebook-builds.md) for actual build commands
-and required data/configuration. Comparison refreshes reuse native outputs only
-when their inputs and settings match. Production replay targets the frozen
-point-method evidence; it does not validate changed directions or scales.
-
-Notebook builds use isolated snapshots and verified computation caches. An
-inference change requires fresh results; revised figures or prose require review.
-The private workbench and local data remain excluded from distribution. Review
-hubs link the current scientific assessment and release queue.
-
-The old scaling benchmark, legacy comparator cache importer and stage-specific
-p-value tools were archived because they still refer to retired APIs. They are
-not supported entrypoints against the current package. Reproduce historical
-studies with their sealed source or the verified pre-cleanup snapshot.
+See the [TCGA data contract](../docs/tcga-examples.md) and
+[CONTRIBUTING](../CONTRIBUTING.md) for commands.

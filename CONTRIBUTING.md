@@ -1,66 +1,72 @@
 # Contributing to WADE
 
-Read [the release plan](PLAN.md) before changing inference. The current package
-is the unsigned log-W1 baseline; the release requires directional biomarker
-discovery. Research must evaluate that biological target, not promote unsigned
-testing because it recovers more arbitrary distribution changes.
-Kernel research is deferred. There is no two-stage compatibility path.
+## Layout
 
-## Repository layout
-
-| Location | What belongs here |
+| Location | Contents |
 | --- | --- |
-| `src/wade/`, `rust/src/` | The current public package and its native implementation. |
-| `tests/` | Independent tests of that package, inputs, normalization and exports. |
-| `research/wade_research/`, `research/tests/` | Candidate point workflow, deferred kernels and independent research checks. |
-| `tools/` | Notebook, data-input, comparison and release helpers using the current package. |
-| `docs/` | Current usage, measured performance and the deferred kernel derivation record. |
-| `notebooks/` | Six current notebook sources; scientific claims must match their actual method. |
-| `archive/` | Optional local studies and snapshots; excluded from Git and distributions. |
-| `.release/` | Local data, frozen executions, source/result hashes and review artifacts. |
+| `src/wade/` | The package: `api.py` (`wade`, `wade_contrast`, `WadeResult`), `_wasserstein.py` (areas and the permutation engine), normalization, filtering, permutations, p-values, input/output, diagnostics and plotting |
+| `rust/src/lib.rs` | The native permutation kernel; the same ordered sums as the NumPy path |
+| `tests/` | Package tests against independent oracles |
+| `research/` | The fresh-seed confirmation runner and the single-gene limits study; excluded from distributions |
+| `tools/` | TCGA inputs and notebook support, the install smoke test and the workspace check |
+| `notebooks/` | Demo, prostate and breast examples (Quarto) |
+| `docs/` | Manual, method, validation, changes and the TCGA data contract |
 
-Do not add imports from `archive/` to active code. Keep shared research
-calculations out of study runners. Do not introduce public kernel/prior options
-until the method has passed its scientific gates. Preserve failed experiments
-with their scope; a passing numerical test is not evidence of FDR control.
+Earlier research (the two-stage method, measurement kernels, the direction
+and scale comparison) is preserved in git history at commit `f07d5f9`.
 
-## Development and verification
+## Build and test
+
+Use the `wade` conda environment, which provides Python, Rust and maturin.
 
 ```sh
-python -m pip install -e ".[test,plot]"
+python -m pip install -e ".[test,plot]" --no-build-isolation
 cargo clippy --release -- -D warnings
 python -m pytest -q
 python tools/smoke_install.py
 python tools/check_workspace.py
 ```
 
-Pytest includes package tests and research correctness tests, with the research
-import path configured in `pyproject.toml`. It excludes the archive. Production
-checks compare distances and stopping times with independent oracles, verify the
-sequential p-value distribution, and exercise ties, strata, filtering, BH,
-alignment, chunk/batch invariance and exports. Kernel checks add archived replay,
-independent quadrature, full-distribution normalization and cache isolation.
-The production import still requires only NumPy; research uses SciPy.
+## Rules
 
-Historical fixture audits and the superseded sequential runner's tests are
-preserved with their source in [the archive](archive/README.md). They are no
-longer counted as tests of the current package. The current implementation has
-its own independent distance, stopping-rule and BH tests.
+- The NumPy path is the reference implementation. The native kernel must give
+  identical areas and stopping records; the tests check both backends against
+  an exact rational-arithmetic oracle.
+- `import wade` needs only NumPy. Import optional libraries inside the
+  functions that use them.
+- A change to the statistic, the null, the hypothesis families or a default
+  needs a new confirmation: bump the protocol version and seed root in
+  `research/protocols/confirmation.json` and rerun `research/confirm.py`.
+- Every number in the documentation comes from a run of a script in
+  `research/` or a rendered notebook, never from reasoning alone.
+- Prefer deleting to adding. A parameter or code path needs a use case.
 
-`tools/review_production.py` replays the sealed point-method transcriptome study
-through the public API. Use the exact source and input fingerprints for historical
-claims. A changed method needs fresh calibration and its own scientific record.
+## Confirmation
+
+```sh
+PYTHONPATH=src:research python research/confirm.py --output .release/0.2.0/confirmation-new
+PYTHONPATH=src:research python research/subset_limits.py gamma 8
+```
+
+The confirmation takes about 30 minutes on a 16-core laptop and refuses to
+overwrite an existing output directory (`--resume` continues one).
+
+## Notebooks
+
+```sh
+quarto render notebooks/demo.qmd
+WADE_TCGA_CONFIG=/path/to/tcga-config.json quarto render notebooks/examples.qmd
+WADE_TCGA_CONFIG=/path/to/tcga-config.json quarto render notebooks/examples-breast.qmd
+```
+
+The TCGA notebooks need local data described in the
+[data contract](docs/tcga-examples.md). Rendered HTML is not tracked.
+`notebooks/rna100k.qmd` is a private workbench, excluded from distributions.
 
 ## Release
 
-Exclude `research/`, `archive/`, `.release/` and the private workbench from the
-release distribution. Pass source, wheel, fallback and cross-platform CI checks.
-Reexecute all six notebooks after final scientific selection, including the
-TCGA prostate/breast gene-count analyses. Native comparator reuse requires
-identical, checksummed inputs and settings; old results cannot be renamed into
-new method results.
-
-Inspect all final figures and numerical exports and obtain user approval of
-results, illustrations and claims. Passing tests or renders is not that approval.
-Publish/tag only with final authorization. The release queue is [PLAN.md](PLAN.md);
-open questions are in [ISSUES.md](ISSUES.md).
+1. Set the version in `pyproject.toml` and `CITATION.cff`; update `docs/changes-*.md`.
+2. Render the notebooks and review every figure and table.
+3. Tag `vX.Y.Z` on `main`. CI checks that the tag matches `pyproject.toml`,
+   builds and tests wheels for every platform, and publishes to PyPI through
+   the trusted publisher. A PyPI version can never be reused.

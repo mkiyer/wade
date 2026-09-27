@@ -1,6 +1,6 @@
 ---
-title: "WADE: one distribution test, clear descriptions"
-subtitle: "WADE 0.2.0 · single-test release candidate · review pending"
+title: "WADE: raised and lowered expression, in the whole cohort or a subset"
+subtitle: "WADE 0.2.0 · demonstration on simulated counts"
 format:
   html:
     html-math-method: mathml
@@ -18,10 +18,11 @@ execute:
   echo: false
 ---
 
-WADE asks whether a gene's expression distribution differs between cohorts.
-Then it describes the bulk shift and tails. There is **one p-value and one
-q-value per gene**. This notebook demonstrates that contract on synthetic
-counts with known planted patterns; it is not a performance benchmark.
+WADE asks, for each gene, whether case expression is raised above or lowered
+below the controls, and measures each direction as an area between the case and
+control quantile functions. This notebook plants known patterns in simulated
+counts and shows how each one reads. It demonstrates behavior; the
+[validation](../docs/validation.md) page measures performance.
 
 ## A complete workflow
 
@@ -41,26 +42,26 @@ OUT = output_dir("demo")
 rng = np.random.default_rng(811)
 n_case = n_control = 200
 cond = np.r_[np.ones(n_case,int),np.zeros(n_control,int)]
-marker_names = ["Bulk increase", "Upper tail", "Bulk down + tail", "Opposing tails", "Unchanged"]
+marker_names = ["Bulk increase", "Raised subset", "Raised subset, lowered bulk", "Opposing subsets", "Unchanged"]
 names = [f"background_{j}" for j in range(800)] + marker_names
 mean = np.exp(rng.uniform(np.log(5),np.log(500),len(names)))
 mean[-5:] = 40
 mu = np.repeat(mean[:,None],len(cond),axis=1)
-mu[-5,:n_case] *= 2
-mu[-4,:20] *= 32
-mu[-3,:n_case] *= .5
-mu[-3,:20] *= 64
-mu[-2,:50] *= 3
-mu[-2,50:100] *= .1
+mu[-5,:n_case] *= 2          # every case doubled
+mu[-4,:20] *= 32             # 10% of cases raised 32-fold
+mu[-3,:n_case] *= .5         # every case halved ...
+mu[-3,:20] *= 64             # ... except 10%, now 32-fold above the controls
+mu[-2,:50] *= 3              # 25% of cases tripled
+mu[-2,50:100] *= .1          # another 25% cut tenfold
 sf = 2**rng.uniform(-.5,.5,len(cond))
 counts = rng.negative_binomial(1/.15,1/(1+.15*mu*sf))
 data = wade.as_counts(counts,gene_names=names)
 np.savez_compressed(OUT / "simulation.npz", counts=counts, cond=cond, genes=np.asarray(names), known_factors=sf)
 ```
 
-Prespecify sample QC and the normalization reference. RLE is appropriate here
-because most simulated genes are unchanged. Filtering acts on pooled counts
-and does not refit those factors.
+Normalization is fitted once; the filter chooses tested genes without refitting.
+The default tests both directions on normalized counts, with one false
+discovery family over every gene-direction pair.
 
 ```{python}
 #| label: simple-workflow
@@ -72,97 +73,77 @@ result = wade.wade(data, cond, normalization=norm, test_genes=keep, seed=1)
 _ = wade.write_results(result, OUT / "all-genes.tsv")
 ```
 
-The default is `log2(count / size_factor + 1)`, no added noise, exact empirical
-W1 and a cap of 499,999 shuffles. Null-like genes can stop at their 20th
-exceedance. The entire retained family receives one BH adjustment.
-
-{{< pagebreak >}}
-
 ```{python}
 #| label: marker-results
 #| output: asis
 markdown_table(result.to_frame().filter(pl.col("gene").is_in(marker_names)).select(
-    "gene","statistic","bulk_shift","upper_tail","lower_tail","padj"), OUT, "marker-results")
+    "gene","area_up","area_down","padj_up","padj_down","bulk_shift","upper_tail"), OUT, "marker-results")
 ```
 
-## Read the distribution and the description together
+## How each pattern reads
 
-`bulk_shift` is the difference in medians on the log-expression scale.
-`upper_tail` and `lower_tail` compare the upper/lower decile means, then subtract
-that bulk shift. They are signed descriptions, not a second set of tests or
-estimates of the fraction of altered patients.
+`area_up` integrates the quantiles where cases are higher and `area_down` those
+where they are lower; their difference is the mean difference. `bulk_shift` is
+the difference in log2 medians, and `upper_tail` the top-decile difference beyond
+it. A raised subset above a lowered bulk has a negative `bulk_shift`, a large
+`upper_tail`, and is called up: the lowered majority does not cancel it.
 
 ```{python}
 #| label: fig-demo-bulk
-#| fig-cap: "A broadly increased gene: empirical distributions and the exact quantile-effect curve. The dashed line marks the median shift."
+#| fig-cap: "Every case doubled: the whole case distribution moves right, so the quantile difference is positive everywhere and only the upward area is called."
 result.plot_gene("Bulk increase")
 ```
 
 ```{python}
-#| label: fig-demo-tail
-#| fig-cap: "A recurrent high-expression subset changes unsigned area even when the median changes little. The q-value belongs to the complete distribution comparison."
-result.plot_gene("Upper tail")
+#| label: fig-demo-subset
+#| fig-cap: "10% of cases raised 32-fold: the median barely moves, and the upward area comes from the top decile."
+result.plot_gene("Raised subset")
+```
+
+```{python}
+#| label: fig-demo-crossing
+#| fig-cap: "Most cases halved while 10% sit 32-fold above the controls. The quantile difference is negative for the bulk and large and positive at the top."
+result.plot_gene("Raised subset, lowered bulk")
+```
+
+The cases that carry that upward area are the ones above every control:
+
+```{python}
+#| label: drivers
+#| echo: true
+result.drivers("Raised subset, lowered bulk", "up")
 ```
 
 ```{python}
 #| label: fig-demo-opposing
-#| fig-cap: "Opposing changes contribute positive unsigned area instead of canceling. A median near zero does not imply an unchanged distribution."
-result.plot_gene("Opposing tails")
+#| fig-cap: "One quarter of cases tripled and another quarter cut tenfold: both areas are large, and neither cancels the other."
+result.plot_gene("Opposing subsets")
 ```
 
 ```{python}
-#| label: fig-demo-patterns
-#| fig-cap: "Each point is a tested gene. Bulk direction and tail shape are descriptions; color records the single gene-level distribution call."
-result.plot_patterns(label=marker_names[:-1])
+#| label: fig-demo-volcano
+#| fig-cap: "Upward q-values against the bulk shift. Upward calls left of zero are raised subsets above a lowered bulk."
+result.plot_volcano(direction="up", label=marker_names[:-1])
 ```
-
-A lower bulk level and an elevated upper tail can coexist. Do not call the
-entire gene simply downregulated on the basis of its bulk description.
-Conversely, a dramatic tail can fail the distribution test, especially with
-few controls. The [transcriptome study](../archive/development-20260923/docs/transcriptome-workflow-validation.md)
-reports those limitations rather than selecting only successful examples.
-
-## References, filtering and sample design
-
-For a validated control panel use
-`wade.fit_normalization(data, reference_genes=control_ids)`. Inspect both
-`reference_genes` and `used_reference_genes`. Low variance is not by itself
-evidence that a reference is biologically invariant. Sparse assays can import
-external size factors; CPM and TPM remain per-sample abundance summaries.
-See the [manual](../docs/manual.md) for alignment and normalization examples.
-
-No filter threshold works universally. Combine pooled count/detection masks
-with prespecified assay requirements, without choosing the version that produces
-the most significant genes. Technical sample exclusions also precede inference.
-Batch or depth confounding is not repaired merely by fitting normalization.
 
 ## Themes
 
-Each theme below is drawn directly as a separate, identically sized figure.
-There is no screenshot stretching or raster composition.
-
-```{python}
-#| label: fig-theme-light
-#| fig-cap: "Light theme. The same gene, data and axis definitions appear in all three theme demonstrations."
-result.plot_gene("Bulk down + tail", theme="light")
-```
-
 ```{python}
 #| label: fig-theme-dark
-#| fig-cap: "Dark theme, rendered at its native aspect ratio."
-result.plot_gene("Bulk down + tail", theme="dark")
+#| fig-cap: "The same gene in the dark theme."
+result.plot_gene("Raised subset, lowered bulk", theme="dark")
 ```
 
 ```{python}
 #| label: fig-theme-contrast
-#| fig-cap: "High-contrast theme, rendered at its native aspect ratio."
-result.plot_gene("Bulk down + tail", theme="high-contrast")
+#| fig-cap: "The same gene in the high-contrast theme."
+result.plot_gene("Raised subset, lowered bulk", theme="high-contrast")
 ```
 
-## Interpretation and next work
+## What the calls mean
 
-These examples demonstrate behavior, not calibrated rare-event probabilities.
-The benchmark notebooks compare the current API with frozen native method fits.
-All figures and results are candidates awaiting approval. Transcriptome-level
-rarity and predictive event significance are the next research phase after the
-production migration and release checks are complete.
+A small `padj_up` says the upward area is larger than random relabelling of
+the samples explains. It does not certify which patients are outliers or how
+common the subset is in the population. With few controls even a dramatic
+subset cannot reach significance: the [manual](../docs/manual.md#how-many-controls)
+shows how many cases must exceed every control for a given design.

@@ -1,6 +1,6 @@
 ---
 title: "TCGA breast: subtypes and expression heterogeneity"
-subtitle: "WADE 0.2.0 · single-test release candidate · review pending"
+subtitle: "WADE 0.2.0 · release candidate · review pending"
 format:
   html:
     html-math-method: mathml
@@ -34,7 +34,7 @@ from notebook_support import output_dir, markdown_table, export_table
 OUT = output_dir("breast")
 cohort = TC.load_cohort("breast", OUT)
 PANEL = TC.BREAST_PANEL
-SHOW = ["gene","status","bulk_shift","upper_tail","lower_tail","padj"]
+SHOW = ["gene","status","padj_up","padj_down","bulk_shift","upper_tail","lower_tail"]
 def table(frame,name):
     markdown_table(frame,OUT,name)
 ```
@@ -51,8 +51,8 @@ RLE is fitted on the full measured gene universe after primary sample selection.
 The prespecified example test mask requires at least 10 counts in five pooled
 samples and pooled mean CPM at least 0.1, using the eligible input cohort.
 This is an example recipe, not a universal threshold. Test filtering reuses
-the fitted factors. Expression is `log2(count / size_factor + 1)`; no noise is
-added. Repeated observations, depth and tissue mixture remain relevant to
+the fitted factors. The test uses normalized counts, `count / size_factor`;
+figures and descriptions use log2. Repeated observations, depth and tissue mixture remain relevant to
 interpretation. The upstream count processing/reference record remains a
 release documentation requirement.
 
@@ -63,12 +63,12 @@ primary_meta = cohort.meta[cohort.independent.tolist()]
 table(primary_meta.group_by("group").len(),"primary-accounting")
 ```
 
-## Whole-transcriptome distribution test
+## Whole-transcriptome test, both directions
 
-Use exact empirical W1 and the production stopping rule, cap 499,999, seed 1.
-BH corrects the complete retained family once. Display markers were fixed in
-advance; their inclusion does not imply significance. A q-value tests the gene's
-whole distribution, not its bulk sign or a particular tail.
+Both areas are tested in one pass with the default settings (linear scale,
+cap 999,999, seed 1), and one BH family covers every gene-direction pair.
+Display markers were fixed in advance; their inclusion does not imply
+significance.
 
 ```{python}
 #| label: primary
@@ -81,9 +81,8 @@ export_table(annotation_values,OUT,"panel-expression-annotations")
 ```{python}
 #| label: transcriptome-calls
 #| output: asis
-calls=int(np.sum(res.padj <= .05))
-table(pl.DataFrame({"Tested genes":[int(res.tested.sum())],"Distribution calls":[calls],
-                    "Called fraction":[calls/res.tested.sum()]}),"transcriptome-calls")
+up,down=int(np.sum(res.padj_up <= .05)),int(np.sum(res.padj_down <= .05))
+table(pl.DataFrame({"Tested genes":[int(res.tested.sum())],"Up calls":[up],"Down calls":[down]}),"transcriptome-calls")
 ```
 
 These broad call sets require review of the normalization reference, tissue
@@ -100,7 +99,7 @@ table(TC.panel_table(res,PANEL).select(SHOW),"primary-panel")
 
 ```{python}
 #| label: fig-patterns
-#| fig-cap: "Bulk shift and upper-decile difference relative to bulk. Color records the single distribution-test call. All tested genes are shown."
+#| fig-cap: "Bulk shift and upper-decile difference beyond it for every tested gene, colored by upward calls."
 TC.plot_bulk_tail(res,["ERBB2","ESR1","PGR","KRT5","MKI67"])
 ```
 
@@ -141,7 +140,7 @@ colors=["#7d8790","#4b9e9a","#6986b5","#bd556f","#b58b3b","#9f80b0","#c1c5ca"]
 fig,axes=plt.subplots(2,3,figsize=(11,7),layout="constrained")
 rng=np.random.default_rng(17)
 for ax,gene in zip(axes.flat,["ERBB2","GRB7","ESR1","PGR","KRT5","MKI67"]):
-    values=res.expression[res.gene_index(gene)]
+    values=TC.log2_expression(res,gene)
     for j,(group,color) in enumerate(zip(groups,colors)):
         v=values[labels==group]
         if len(v):
@@ -159,12 +158,11 @@ fig
 Compare each of the four named subtypes with the other three, excluding
 normal-like and unknown from these contrasts while retaining their accounting
 above. The tumour reference fit is frozen before the contrasts. Each contrast
-uses the same eligible genes and seed, with a prespecified 99,999 cap. An additional BH correction
-covers all finite gene × four-contrast p-values together. This is an exploratory
-expression-label association family, not independent validation of PAM50. The
-minimum raw p-value is 1e-5; the four-contrast correction can therefore require
-several discoveries together. This budget does not resolve an isolated
-discovery in the combined family.
+uses the same eligible genes and seed, with a prespecified 99,999 cap, and tests
+both directions. One BH correction covers every gene × direction × contrast
+p-value together. This is an exploratory expression-label association family,
+not independent validation of PAM50. With a 1e-5 floor, a discovery in this
+family needs several genes at the floor together.
 
 ```{python}
 #| label: subtype-tests
@@ -174,11 +172,12 @@ subtype_names=cohort.meta["subtype"].to_numpy()[subtype_idx]
 contrasts={name:TC.run(cohort,subtype_idx,OUT,"subtype-"+str(j),
                       condition=(subtype_names==name).astype(int),reference="subtypes",max_permutations=99_999)
            for j,name in enumerate(TC.SUBTYPES)}
-all_p=np.concatenate([r.pvalue for r in contrasts.values()])
-all_q=wade.bh_adjust(all_p).reshape(len(contrasts),-1)
+all_p=np.concatenate([np.r_[r.pvalue_up,r.pvalue_down] for r in contrasts.values()])
+all_q=wade.bh_adjust(all_p).reshape(len(contrasts),2,-1)
 frames=[]
 for j,(name,r) in enumerate(contrasts.items()):
-    frame=r.to_frame().with_columns(subtype=pl.lit(name),q_four_contrasts=pl.Series(all_q[j]))
+    frame=r.to_frame().with_columns(subtype=pl.lit(name),q_up_four_contrasts=pl.Series(all_q[j,0]),
+                                    q_down_four_contrasts=pl.Series(all_q[j,1]))
     frames.append(frame)
 all_contrasts=pl.concat(frames)
 export_table(all_contrasts,OUT,"all-subtype-contrasts")
@@ -188,12 +187,11 @@ export_table(all_contrasts,OUT,"all-subtype-contrasts")
 #| label: subtype-panel
 #| output: asis
 table(all_contrasts.filter(pl.col("gene").is_in(["ERBB2","ESR1","KRT5","MKI67"])).select(
-    "subtype","gene","bulk_shift","upper_tail","q_four_contrasts"),"subtype-panel")
+    "subtype","gene","bulk_shift","upper_tail","q_up_four_contrasts","q_down_four_contrasts"),"subtype-panel")
 ```
 
 ## Review status
 
 All subtype and primary results, including missed display markers, are retained.
-Figures and results require user approval before release. The new single-test
-outputs supersede the earlier two-stage breast analysis. No sample-level rarity
-or inferred subtype membership is claimed.
+Figures and results require user approval before release. No sample-level
+rarity or inferred subtype membership is claimed.

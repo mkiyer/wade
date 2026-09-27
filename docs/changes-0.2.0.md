@@ -1,59 +1,55 @@
-# WADE 0.2.0 change notes
+# Changes in WADE 0.2.0
 
-Release candidate; publication and all result/figure approvals remain pending.
+0.2.0 replaces the 0.1.x two-stage test with one directional question per
+gene: is case expression raised above, or lowered below, the controls? This
+is an intentional breaking release with no compatibility aliases.
 
-These notes describe the implemented unsigned log-W1 baseline. The 2026-09-25
-[release plan](../PLAN.md) now targets a validated point-based release and defers
-measurement kernels. Directional/scale API changes are being evaluated in
-research and will be documented here after selection and production migration.
-The user requires directional biomarker discovery; the unsigned-only baseline
-described below does not satisfy that release objective.
+## One test per direction
 
-## One inferential contract
+- `wade(counts, cond)` measures the upward and downward areas between the
+  case and control quantile functions and tests each by label permutation.
+  A raised subset above a lowered bulk is an upward discovery; in 0.1.x its
+  mean difference could read as a decrease.
+- `direction="both"` (default) tests both areas in one pass with one BH family
+  over every tested gene-direction pair. `direction="up"` or `"down"` tests a
+  declared direction over the tested genes and skips the other.
+- `scale="linear"` (default) tests `count / size_factor`; `scale="log"` tests
+  `log2(count / size_factor + 1)`.
+- p-values use a sequential Besag–Clifford rule per direction (20 exceedances,
+  or the cap). The default cap of 999,999 keeps an isolated discovery possible
+  among 50,000 hypotheses.
 
-WADE now asks whether a gene's expression distribution differs between two
-cohorts. Exact unsigned empirical W1 on `log2(count / size_factor + 1)` replaces
-the former two-stage procedure. This can detect broad and recurrent subset
-changes, including opposing changes that would cancel in a signed area.
-The resulting q-value belongs to the whole distribution comparison.
+Removed from 0.1.x: the `p_mean_shift`/`p_subset` stages and their q-values,
+the fitted bulk-shift null, read thinning, continuity jitter, GPD tail
+extrapolation, the saddlepoint and bootstrap intervals. Removed names:
+`ALTERNATIVES`, `DEFAULT_MAX_PROBS`, `DEFAULT_NPERMS`, `affected_fraction`,
+`detectability_floor`, `direction`, `draw_jitter`, `library_sizes`,
+`null_statistics`, `perm_pvalues`, `plot_drivers`, `plot_linked`,
+`plot_stages`, `probability_grid`, `subset_drivers`, `subset_log2_fc`,
+`tpm_like`, `wade_gene` and `wade_stats`. New names: `DEFAULT_MAX_PERMUTATIONS`,
+`Normalization`, `fit_normalization`, `filter_counts`, `cpm`, `tpm` and
+`plot_patterns`.
 
-There is one p-value and one BH-adjusted q-value per tested gene. The
-Besag–Clifford sequential label test stops at the twentieth inclusive exceedance
-or a prespecified cap (499,999 by default), with exact stopping counts exported.
-Rust accelerates the same arithmetic as the readable NumPy path. No fitted
-bulk correction, thinning null, GPD extrapolation or saddlepoint remains.
+## Results
 
-## A smaller API
+`area_up`, `area_down`, `pvalue_up`, `pvalue_down`, `padj_up`, `padj_down`,
+`bulk_shift`, `upper_tail`, `lower_tail` and `status`, one row per input gene.
+`result.drivers(gene, "up")` lists the cases above every control.
+`gene_detail(gene)` returns exact quantile intervals with their two areas.
+Volcano and pattern plots take `direction=`; gene plots show log2 expression.
+The manifest records the hypothesis family, group size-factor medians and each
+direction's stopping records.
 
-- `wade(counts, condition)` is the default bulk-RLE workflow.
-- `fit_normalization(..., reference_genes=...)` supports declared internal controls;
-  fitted objects record candidate/used references and retain their scale across
-  test filters and sample subsets.
-- `Normalization.from_size_factors(...)` accepts externally justified complete
-  exposures. `normalization="library"` provides explicit total-count exposures.
-- `filter_counts` and custom `test_genes` masks give pooled filtering flexibility.
-  All-zero/filtered genes remain in exports with an explicit status and no test.
-- `cpm` and `tpm` calculate independent per-sample abundance summaries.
-- `bulk_shift`, `upper_tail` and `lower_tail` are fixed signed descriptions;
-  they have no separate significance, affected fraction or membership estimate.
-- Gene, volcano and pattern plots share the current result schema and three themes.
+## Normalization and filtering
 
-This is an intentional breaking change. Old stage-specific fields, fitted-tail
-options, noise controls and compatibility aliases are absent. Use the
-[manual](manual.md) and current notebooks, or replay historical analyses with
-their [archived sources](../archive/README.md).
+- `fit_normalization(counts)` fits RLE once; `reference_genes=` restricts it to
+  validated controls; `normalization="library"` uses total counts;
+  `Normalization.from_size_factors(...)` imports external exposures.
+- `filter_counts` and `test_genes=` choose the tested genes without refitting.
+  Filtered and all-zero genes stay in the table with a status and no test.
+- `cpm` and `tpm` convert single samples for reporting; they are not test inputs.
 
-## Evidence and scope
+## Evidence
 
-The [migration assessment](../archive/development-20260923/docs/production-migration-0.2.0.md) records mathematical,
-backend, transcriptome, comparator and biological checks with their exact
-artifacts. All six notebooks use the current API, including full-gene-count
-TCGA prostate and breast examples. Reference method fits retain their native
-settings and inferential units.
-
-Normalization reference bias can cause false biological discoveries, especially
-at large sample sizes. The high-alteration benchmark exposes this directly;
-it is not hidden behind higher sensitivity. Sparse/depth-confounded workflow
-certification and predictive rare-event significance remain future research.
-No result here establishes universal FDR control or replacement of DESeq2 or
-native sample-gene outlier methods.
+The procedure was confirmed on 120 fresh simulated transcriptomes; see
+[validation](validation.md).

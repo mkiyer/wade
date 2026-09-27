@@ -1,6 +1,6 @@
 ---
 title: "TCGA prostate: fusion-associated expression"
-subtitle: "WADE 0.2.0 · single-test release candidate · review pending"
+subtitle: "WADE 0.2.0 · release candidate · review pending"
 format:
   html:
     html-math-method: mathml
@@ -34,7 +34,7 @@ from notebook_support import output_dir, markdown_table, export_table
 OUT = output_dir("prostate")
 cohort = TC.load_cohort("prostate", OUT)
 PANEL = TC.PROSTATE_PANEL
-SHOW = ["gene","status","bulk_shift","upper_tail","lower_tail","padj"]
+SHOW = ["gene","status","padj_up","padj_down","bulk_shift","upper_tail","lower_tail"]
 def table(frame,name):
     markdown_table(frame,OUT,name)
 ```
@@ -53,8 +53,8 @@ RLE is fitted on the full measured gene universe after primary sample selection.
 The prespecified example test mask requires at least 10 counts in five pooled
 samples and pooled mean CPM at least 0.1, using the eligible input cohort.
 This is an example recipe, not a universal threshold. Test filtering reuses
-the fitted factors. Expression is `log2(count / size_factor + 1)`; no noise is
-added. Repeated observations, depth and tissue mixture remain relevant to
+the fitted factors. The test uses normalized counts, `count / size_factor`;
+figures and descriptions use log2. Repeated observations, depth and tissue mixture remain relevant to
 interpretation. The upstream count processing/reference record remains a
 release documentation requirement.
 
@@ -65,12 +65,12 @@ primary_meta = cohort.meta[cohort.independent.tolist()]
 table(primary_meta.group_by("group").len(),"primary-accounting")
 ```
 
-## Whole-transcriptome distribution test
+## Whole-transcriptome test, both directions
 
-Use exact empirical W1 and the production stopping rule, cap 499,999, seed 1.
-BH corrects the complete retained family once. Display markers were fixed in
-advance; their inclusion does not imply significance. A q-value tests the gene's
-whole distribution, not its bulk sign or a particular tail.
+Both areas are tested in one pass with the default settings (linear scale,
+cap 999,999, seed 1), and one BH family covers every gene-direction pair.
+Display markers were fixed in advance; their inclusion does not imply
+significance.
 
 ```{python}
 #| label: primary
@@ -83,9 +83,8 @@ export_table(annotation_values,OUT,"panel-expression-annotations")
 ```{python}
 #| label: transcriptome-calls
 #| output: asis
-calls=int(np.sum(res.padj <= .05))
-table(pl.DataFrame({"Tested genes":[int(res.tested.sum())],"Distribution calls":[calls],
-                    "Called fraction":[calls/res.tested.sum()]}),"transcriptome-calls")
+up,down=int(np.sum(res.padj_up <= .05)),int(np.sum(res.padj_down <= .05))
+table(pl.DataFrame({"Tested genes":[int(res.tested.sum())],"Up calls":[up],"Down calls":[down]}),"transcriptome-calls")
 ```
 
 These broad call sets require review of the normalization reference, tissue
@@ -102,7 +101,7 @@ table(TC.panel_table(res,PANEL).select(SHOW),"primary-panel")
 
 ```{python}
 #| label: fig-patterns
-#| fig-cap: "Bulk shift and upper-decile difference relative to bulk. Color records the single distribution-test call. All tested genes are shown."
+#| fig-cap: "Bulk shift and upper-decile difference beyond it for every tested gene, colored by upward calls."
 TC.plot_bulk_tail(res,PANEL[:5])
 ```
 
@@ -133,9 +132,19 @@ for gene in ["ERG","ETV1","ETV4","FLI1"]:
 table(pl.DataFrame(rows),"fusion-coverage")
 ```
 
+With 52 normals, how far can a subset go? If k tumours lie above every
+normal, no within-gene permutation test can give an upward p-value below
+C(445, k) / C(497, k), however high those tumours are.
+
+```{python}
+#| label: subset-floor
+#| output: asis
+table(TC.subset_floor(res,["ERG","ETV1","ETV4","SPINK1"]),"subset-floor")
+```
+
 ```{python}
 #| label: fig-etv1
-#| fig-cap: "ETV1 in the independent-patient primary cohort. An upper-tail description can coexist with a negative bulk shift."
+#| fig-cap: "ETV1 in the independent-patient primary cohort. A raised subset can coexist with a lowered bulk."
 res.plot_gene("ETV1")
 ```
 
@@ -155,8 +164,8 @@ res.plot_gene("ERG")
 #| label: fig-fusion-expression
 #| fig-cap: "ETV1 and ETV4 in the independent primary cohort, colored by supplied fusion annotations. Unknown and non-fusion tumours remain visible."
 m=primary_meta
-x=res.expression[res.gene_index("ETV1")]
-y=res.expression[res.gene_index("ETV4")]
+x=TC.log2_expression(res,"ETV1")
+y=TC.log2_expression(res,"ETV4")
 tumour=m["group"].to_numpy()=="tumor"
 a=(m["ETV1_STATUS"]=="fusion").fill_null(False).to_numpy() & tumour
 b=(m["ETV4_STATUS"]=="fusion").fill_null(False).to_numpy() & tumour
@@ -171,7 +180,5 @@ fig
 ```
 
 The plot is an annotation association, not a ground-truth FDR assessment.
-No inferred driver width or sample-level significance is reported. In particular,
-few normal samples can limit a recurrent-tail test even when the highest tumour
-values are extreme. This limitation motivates the later rarity work, but is
-not repaired by assigning another q-value to the same descriptive tail.
+The limiting factor for ETV1 and ETV4 is the number of normals, not the
+statistic: more compatible normal samples would lower the floor above.

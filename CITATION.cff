@@ -8,4 +8,4 @@ authors:
 version: 0.2.0
 repository-code: "https://github.com/mkiyer/wade"
 license: GPL-3.0-only
-abstract: "Exact empirical Wasserstein distribution tests for RNA-seq, with descriptive bulk and tail effects."
+abstract: "Directional Wasserstein-area permutation tests for RNA-seq biomarker discovery: whole-cohort shifts and raised or lowered subsets."

@@ -21,7 +21,7 @@ SUBTYPES = ["Luminal A", "Luminal B", "HER2-enriched", "Basal-like"]
 PROSTATE_PANEL = ["ERG", "ETV1", "ETV4", "FLI1", "SPINK1", "AMACR", "KRT5", "KRT15", "TP63"]
 BREAST_PANEL = ["ERBB2", "GRB7", "STARD3", "PGAP3", "ESR1", "PGR", "GATA3", "FOXA1",
                 "KRT5", "KRT14", "KRT17", "MKI67"]
-PARAMS = dict(max_permutations=499_999, seed=1, backend="rust")
+PARAMS = dict(seed=1, backend="rust")
 
 
 def clinical_wide(path, kind):
@@ -218,7 +218,8 @@ def load_cohort(cancer, out, config_path=None):
                   independent, paired, provenance, keep)
 
 
-def run(cohort, indices, out, name, *, max_permutations=499_999, paired=False, condition=None, reference=None):
+def run(cohort, indices, out, name, *, max_permutations=wade.DEFAULT_MAX_PERMUTATIONS, paired=False,
+        condition=None, reference=None):
     out = Path(out) / name
     out.mkdir(parents=True, exist_ok=True)
     meta = cohort.meta[indices.tolist()]
@@ -244,10 +245,10 @@ def run(cohort, indices, out, name, *, max_permutations=499_999, paired=False, c
     result = cached_computation(key, lambda: wade.wade(
         cohort.counts[:, indices], cond, normalization=normalization, test_genes=cohort.test_genes,
         gene_names=cohort.genes["gene_name"].to_numpy(), sample_names=meta["library"].to_numpy(),
-        strata=strata, **settings), namespace="tcga-single-test")
+        strata=strata, **settings), namespace="tcga")
     wade.write_results(result, out / "all-genes.tsv")
     (out / "timing.json").write_text(json.dumps(dict(seconds=time.perf_counter()-start,
-        capped_genes=int(np.sum(result.tested & (result.n_exceedances < 20))),
+        capped_gene_directions=int(np.sum(result.n_permutations == max_permutations)),
         gene_permutations=int(result.n_permutations.sum())), indent=2)+"\n")
     print(f"Finished {name} in {time.perf_counter() - start:.1f}s", flush=True)
     return result
@@ -267,12 +268,31 @@ def annotation_expression(cohort, result, panel):
     for gene in panel:
         if gene in result.gene:
             frames.append(meta.with_columns(gene=pl.lit(gene),
-                log_expression=pl.Series(result.expression[result.gene_index(gene),columns])))
+                log_expression=pl.Series(log2_expression(result, gene)[columns])))
     return pl.concat(frames)
 
 
+def log2_expression(result, gene):
+    """log2(count / size factor + 1) for display, whatever scale was tested."""
+    x = result.expression[result.gene_index(gene)]
+    return x if result.params["scale"] == "log" else np.log2(x + 1)
+
+
+def subset_floor(result, genes):
+    """Cases above every control, and the smallest upward p-value that count permits."""
+    from math import comb
+    n1, n0 = int(result.cond.sum()), int((result.cond == 0).sum())
+    rows = []
+    for gene in (g for g in genes if g in result.gene):
+        k = len(result.drivers(gene, "up"))
+        rows.append(dict(gene=gene, cases_above_every_control=k,
+                         best_attainable_p=comb(n1, k) / comb(n1 + n0, k),
+                         pvalue_up=float(result.pvalue_up[result.gene_index(gene)])))
+    return pl.DataFrame(rows)
+
+
 def plot_bulk_tail(result, panel):
-    return wade.plot_patterns(result, label=[g for g in panel if g in result.gene])
+    return wade.plot_patterns(result, direction="up", label=[g for g in panel if g in result.gene])
 
 
 def plot_qc(cohort, result):

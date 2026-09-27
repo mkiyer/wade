@@ -2,8 +2,8 @@
 
 Design frozen on 2026-09-11 before inspecting the new marker p-values.
 The user selected full gene counts for both cancers and omitted all
-splice-junction analyses from these examples. Candidate results and visuals
-require user approval; see the [review register](../archive/development-20260923/docs/release-0.2.0-review.md).
+splice-junction analyses from these examples. Results and figures require
+the author's approval before release.
 
 ## Inputs and provenance
 
@@ -29,8 +29,9 @@ and local paths stay outside tracked source.
 
 ```sh
 python tools/fetch_tcga_annotations.py /path/to/frozen-tcga-annotations
-python tools/render_release.py examples --config /path/to/tcga-config.json
-python tools/render_release.py examples-breast --config /path/to/tcga-config.json
+cd notebooks
+WADE_TCGA_CONFIG=/path/to/tcga-config.json quarto render examples.qmd
+WADE_TCGA_CONFIG=/path/to/tcga-config.json quarto render examples-breast.qmd
 ```
 
 The downloader reads only public annotations and never sends local sample
@@ -79,16 +80,15 @@ its testing filter**, after sample eligibility and patient separation. The
 primary comparison has its own fitted object; the four breast subtype
 comparisons share one fit on their eligible tumour-only cohort. Subsetting a
 fitted object never re-centers its factors. The count denominator is that
-relative size factor, and the test uses `log2(count / size_factor + 1)` without
-added noise. Raw full-input totals accompany library QC, independently of the
+relative size factor, and the test uses `count / size_factor` without added
+noise; figures and descriptions use log2. Raw full-input totals accompany library QC, independently of the
 RLE factors. No genomic span is used as a transcript length.
 
 This ordering distinguishes initial sample/reference QC from the subsequent
 testing filter; it is not a general prohibition on prefiltering. RLE's
 reference assumption must be justified. It does not remove depth-dependent
-sampling variance or confounding. The high-alteration benchmark exposes
-reference bias even with many genes; see the
-[production assessment](../archive/development-20260923/docs/production-migration-0.2.0.md).
+sampling variance or confounding, and when many genes change together the
+reference itself can shift.
 
 A gene is eligible if it has at least 10 raw counts in at least five pooled
 samples and pooled mean CPM of at least 0.1. No case/control or marker label
@@ -111,20 +111,18 @@ These are design counts, not approved results.
 
 ## Inference and interpretation
 
-Both primary comparisons use seed 1 and a 499,999 permutation cap, with the
-production stopping rule: stop at the twentieth inclusive exceedance, or the
-cap. There is one exact empirical W1 statistic, p-value and BH q-value per
-tested gene. No fitted bulk-shift null, extrapolated tail p-value or secondary
-significance stage remains. Every output includes actual stopping counts and
-the fitted normalization provenance.
+Both primary comparisons use the defaults: both directions, the linear scale,
+seed 1 and the 999,999 permutation cap, with one BH family over every
+gene-direction pair. Every output includes the stopping records and the
+fitted normalization provenance.
 
 The four breast subtype-versus-other-three contrasts use all eligible
 annotated tumours, one per patient. Normal-like and unknown labels are excluded
 only from those secondary contrasts. They use the same test-gene universe,
-tumour reference, seed and prespecified 99,999 cap. An additional BH family
-covers all four contrasts × all tested genes. Its 1e-5 p-value floor cannot
-resolve a lone discovery in that combined family. This is an exploratory
-expression-label association analysis.
+tumour reference, seed and prespecified 99,999 cap. One additional BH family
+covers all four contrasts × both directions × all tested genes; with its 1e-5
+floor a discovery needs several genes at the floor together. This is an
+exploratory expression-label association analysis.
 
 Prostate fusion-confirmed, expression-high, negative and unknown labels stay
 separate. SPINK1 is an expression-high comparator. The notebook reports observed
@@ -136,9 +134,10 @@ in the same patients, not an independent cohort. HER2-enriched is not
 synonymous with clinical HER2 positivity, nor basal-like with triple-negative
 disease.
 
-`bulk_shift` is a log-expression median difference. `upper_tail` and
-`lower_tail` are signed decile-mean differences minus that shift. A negative
-bulk and positive upper-tail description may coexist. The distribution
-q-value does not separately test either description, infer an affected fraction
-or measure an individual's rarity. Transcriptome rarity is the next research
-phase after the production candidate is finished and reviewed.
+`bulk_shift` is a log2 median difference. `upper_tail` and `lower_tail` are
+decile-mean differences minus that shift, so a lowered bulk and a raised
+upper tail can coexist. `padj_up` tests the upward area; it does not infer an
+affected fraction or an individual's rarity. With 52 prostate normals, k
+tumours above every normal cannot reach an upward p-value below
+C(445, k) / C(497, k); the prostate notebook reports that floor for its
+fusion markers.
