@@ -1,7 +1,14 @@
-# WADE 0.2.0: one design and validation plan
+# WADE measurement kernels: deferred research and evidence
+
+**2026-09-25 scope change:** the user has chosen a point-based 0.2.0 release.
+The active scientific and release sequence is now [PLAN.md](../PLAN.md).
+The dated kernel plan below is retained as a research record, including its
+failed gates and previous release requirements. Statements below requiring
+kernels for 0.2.0 or directing the next kernel experiment are superseded.
+No kernel is selected, and further derivation is deferred until after release.
 
 2026-09-23 — design reset following the user's review of the depth-stress study.
-**This is the canonical plan for future work.** Earlier documents remain evidence
+**This was the canonical kernel plan before the scope change above.** Earlier documents remain evidence
 of experiments, including failures; their proposed next steps are superseded here.
 This reset changes planning and terminology, not production code or study results.
 The user accepted this sequence before requesting the workspace cleanup. No new
@@ -13,6 +20,16 @@ shared specification of the method. The reports also emphasized detection more
 than estimation, and used prior names as if they were kernel families. That made
 it difficult to distinguish a numerical implementation, a statistical candidate,
 and a validated procedure. We need to correct all three problems.
+
+**Last kernel gate (2026-09-24; deferred):** [alternative constructions](#alternative-constructions--2026-09-24)
+now demonstrate that unchanged counts, exact individual modes, positive zero
+uncertainty and conserved totals are compatible. Neither construction passes
+the measurement-calibration gate. Kernel width and unseen-gene mass allocation
+remain unresolved; cohort performance and production migration wait for this.
+The [2026-09-25 release assessment](index.md) summarizes current software,
+comparative sensitivity/specificity and the remaining release gates. Measurement
+interval coverage and gene-level false discoveries are separate endpoints;
+the former must not be presented as the latter or replace workflow validation.
 
 ## 1. The objective we retain
 
@@ -41,7 +58,8 @@ likelihood. Linear and log abundance serve different biological questions;
 validate both before exposing them. The present depth-stress results are
 **linear upward area only**, not a log-kernel comparison.
 
-Uncertainty remains part of the intended 0.2.0 release. Universal superiority,
+At the time of this plan, uncertainty was part of the intended 0.2.0 release;
+that requirement is now deferred as stated above. Universal superiority,
 small-cohort superiority over parametric methods, and fewer calls alone are not
 success criteria. We need a demonstrable robustness or estimation benefit with
 useful sensitivity and adequate false-discovery control. Optimization follows
@@ -170,14 +188,13 @@ Use paired method comparisons and uncertainty across independent cohorts.
 | --- | --- |
 | Are discoveries reliable? | Null rejection, all-null probability of any call, per-matrix FDP and mean FDP/FDR at the declared full-family threshold. Report sensitivity, precision and filtering failures alongside them. |
 | Are abundances and effects recovered? | Error in patient abundances and group CDF/quantile curves; directional-area bias/RMSE; log2 fold-change bias, MAE/RMSE for explicitly defined contrasts. Separate latent finite-cohort truth from population parameters. |
-| Is the right subset localized? | Subset-fraction error, subset-versus-baseline fold error, and affected-patient precision/recall and PR-AUC against planted memberships. Score false localization under null/shared-tail profiles and behavior under pure bulk shifts. |
+| Where does enrichment occur? | Patient contributions to upward area, concentration of those contributions, and control-relative enrichment. Evaluate affected-patient precision/recall and ranking against planted memberships. Treat prevalence and component-fold recovery as separate claims; check null/shared-tail and bulk controls. |
 | Does uncertainty help? | Interval coverage together with width, predictive checks, and paired degradation as reads are removed. Report coverage by true abundance/depth; observed-zero strata are useful diagnostics, not unconditional coverage certificates. |
 | Is it useful on real data? | Stability and effect/ranking agreement under thinning; associations with independent fusion/DNA/protein annotations. Real unannotated genes are not known negatives. |
 
 The existing simulator retains latent abundances and exact planted membership
-for its original 36 profiles. We did measure latent-area error in the latest
-study, but have **not completed fold-change, prevalence or membership recovery**.
-Recovering those quantities is now a primary development task.
+for its original 36 profiles. Gate B now measures effect, curve and membership
+recovery. These are assessment instruments, not validated production estimators.
 
 Define the truth before writing its estimator. In the current simulator, b is
 the unaffected-case multiplier, f the affected-case multiplier relative to the
@@ -189,9 +206,11 @@ must use the actual implanted patient count.
 
 Planted component parameters are not always identifiable from two unpaired
 nonparametric distributions: overlapping subgroups can admit several mixture
-explanations. The walk's selected tail fraction must therefore be evaluated
-against planted π, not declared equal to it. Similarly, a quantile ratio is not
-a causal within-patient fold change. Report observable curve contrasts generally;
+explanations. As clarified by the user, the maximum walk was intended to describe
+subset-driven enrichment, not necessarily estimate π. Retain that role. Compare
+its selected mass with planted membership to understand what it includes, without
+making prevalence recovery its sole success criterion. Similarly, a quantile ratio
+is not a causal within-patient fold change. Report observable curve contrasts;
 validate component recovery in controlled mixtures with varying separation.
 Use no truth-derived cutoff or known top-k fraction at evaluation time. Any
 oracle localization is an explicitly labeled upper bound. Patient localization
@@ -239,7 +258,7 @@ There are four saved biological cohorts: Gamma and correlated lognormal at
 not independent confirmation; profiles within a cohort are not independent
 replicates. No production behavior or statistical candidate changed.
 
-The most consequential finding is independent of kernels. In an exact example,
+An analytic example distinguishes cumulative enrichment from membership. Here,
 90% of cases have precisely the control distribution and 10% are extreme spikes.
 The maximum upper walk selects **99.1%**, because the mixture moves quantiles
 throughout the distribution. With continuous first-order dominance it can select
@@ -301,12 +320,95 @@ changes by more than one percentage point; the maximum is 9.2 points. These
 cutoffs remain numerically unresolved as precise estimates, even aside from
 their conceptual prevalence limitation. No p-value uses this quadrature.
 
-**Decision:** the instruments expose failures that a detection-only benchmark
-misses. They do not pass either kernel for release. Finish the bounded
-normalization/raw-noise failure replays, clarify what localization may claim,
-and then use these instruments to evaluate a justified measurement candidate.
-Weak-subset power loss and singleton fitted-reference collapse remain explicitly
-preserved historical sentinels; neither legacy fitter was rerun in this gate.
+**Completed mechanism replay, 2026-09-23.** The
+[frozen replay](../research/protocols/mechanism-replay.json) and
+[local results](../.release/0.2.0/mechanism-replay-20260923/completion.json)
+recompute 160 normalization/test combinations: five settings, two cohorts, eight
+reference choices, two scales. Current RLE reproduces the saved factors; current
+unsigned W1 reproduces all observed statistics, 3,999-permutation exceedance
+counts and 128-gene BH results. References contain 16,384 genes, disjoint from
+the test panel. Selected identities are frozen: nomination is not retrained, and
+this does not reproduce the user's complete biological control-discovery workflow.
+
+The normalization failures persist without the retired two-stage correction.
+With 60% upward-changed reference genes, the LOESS and log-GCV selections contain
+only changed genes; mean linear-scale FDP is 70.2%, versus 1.6% with the valid
+20-gene controls. When changed genes are especially quiet, even the independent
+log-GCV selection contains only changed genes and gives 68.3% FDP. Conversely,
+with 30% changed references, independent log-GCV controls improve this diagnostic
+to 4.4% FDP; whole-reference RLE has a 0.30-log2 relative group-factor bias and
+68.3% FDP. Neither low variance nor a majority of unchanged genes alone certifies
+a reference under these generators. These are means over **two reused cohorts**,
+not estimates precise enough to certify FDR. All-null replays make no BH calls.
+
+The separate noise replay regenerates perturbations and reproduces every saved
+linear/log observed upward area. New linear-upward tests use 255 permutations
+with fixed known exposures. Among shallow-case null genes, nominal calls total
+67/208 without perturbation, 145/208 with Poisson(C+1), and 208/208 with enormous
+raw-count noise. Enormous noise added in common normalized units gives 6/208;
+with equal depths it gives 7/208. In the mixed shallow-case panels, the latter
+also suppresses alternative detection to 3/80. Large common-unit noise does wash
+out biology; large raw noise divided by unequal exposures creates unequal group
+backgrounds. These are nominal calls, **not a new BH/FDR experiment**. The old
+fixed-exposure recipe is deliberately replayed, not recommended: these panels
+lack the complete library needed to renormalize added counts coherently.
+
+**Localization candidate, 2026-09-23.** The
+[derivation and implementation](../research/README.md#describing-enrichment-without-estimating-prevalence)
+preserve the walk and add two descriptions. First, attribute positive quantile
+displacement to case patients, integrating over each entire kernel and sharing
+tied abundance mass equally. Mean patient contribution equals upward W1. Its
+effective contributor fraction describes concentration of area, not affected
+prevalence. Second, find the abundance where case-minus-control upper-tail mass
+is greatest; report case mass, control mass and their excess separately. Kernel
+membership means mass above this cutoff, not probability of disease or alteration.
+
+The [frozen localization protocol](../research/protocols/localization.json) ran
+on the same four cohorts and both depth states, producing
+[1,728 descriptive rows](../.release/0.2.0/localization-20260923/completion.json).
+An exact separated 10% spike has perfect cutoff membership and contributes over
+95% of the area. The [three-description illustration](../.release/0.2.0/localization-20260923/review/area-localization.png)
+is provided for review; user approval is pending. The more variable latent
+cohorts reveal important limits:
+
+| Planted pattern | Area carried by altered cases | Contribution-ranking average precision | Case mass above cutoff | Cutoff precision / recall |
+| --- | ---: | ---: | ---: | ---: |
+| 10% at 4-fold | 68.0% | 0.943 | 31.9% | 40.2% / 96.8% |
+| 10% at 16-fold | 92.3% | 1.000 | 32.6% | 44.9% / 100% |
+| 10% spike above lower bulk | 99.7% | 0.973 | 8.7% | 100% / 87.3% |
+
+These are equal-weight averages across the four cohorts and four baseline
+abundances, using latent values before count noise; they are not independent
+replicates. The continuous attribution identifies the strong contributors more
+clearly than the cutoff delineates them. Even an exact additive bulk shift gives
+equal contributions while the cutoff can include only half the cases. With a
+proportional bulk shift, absolute area can concentrate in high-abundance cases
+despite every case being altered. Independent samples from the same population
+also produce apparent tails: localization alone is not a significance test.
+
+Across all planted-subset profiles, full-depth contribution-ranking average
+precision is 0.826 for points and 0.849 for h=0.5 kernels; after severe minority
+thinning it is 0.765 and 0.608. These reused-data means do not establish a kernel
+advantage. Numerical cutoff stability is inadequate: doubling kernel nodes
+changes case tail mass by over one percentage point in 150/576 descriptions
+(maximum 7.3 points), and one patient's membership by up to 48.4 points.
+Contribution concentration changes by over one point in 9/576 descriptions;
+ratios become unstable when total area is tiny. A regression also shows that
+separating a discrete near-tie by 1e-10 can move a CDF cutoff sharply while area
+and concentration barely change. No added tolerance was tuned to hide this.
+Kernel cutoff errors here include the use of finite quantile nodes: a future
+cutoff evaluation should use the continuous mixture CDF directly and assess
+whether its maximizing location is stable. Accurate W1 integration does not
+guarantee an accurate maximizing cutoff.
+
+**Decision:** retain the maximum walk and develop area attribution as a
+descriptive companion. Do not promote this hard cutoff or either Beta candidate
+to production. Gate B now supplies the instruments and distinct failure
+mechanisms needed for gate C. The next scientific step is a measurement-model
+card and isolated zero/one/many-count location, interval and predictive checks,
+before another detection sweep. Weak-subset power loss and singleton
+fitted-reference collapse remain historical sentinels; neither legacy fitter
+was rerun in this gate.
 
 ### C. Derive and validate one measurement candidate at a time
 
@@ -328,6 +430,340 @@ a separate design choice; changing it must be explicit and paired across arms.
 benefit in the scorecard without unexplained regressions. Reducing all calls or
 using very wide intervals is insufficient. Agree numerical tolerances and
 acceptable loss/gain margins before fresh evaluation; none are approved here.
+
+#### Measurement diagnosis completed, 2026-09-24
+
+The [model card](../research/README.md#measurement-model-card-and-diagnostics),
+[frozen protocol](../research/protocols/measurement.json) and
+[completed run](../.release/0.2.0/measurement-20260924/completion.json) isolate the
+existing h=1 and h=0.5 binomial–Beta candidates. There are six depths from 1,000
+to 100 million counts; observed counts 0, 1, 2, 5, 10, 100 and 1,000; and fixed
+true abundances from 0.001 to 1,000 CPM, with structural zero reported separately.
+Exposures are known, with additional scaling checks. This deliberately removes
+normalization estimation, group labels and gene testing from the question.
+It does not simulate every biological workflow or certify transcriptome FDR.
+
+**The individual posterior calculations are consistent; the low-count model
+still needs revision.** Prior-generated checks give 94.91–95.06% central-interval
+coverage, with Monte Carlo SE about 0.15 percentage points (20,000 draws per
+cell). Exact fixed-truth binomial sums give very different coverage near zero.
+For example, at 1 CPM and depth 1,000, central coverage is 0% for h=1 and 99.90%
+for h=0.5. At still smaller positive abundances both can give 0%. A positive
+central lower bound eventually excludes sufficiently small true fractions.
+One-sided upper bounds retain the zero boundary and answer a different question;
+they are not uniformly calibrated at 95% for every positive abundance either.
+These results distinguish prior-averaged Bayesian consistency from fixed-truth
+coverage; neither should be mislabeled as the other.
+
+Zero uncertainty is positive, as intended, but its location is consequential:
+
+| Total counts, observed C=0 | Mean, h=1 | Mean, h=0.5 | Central 95% interval, h=0.5 |
+| --- | ---: | ---: | ---: |
+| 1,000 | 998 CPM | 499.5 CPM | 0.491–2,508 CPM |
+| 1 million | 1.000 CPM | 0.500 CPM | 0.000491–2.512 CPM |
+| 100 million | 0.010 CPM | 0.005 CPM | 0.00000491–0.02512 CPM |
+
+The density's mode is zero in all these cases. Positive width and mean do not
+require a positive mode. At 100 expected reads, central coverage is about 95%
+for both candidates and relative mean bias is small. The rare-fraction Gamma
+limit reproduces the location problem: its mean remains (C+h)/s. On the fixed
+count grid with C/N ≤ 0.001, the checked Beta and Gamma interval/median quantiles
+differ by at most 0.33%. Changing from binomial to Poisson alone is not a remedy.
+
+**There is also a whole-library prior-budget inconsistency.** For G exhaustive,
+disjoint gene-count categories with counts summing to N, the current fraction
+means sum to
+
+\[
+\sum_g E[p_g\mid C_g,N]=\frac{N+Gh}{N+2h}.
+\]
+
+With 16,384 genes and 1,000 counts, this is **17.35 for h=1 and 9.18 for h=0.5**,
+although fractions must sum to one. At 10 million counts the totals are 1.00164
+and 1.00082: the discrepancy is small at ordinary bulk depths, but cannot be
+ignored in the shallow-library regime we intended to improve. Each patient
+kernel still integrates to one; that separate invariant passes. This is a
+collection of incompatible marginal priors, not a missing RLE scaling transform.
+
+A coherent multinomial–Dirichlet construction would instead have marginal
+Beta(C_g+α_g, N−C_g+α_total−α_g), with α_total=Σα_g. The
+[Dirichlet support](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.dirichlet.html)
+enforces the fraction-sum constraint. This is a derivation of the required
+bookkeeping, **not a selected replacement**. Simply assigning h to every gene
+and changing the denominator to N+Gh would introduce thousands of prior counts
+and strongly shrink shallow libraries. Total prior strength and its allocation
+need explicit justification; a fitted patient-population reference is not
+required by this identity.
+
+**Prediction adds useful evidence beyond interval width.** In fresh independent
+count pairs from a true 1 CPM gene at depth 1,000, the true probability of a
+nonzero repeat is about 0.1%. After an observed zero, the current kernels predict
+approximately 50% (h=1) or 29% (h=0.5). The plug-in point predicts zero probability
+and incurs infinite log loss when a repeat is nonzero. Thus neither the point's
+certainty nor these kernels' positive predictions settle the low-count problem.
+The saved scorecard reports held-out log loss and zero-event Brier scores, with
+Monte Carlo uncertainty, for both repeat depths. These are predictions of discrete
+counts, not new gene-level significance tests.
+
+**Spreading uncertainty is not automatically denoising the cohort distribution.**
+For repeated measurements at fixed truth, the variance of a draw from the average
+kernel is Var_C(E[A|C]) + E_C(Var[A|C]). At 100 expected reads in the 1 CPM example,
+this is about twice the variance of normalized points. The calculation is exact
+for this measurement model. It explains why averaging valid uncertainty kernels
+need not recover the latent population distribution or remove depth-dependent
+spread. Location, spread and calibration still require separate evaluation.
+
+**Extra technical variation changes the target.** In the supplied 10%-CV
+preparation experiment at 1,000 CPM and depth 100 million, h=0.5 intervals cover
+the realized library fraction in 95.24% of replicates, but the source fraction
+before preparation in only 4.81% (SE 0.15 points for each). Binomial kernels can
+describe counting precision while missing preparation uncertainty. Technical
+dispersion must have a measurement interpretation and supporting data; biological
+variation across patients must not be relabeled as technical noise.
+
+Numerical checks reproduce the existing kernel means/CDFs and independently
+verify future-count probabilities. All checked inverse-CDF residuals are below
+1e-7. The largest 128/256-node disagreement in expected log2(1+A) is 1.6e-5;
+this is a quadrature check, not a log-W1 validation. The
+[measurement illustration](../.release/0.2.0/measurement-20260924/review/measurement-audit.png)
+is ready for review; user approval is pending.
+
+**Recommendation from this measurement audit:** derive one candidate with a coherent whole-library allocation
+of prior information and an explicit counting-versus-preparation uncertainty
+target. Reuse these same location, coverage, predictive and conservation checks
+before returning to cohort W1 benchmarks. Preserve positive uncertainty at zero
+and precise spikes. Neither reducing h again nor renormalizing posterior means
+alone constitutes a justified solution. No production kernel has been selected.
+
+#### Preserve observations and individual kernel modes — 2026-09-24
+
+The user clarified an additional design requirement: **each individual kernel
+must peak at the observed abundance**, including zero. This is now an explicit
+gate, rather than an assumption about what a Bayesian posterior will do.
+
+- Raw integer C and the observed total N stay unchanged. Kernel shape parameters,
+  inferred means and simulated future counts are separate objects. The earlier
+  positive-mean calculations did not edit the observed counts or create reads.
+- At C=0, positive width and positive mean are allowed; the unique density mode
+  must remain zero. At C>0, require the mode at C/N in fraction space, or C/s on
+  the linearly normalized axis. The prior h=0.5 does not generally satisfy this
+  positive-count requirement; h=1 does for the individual binary Beta kernel.
+- A fixed-total joint model must also conserve the fraction sum and hence the
+  sum of marginal means. This does not require each marginal mean to equal its
+  observed count. An upward mean adjustment for a zero must be balanced elsewhere.
+- The requirement concerns the physical abundance axis. A nonlinear log transform
+  preserves probability mass but changes density through its Jacobian; its density
+  mode need not be the transformed physical mode. Keep the observed marker fixed
+  and transform the full kernel without recentering it.
+
+Mode preservation is a structural requirement, not sufficient evidence of
+robustness: the existing h=1 marginal already preserves C/N while retaining the
+low-count mean and predictive problems above. W1 integrates the entire kernel,
+so its spread and tail mass still need the existing validation checks.
+
+**A joint mode is not the collection of marginal modes.** We derived and tested
+the natural conjugate candidate: a uniform Dirichlet prior with a multinomial
+likelihood gives Dirichlet(C+1). Its most likely **whole-library vector** is C/N,
+and every zero has positive marginal uncertainty. However, its individual
+marginals are Beta(C_g+1, N−C_g+G−1), with mode C_g/(N+G−2).
+The density and fraction constraint follow the
+[Stan Dirichlet definition](https://mc-stan.org/docs/functions-reference/simplex_distributions.html);
+the mode equations here follow by differentiating those densities.
+
+For observed counts **(0, 2, 8)**, with total 10:
+
+| Quantity, expressed in count units | Value |
+| --- | --- |
+| Unchanged observed counts | (0, 2, 8) |
+| Joint posterior mode | (0, 2, 8) |
+| Individual kernel modes | (0, 1.818, 7.273) |
+| Individual kernel means | (0.769, 2.308, 6.923), summing to 10 |
+
+Thus this candidate conserves the total and the joint mode but **fails the user's
+individual-mode requirement**. At N=1,000 and G=16,384, it retains only 5.75% of
+each positive count's modal value. Calling the joint MAP an individual kernel's
+mode would hide this failure. Merely checking the sum of modes is insufficient,
+too: the older h=0.5 marginals can sum to 10 in this example while moving the
+two positive-count modes to 1.667 and 8.333.
+
+This is not solved by another proper Dirichlet allocation. Let α_total=Σα_g and
+let K be the number of positive-count genes. For any positive count strictly
+below N, preserving its interior marginal mode requires
+
+\[
+\frac{C_g+\alpha_g-1}{N+\alpha_{total}-2}=\frac{C_g}{N}.
+\]
+
+Summing the resulting equations over the positive-count genes gives
+Σ_{C_g=0} α_g = 2−K. With K≥3 this is impossible for positive prior parameters.
+With K=2 and any zero-count category, it also conflicts with a proper positive
+prior for those zeros. This rules out the **Dirichlet posterior family** for
+the general exact-mode contract; it is not an impossibility result for every
+uncertainty construction.
+
+The [frozen constraint audit](../research/protocols/mode-contract.json) and
+[results](../.release/0.2.0/mode-contract-20260924/decision.json) check five explicit
+count vectors and 30 depth/gene-universe combinations. Numerical density checks,
+checked interval calculations and read-only input assertions confirm the
+derivation. Raw counts, integer dtype and totals stay unchanged throughout.
+The candidate is rejected at this design gate; a full performance sweep is
+unnecessary for a candidate that already violates the requested behavior.
+
+The next derivation below keeps the exact-mode requirement. It does not replace
+individual modes with joint MAP, overwrite a reported mode, or renormalize means
+and assume the peaks are preserved.
+
+#### Alternative constructions — 2026-09-24
+
+**The constraints are compatible, but satisfying them does not determine a valid
+measurement kernel.** We derived a discrete construction and a continuous one,
+implemented both in [research](../research/wade_research/mode_constructions.py),
+and checked them with a [frozen protocol](../research/protocols/mode-constructions.json).
+Both preserve observations and totals and have positive zero variance. Neither
+is selected. These are measurement diagnostics, **not gene-level false-discovery
+rates or a comparison of WADE detection performance**.
+
+**1. A discrete, fixed-total construction.** Let w be an explicit positive vector
+summing to one. Define
+
+\[
+q_g=\frac{C_g+w_g}{N+1},\qquad
+Z\mid C\sim\operatorname{Multinomial}(N,q).
+\]
+
+Each simulated library has exactly N counts. Its one-gene kernel is
+Binomial(N,q_g); the [binomial PMF](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.binom.html)
+gives a unique mode floor((N+1)q_g)=floor(C_g+w_g)=C_g.
+At C_g=0, q_g>0, so the mean and variance are positive. The normalized random
+variable is Z_g/s, giving mode C_g/s and variance Nq_g(1−q_g)/s². The observed
+C and N are never edited.
+
+This is **smoothed count resampling**, not a posterior for the unknown fraction.
+Although q also equals the posterior mean under Dirichlet(w), fixing q and
+resampling is different from integrating over that posterior. The latter gives
+a [Dirichlet–multinomial predictive law](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.dirichlet_multinomial.html)
+with extra variance and generally different modes. Calling these the same
+kernel would conceal a changed uncertainty target.
+
+There is a useful family-wide obstruction. For any nondegenerate multinomial
+whose individual modes uniquely equal C_g,
+
+\[
+C_g<(N+1)q_g<C_g+1.
+\]
+
+Thus w_g=(N+1)q_g−C_g lies in (0,1) and sums to one: the formula above
+characterizes the entire family. If Z0 is the set of zero-count genes,
+
+\[
+\sum_{g\in Z0}E[Z_g]
+=\frac{N}{N+1}\sum_{g\in Z0}w_g<1.
+\]
+
+Consequently, all unseen genes together receive less than one expected resampled
+read. Changing the allocation cannot remove that bound. With the diagnostic
+uniform allocation w_g=1/16,384 and N=1,000, a zero gene has a positive variance
+but **99.9939% probability of zero and a central 95% interval [0,0]**. At one
+true expected read, the corresponding percentile intervals cover the underlying
+fraction in only **63.17%** of repeated libraries. These are kernel percentile
+intervals assessed against latent truth, not promised exact confidence intervals.
+This construction solves the modal bookkeeping but does not solve uncertainty
+at low counts. The uniform allocation is an explicit diagnostic assumption,
+not a learned RNA-seq prior or a normalization option.
+
+**2. A continuous construction on the whole-library composition.** Set m=C/N.
+Take a full-composition draw Q from a proper Dirichlet(C+α) posterior and an
+independent U drawn uniformly from (0,1). Define
+
+\[
+P=(1-U)m+UQ.
+\]
+
+Use **one shared U for the whole library**. Every draw sums to one; all its
+coordinates are positive with probability one. Each patient still contributes
+one unit of probability. Q is a draw of a possible composition, not a fitted
+normal-patient reference. Counts remain discrete observations; P is the unknown
+fraction being represented continuously. Normalization remains A_g=(N/s)P_g.
+
+Given Q_g, P_g is uniform on the line segment between m_g and Q_g. Mixtures of
+such segments are a standard route to unimodality; see the radial representation
+in [Van Parys, Goulart and Morari, §3.1](https://mitsloan.mit.edu/shared/ods/documents?DocumentID=4758).
+For a base marginal density f_Q, the density to the right of m is
+
+\[
+f_P(x)=\int_x^1\frac{f_Q(q)}{q-m}\,dq,\qquad
+f'_P(x)=-\frac{f_Q(x)}{x-m}<0.
+\]
+
+To the left, f_P(x)=∫₀ˣ f_Q(q)/(m−q)dq and f'_P(x)>0.
+Hence **every individual mode is exactly m**, including the zero boundary.
+The peak can have an integrable infinite density; it is not an atom and its
+variance is not zero. This mathematical property alone does not justify that
+shape for a measurement kernel.
+
+Writing μ=E[Q] and Σ=Cov(Q), independence gives
+
+\[
+E[P]=\frac{m+\mu}{2},\qquad
+\operatorname{Cov}(P)=\frac{\Sigma}{3}
++\frac{(\mu-m)(\mu-m)^T}{12}.
+\]
+
+For counts (0,2,8) and α=(1/3,1/3,1/3):
+
+| Quantity, in original count units | Discrete construction | Continuous construction |
+| --- | --- | --- |
+| Unchanged observations | (0,2,8) | (0,2,8) |
+| Individual kernel modes | (0,2,8) | (0,2,8) |
+| Kernel means | (0.303,2.121,7.576) | (0.152,2.061,7.788) |
+| Sum of means | 10 | 10 |
+| Variance of the zero-count kernel | 0.294 | 0.0893 |
+
+This establishes feasibility beyond the Dirichlet posterior family. However,
+**the contraction is an additional inference rule, not Bayes' rule under the
+original likelihood and prior**. It has to earn its measurement interpretation.
+
+It fails that check in its simplest form. In a high-information regime where
+Q≈Normal(m,σ²), P−m≈UσZ with Z standard normal. Its variance is σ²/3 and its
+97.5th percentile is 1.258σ. Across repeated measurements, the resulting central
+95% interval covers truth with probability 2Φ(1.258)−1=**79.17%**. The exact
+binomial study agrees: at N=100 million, G=16,384 and 100 expected reads,
+coverage is **78.90%**, compared with **94.83%** for its uncontracted
+one-total-prior-count base. Preserving the peak did not preserve the width.
+
+We evaluated total prior budgets 1 and G, with matched uncontracted controls,
+to separate allocation from contraction. Neither fixes both problems. Budget G
+can substantially move mass even when the peak stays put: at N=1,000, G=16,384
+and observed C=100, the contracted kernel's mode is 100 but its mean is **52.905**.
+W1 integrates that displaced mass; an unchanged mode does not protect the effect.
+Multiplying a width until one coverage endpoint looks correct would be another
+unsupported rule, so no such repair was selected.
+
+**Evidence and numerical limits.** The
+[completed artifact](../.release/0.2.0/mode-constructions-20260924b/decision.json)
+contains 15 joint-library checks, 144 observed-count rows and 360 exact
+repeated-binomial comparisons across six depths. Tests independently check PMF
+maxima, continuous density monotonicity, joint conservation, a closed-form CDF,
+simulation moments and exact finite-sum moment calculations. The first run stopped
+when a CDF integration could not reach 5e-11 at depth 100 million. Its partial
+artifact is retained. The documented numerical amendment compares 1e-7 and 5e-9
+tolerances; maximum CDF disagreement is 2.67e-10, estimated tight integration error
+is below 5.94e-10, and no coverage classification is near a threshold within the
+reported numerical allowance. Omitted binomial mass is at most 1.52e-11.
+These are numerical diagnostics, not mathematical error bounds on the underlying
+special-function implementation. No biological data, fitted RLE, technical
+dispersion or cohort significance was tested in this gate.
+
+**Next decision gate:** retain the mode and conservation requirements, but require
+a count-likelihood justification for the full kernel before another cohort sweep.
+Work first on a small, exhaustively evaluable joint library: distinguish sampling
+of repeat counts from uncertainty in latent fractions; account for total unseen
+mass once; and check modes, likelihood support, several interval levels and
+independent-count prediction together. If a mode-preserving transformation is
+proposed, it must retain the high-information counting variance and pass those
+checks without a fitted width multiplier. The unresolved work is deriving that
+inference rule, not optimizing these two rejected measurement candidates.
+No production kernel or added public option follows from this study.
 
 ### D. Validate the complete usable workflow on fresh data
 

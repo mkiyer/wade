@@ -1,8 +1,10 @@
 # Contributing to WADE
 
-Read [the scientific plan](docs/kernel-validation-roadmap.md) before changing
-inference. The current package is a point-based baseline; the intended 0.2.0
-kernel method is still being validated. There is no two-stage compatibility path.
+Read [the release plan](PLAN.md) before changing inference. The current package
+is the unsigned log-W1 baseline; the release requires directional biomarker
+discovery. Research must evaluate that biological target, not promote unsigned
+testing because it recovers more arbitrary distribution changes.
+Kernel research is deferred. There is no two-stage compatibility path.
 
 ## Repository layout
 
@@ -10,9 +12,9 @@ kernel method is still being validated. There is no two-stage compatibility path
 | --- | --- |
 | `src/wade/`, `rust/src/` | The current public package and its native implementation. |
 | `tests/` | Independent tests of that package, inputs, normalization and exports. |
-| `research/wade_research/`, `research/tests/` | The kernel research calculation and its separate correctness checks. |
+| `research/wade_research/`, `research/tests/` | Candidate point workflow, deferred kernels and independent research checks. |
 | `tools/` | Notebook, data-input, comparison and release helpers using the current package. |
-| `docs/` | Current usage and the single design/validation plan. |
+| `docs/` | Current usage, measured performance and the deferred kernel derivation record. |
 | `notebooks/` | Six current notebook sources; scientific claims must match their actual method. |
 | `archive/` | Optional local studies and snapshots; excluded from Git and distributions. |
 | `.release/` | Local data, frozen executions, source/result hashes and review artifacts. |

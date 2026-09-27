@@ -7,9 +7,11 @@ It is intended to complement conventional differential expression in large
 RNA-seq cohorts. Small studies remain a natural setting for DESeq2.
 
 **0.2.0 is under development.** The public API below is the working point-based
-baseline. The uncertainty-aware kernel successor lives in the separate
-[research workspace](research/README.md) and is not yet production-selected.
-The [design plan](docs/kernel-validation-roadmap.md) governs that work;
+baseline. The release targets **directional biomarker discovery**; unsigned-only
+distribution detection is not the agreed release solution. The
+[research comparison](research/README.md#replicated-point-comparison) evaluates
+direction and scale without changing public inference.
+Measurement kernels are deferred until after 0.2.0. The [release plan](PLAN.md) governs that work;
 [current documentation](docs/index.md) separates usage from archived studies.
 Rare-event probabilities across the transcriptome are a subsequent research
 phase; a large descriptive tail is not a certified rare-event call.

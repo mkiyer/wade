@@ -2,6 +2,13 @@
 
 Release candidate; publication and all result/figure approvals remain pending.
 
+These notes describe the implemented unsigned log-W1 baseline. The 2026-09-25
+[release plan](../PLAN.md) now targets a validated point-based release and defers
+measurement kernels. Directional/scale API changes are being evaluated in
+research and will be documented here after selection and production migration.
+The user requires directional biomarker discovery; the unsigned-only baseline
+described below does not satisfy that release objective.
+
 ## One inferential contract
 
 WADE now asks whether a gene's expression distribution differs between two

@@ -1,5 +1,10 @@
 # WADE 0.2.0 method
 
+This page describes the current public baseline. The directional point candidate
+is specified in [PLAN.md](../PLAN.md); it has not yet replaced this implementation.
+The user has rejected unsigned-only discovery as the release objective. This
+page documents existing behavior, not an approved biomarker-discovery method.
+
 One question: does a gene's expression distribution differ between two groups?
 The test is unsigned empirical Wasserstein distance. Bulk and tail descriptions
 follow the test and are not additional hypotheses.

@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "purpose": "Gate-B localization candidate on the same frozen known-truth cohorts. Descriptive attribution and control-relative enrichment, not prevalence estimation or patient significance.",
+  "source": ".release/0.2.0/kernel-depth-stress-20260923",
+  "cohorts": [
+    "250v250-r00",
+    "250v250-r01",
+    "50v500-r00",
+    "50v500-r01"
+  ],
+  "scenarios": [
+    "full",
+    "few_1000x"
+  ],
+  "profiles": 36,
+  "selection": "First two saved replicates per allocation (Gamma and correlated lognormal); every original planted profile, irrespective of call or eligibility",
+  "scale": "Linear upward area on shared RLE normalized counts, aligned to original deep units",
+  "arms": [
+    "point",
+    "beta_h1_mean",
+    "beta_h1_kernel",
+    "beta_h0.5_mean",
+    "beta_h0.5_kernel"
+  ],
+  "kernel_nodes_per_patient": [
+    64,
+    128
+  ],
+  "numerics": "Equal-probability midpoint quadrature per patient for descriptions only. Report its analytic W1 approximation bound, disagreement with saved bounded CDF area, and changes after doubling nodes. Reuse saved conservative permutation p-values, never quadrature-derived p-values.",
+  "walk": "Maximize integral from q to 1 of Qcase-Qcontrol, including zero-length tail. Choose largest q on an exact or arithmetic tie (tolerance 1e-12 times maximum curve magnitude). This is a distribution descriptor, not an identifiable mixture fraction or individual significance test.",
+  "effects": [
+    "whole-group mean log2 ratio",
+    "upper-walk tail mean versus whole-control mean log2 ratio",
+    "finite-cohort upward area",
+    "group W1 estimation error",
+    "patient mean error"
+  ],
+  "truth": "Use saved latent finite-cohort abundances and memberships. Score minority prevalence and affected-versus-control contrast only where a minority was planted. Null/shared-tail target membership is empty; bulk-up target membership is all cases. Keep population mean ratios separate from finite-cohort contrasts.",
+  "membership": "Fractional case membership from mass above the walk cutoff; split boundary ties equally. Report selected mass, soft precision/recall and Brier error. Rank by patient mean and report tie-aware average precision as a separate ranking diagnostic; no oracle top-k selection.",
+  "uncertainty": "Central 95% Beta abundance intervals: report patient coverage together with width by full/shallow/observed-zero strata. Points have no intervals, not zero-width credible intervals. No prior-averaged calibration claim.",
+  "detection": "Saved nominal conservative p<=0.05 with filtered genes retained as noncalls. Report upward sensitivity and unchanged/shared-tail null specificity separately from down-only alternatives. Panel FPR is not transcriptome FDR; only four independent cohorts.",
+  "failure_replay": {
+    "source": ".release/0.2.0/count-kernel-calibration-screen-20260921",
+    "selection": "All 72 point-abundance null datasets at 250:250; all three depth ratios and 24 original replicates. Known library-total factors; this is a two-category measurement experiment, not an RLE transcriptome.",
+    "procedure": "Recompute observed and saved actual-depth bootstrap/oracle areas with current points. Reuse archived ordinary-permutation null scores and check stored p-values. Add one new fixed 127-permutation bank with seed [20260923,index] to independently reproduce the mechanism, without refitting or selecting a kernel.",
+    "normalization": "For the transcriptome panels, report case/control relative error of fitted RLE factors versus generating factors. Known factors are diagnostic truth, not an alternative usable default.",
+    "other_failures": "Do not resurrect retired fitted-bulk code or a fitted-reference kernel. Preserve weak-subset and singleton-collapse numerical records as explicit historical sentinels; replay of normalization failures and full raw-noise perturbation remains separate work."
+  },
+  "decision": "Pass instruments only if analytic examples, truth units, replay parity and numerical bounds check. Report any descriptor instability. No pass/fail scientific margin or model winner is selected from these reused outcomes.",
+  "numerical_cdf_check": "Verify inverse-CDF round trips to absolute probability error 1e-7; bisect failing requests. This exceeds the few-1e-9 CDF jumps observed at N around 1e8, while remaining well below the node probability mass. Add an outward moment/quantile roundoff allowance to the analytic transport bound.",
+  "localization": {
+    "area_attribution": "Assign each case patient its mean positive displacement under monotone quantile coupling to controls. Split tied abundance mass symmetrically. Mean patient contribution must equal upward W1. For kernels integrate over the full patient node distribution with equal patient mass.",
+    "concentration": "Effective contributor fraction = mean(r)^2 / mean(r^2), where r is patient upward-area contribution. Zero when area is zero. This quantifies concentration of area, not biological affected prevalence. Proportional bulk shifts can also concentrate absolute area.",
+    "cutoff": "Choose the highest observed abundance maximizing Fcontrol(a)-Fcase(a). Tail is strictly above a. If maximum is zero, select nothing. Track case tail mass, control tail mass, excess mass and fraction of upward area above the cutoff. For kernels membership is the fraction of each kernel above the common cutoff.",
+    "metrics": "Soft membership precision/recall and Brier error; tie-aware average precision for contribution ranking and tail membership separately; area carried by planted samples; contribution RMSE relative to exact latent attribution; observed tail fold versus planted component contrast as a diagnostic. Analyze null/shared-tail and bulk controls separately; all prespecified genes, not only calls.",
+    "numerics": "Track 64-to-128-node changes in effective contributor fraction, case tail mass and each patient membership. Preserve unstable cutoffs. No KS p-value, additional gene test, threshold tuning or new kernel candidate.",
+    "decision": "Assess separable spikes and overlapping mixtures without requiring cutoff mass or effective fraction to equal prevalence. Favor clear descriptions and retention of precise spikes; no production promotion on reused data."
+  }
+}

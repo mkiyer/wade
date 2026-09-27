@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "status": "Frozen first engineering run; not the publication confirmation protocol",
+  "purpose": "Exercise the directional point candidate from raw counts through normalization, filtering, paired directional tests, joint BH, detection and latent-effect assessment at transcriptome scale",
+  "release_scope": "Large independent-patient bulk RNA-seq cohorts; uncertainty kernels deferred",
+  "candidate": {
+    "scale": "linear",
+    "directions": ["up", "down"],
+    "normalization": "RLE fit once on the complete count matrix, before a label-invariant test filter",
+    "filter": {"min_count": 3, "min_samples": 2},
+    "multiplicity": "BH over all finite gene-direction p-values together; separately score unique-gene discoveries",
+    "alpha": 0.05,
+    "maximum_permutations": 999999,
+    "stop_exceedances": 20,
+    "noise": "none; exact ties and zero counts retained",
+    "null": "Label exchangeability conditional on the frozen normalization, pooled filter and design; no composite stochastic-order null is claimed"
+  },
+  "baseline": "Current public unsigned log-W1, identical counts, fitted factors, test mask, label stream seed and permutation cap; own one-test-per-gene BH family",
+  "engineering": {
+    "genes": 16384,
+    "n_case": 100,
+    "n_control": 100,
+    "seeds": {"complete_null": 2026092501, "mixed": 2026092502},
+    "permutation_seed": 2026092530,
+    "generator": "Independent Gamma biological abundances with gene-specific CV-squared 0.2 to 1.0; independent lognormal exposures with log-SD 0.35, geometric mean one; Poisson counts. Background means log-uniform 0.05 to 1000. First 64 genes are known unchanged, abundant controls. One all-zero row checks exclusion.",
+    "mixed_profiles": ["bulk_up_2x", "bulk_down_half", "subset_up_10pct_8x", "subset_down_10pct_eighth", "bulk_half_subset_up_10pct_4x", "bulk_2x_subset_down_10pct_quarter", "same_mean_wider", "singleton_up_16x"],
+    "profile_means": [5, 100],
+    "membership": "Subset membership is drawn independently of baseline abundance, saved, and never inferred from a maximum walk. Singleton is a failure-boundary sentinel.",
+    "truth": "Unchanged generating distributions define the gene null; finite-cohort latent abundances define realized area and mean-ratio estimation targets. One dataset per panel cannot estimate FDR reliably.",
+    "endpoints": ["raw TP FP TN FN and sensitivity/specificity", "gene FDP and gene-direction FDP", "filtered true alternatives", "wrong-direction calls in ordered bulk changes", "linear directional area error versus finite-cohort latent truth", "mean log2-ratio error without a hidden pseudocount", "reference factor error", "actual permutation usage and attainable p-value floor"]
+  },
+  "next_gate": "Audit these instruments, then freeze the replicated benchmark grid and fresh confirmation seeds before inspecting confirmation outcomes. Compare native DESeq2/edgeR and point representations on matched input matrices; patient-level OUTRIDER questions remain separate. PLAN.md defines the publication work and acceptance policy."
+}

@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "numerical_amendment": "The first execution stopped at N=100 million when the 5e-11 CDF check could not reach tolerance (estimated error 1.62e-9). Use 1e-7 with a separate 5e-9 check; record both errors and probability near coverage thresholds. This changes numerical tolerances only, not candidates, data, endpoints or decision gates. Preserve the incomplete first artifact.",
+  "study": "mode_preserving_constructions",
+  "purpose": "Separate existence of a coherent mode-preserving kernel from measurement calibration. No production selection or cohort testing.",
+  "observations": "Complete, disjoint integer count categories; C and N=sum(C) are immutable. Supplied normalization s maps a fraction to N*p/s, or a resampled count to Z/s. Known exposures isolate counting uncertainty.",
+  "constructions": {
+    "multinomial_bootstrap": "q=(C+w)/(N+1), with fixed positive weights summing to one; Z~Multinomial(N,q). Marginal Binomial(N,q_g) has unique mode C_g. This is smoothed resampling, not the integrated Dirichlet posterior predictive or a posterior for latent abundance.",
+    "continuous_contraction": "m=C/N; Q~Dirichlet(C+alpha); independent shared U~Uniform(0,1); P=m+U*(Q-m). Marginal densities increase up to m and decrease afterwards; draws and means conserve composition. The post-processing is not itself justified by Bayes' rule. Evaluate total prior budgets 1 and G as explicit diagnostic contrasts, not a tuning search."
+  },
+  "comparators": "The uncontracted Dirichlet marginals under each of the two prespecified prior budgets isolate the effect of uniform contraction. They retain their previously established failure to preserve individual physical modes.",
+  "examples": [[0, 2, 8], [1, 2, 7], [2, 8], [0, 0, 0, 1], [0, 1, 2, 7]],
+  "depths": [1000, 10000, 100000, 1000000, 10000000, 100000000],
+  "gene_universes": [3, 16384],
+  "observed_counts": [0, 1, 10, 100],
+  "expected_counts": [0, 0.01, 0.1, 1, 10, 100],
+  "units": 1000000,
+  "support_tail_probability": 1e-11,
+  "cdf_tolerance": 1e-7,
+  "seed": 2026092417,
+  "joint_draws": 50000,
+  "checks": [
+    "Prove and check actual marginal modes, positive zero variance, count immutability, normalization, conserved sums and independent joint-sampling moments.",
+    "Audit the zero budget of the ENTIRE mode-preserving multinomial family, not just the uniform allocation.",
+    "Compute exact repeated-binomial central/upper interval coverage, mean bias/RMSE and kernel-mixture variance. Quantiles of a bootstrap distribution are diagnostic percentile intervals, not claimed exact confidence or predictive intervals.",
+    "Compute continuous coverage through an independent CDF integral with reported quadrature error; repeat at tighter tolerance and bound ambiguity at interval edges.",
+    "Derive high-information calibration analytically before interpreting simulations: uniform contraction of a Gaussian error has variance one third and a different 95% quantile.",
+    "Show that the uniform allocation is sensitive to the declared gene universe. Do not optimize the prior after observing outcomes."
+  ],
+  "decision_gate": "Structural success is necessary but insufficient. Reject any construction as a ready measurement model if uncertainty effectively collapses at zero, high-information nominal 95% intervals systematically undercover, or prior-dominated shifts remain. No new significance test, FDR certification, technical-overdispersion claim, or package behavior. The continuous example can establish feasibility even when it fails calibration."
+}

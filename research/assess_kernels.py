@@ -22,8 +22,9 @@ from scipy.stats import binomtest
 
 from wade_research import BetaKernelArea, label_coefficients, point_scores, permutation_bank
 from wade_research.assessment import (
-    beta_distribution, describe, group_w1, log2_ratio, membership_metrics, points,
+    average_precision, beta_distribution, describe, group_w1, log2_ratio, membership_metrics, points,
 )
+from wade_research.localization import localize
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -94,7 +95,7 @@ def freeze(cfg, protocol, out):
 def transcriptome_replay(cfg, out):
     source = ROOT/cfg['source']
     registry = json.loads((source/'registry.json').read_text())
-    rows, coverage, normalization = [], [], []
+    rows, coverage, normalization, locations = [], [], [], []
     legacy = {'point': 'point', 'beta_h1_mean': 'uniform_mean',
               'beta_h1_kernel': 'uniform', 'beta_h0.5_mean': 'jeffreys_mean',
               'beta_h0.5_kernel': 'jeffreys'}
@@ -151,6 +152,9 @@ def transcriptome_replay(cfg, out):
                                  group_w1_scaled=0., patient_rmse_scaled=0.,
                                  mean_log2_error=0., area_error_scaled=0.,
                                  tail_fold_error=latent['tail_vs_control_log2']-affected_log2))
+                if cfg.get('localization'):
+                    locations.append(localization_record(points(y), labels[0], target, points(y),
+                        scale, dict(**common, method='latent'), None))
                 representations = [('point', points(counts[gi]/aligned_factors), None)]
                 kernel_engines = {}
                 for h in (1., .5):
@@ -213,10 +217,34 @@ def transcriptome_replay(cfg, out):
                                     patients=int(mask.sum()), covered=int(covered[mask].sum()),
                                     mean_width_scaled=float(np.mean(ci[mask, 1]-ci[mask, 0])/scale)))
                     rows.append(record)
+                    if cfg.get('localization'):
+                        locations.append(localization_record(distribution, labels[0], target, points(y),
+                            scale, dict(**common, method=method, called=record['called'], pvalue=record['pvalue']), coarse))
             pd.DataFrame(rows).to_csv(out/'profiles.tsv', sep='\t', index=False)
+            if locations:
+                pd.DataFrame(locations).to_csv(out/'localization.tsv', sep='\t', index=False)
             print(f"Truth recovery: {base['id']} {scenario}, {len(rows)} rows", flush=True)
     pd.DataFrame(coverage).to_csv(out/'coverage.tsv', sep='\t', index=False)
     pd.DataFrame(normalization).to_csv(out/'normalization.tsv', sep='\t', index=False)
+
+
+def localization_record(distribution, labels, target, truth, scale, common, coarse):
+    """Two descriptive targets: area attribution and excess control-relative tail."""
+    result, latent = localize(distribution, labels), localize(truth, labels)
+    total = result.contributions.sum()
+    row = dict(**common, **result.summary,
+        **membership_metrics(target, result.membership, result.contributions),
+        membership_average_precision=average_precision(target, result.membership),
+        area_fraction_from_planted=float(result.contributions[target].sum()/total) if total else np.nan,
+        contribution_rmse_scaled=float(np.sqrt(np.mean((result.contributions-latent.contributions)**2))/scale),
+        effective_fraction_error=result.summary['effective_contributor_fraction']-latent.summary['effective_contributor_fraction'],
+        tail_fold_error=result.summary['tail_vs_control_log2']-common['true_affected_vs_control_log2'])
+    if coarse is not None:
+        lower = localize(coarse, labels)
+        row.update(node_doubling_case_tail_change=result.summary['case_tail_mass']-lower.summary['case_tail_mass'],
+                   node_doubling_effective_fraction_change=result.summary['effective_contributor_fraction']-lower.summary['effective_contributor_fraction'],
+                   node_doubling_membership_max_change=float(np.max(abs(result.membership-lower.membership))))
+    return row
 
 
 def failure_replay(cfg, out):

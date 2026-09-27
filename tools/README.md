@@ -1,7 +1,7 @@
 # Operational tools
 
 This directory contains package, notebook, data-input and release helpers.
-Kernel development lives in [research/](../research/README.md); completed study
+Candidate point validation and deferred kernel work live in [research/](../research/README.md); completed study
 runners and superseded benchmarks are in the [development archive](../archive/development-20260923/README.md).
 No current helper imports an archived prototype.
 
@@ -17,7 +17,7 @@ No current helper imports an archived prototype.
 Use the [notebook guide](../docs/notebook-builds.md) for actual build commands
 and required data/configuration. Comparison refreshes reuse native outputs only
 when their inputs and settings match. Production replay targets the frozen
-point-method evidence; it does not validate a future kernel procedure.
+point-method evidence; it does not validate changed directions or scales.
 
 Notebook builds use isolated snapshots and verified computation caches. An
 inference change requires fresh results; revised figures or prose require review.

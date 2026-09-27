@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "study": "mode_contract",
+  "purpose": "Check the user's exact marginal-mode requirement before adopting a coherent whole-library prior or running performance benchmarks.",
+  "observations": "Raw integer C and total N are immutable. Posterior means, modes and shape parameters are separate inferred quantities. Normalized abundance is (N/s)*p with supplied positive s.",
+  "requirements": [
+    "Each patient kernel integrates to one and has positive variance after zero observations.",
+    "Each kernel has a unique mode at C/N in fraction space, equivalently C in raw expected-count units or C/s in linear normalized units.",
+    "A coherent joint composition has fractions summing to one; therefore its marginal means must also sum to one.",
+    "Preserving a joint mode or the sum of marginal modes is insufficient if individual marginal modes move."
+  ],
+  "candidate": "Multinomial likelihood with uniform Dirichlet(1,...,1) prior, posterior Dirichlet(C+1). This is the natural joint-mode-preserving conjugate candidate, not a selected default.",
+  "comparators": "Existing independent Beta(C+1,N-C+1) and Beta(C+0.5,N-C+0.5) marginals, with their known coherence limitations; observed counts are never replaced by any mean.",
+  "examples": [[0, 2, 8], [1, 2, 7], [2, 8], [0, 0, 0, 1], [0, 1, 2, 7]],
+  "depths": [1000, 10000, 100000, 1000000, 10000000, 100000000],
+  "gene_universes": [2, 3, 100, 1000, 16384],
+  "units": 1000000,
+  "checks": "Analytic and checked numerical modes/quantiles, marginal versus joint peaks, conserved mean total, positive zero variance, unchanged original data. Reuse the existing checked Beta quantile instrument. Show exact mode-retention factor N/(N+G-2) for the proposed candidate.",
+  "derivation": "For general proper Dirichlet alpha and K positive-count genes, exact interior marginal modes at C/N imply sum(alpha over zero-count genes)=2-K. Thus K>=3 is impossible within this family; K=2 with any zero-count gene also contradicts strictly positive alpha. This is not an impossibility result for all uncertainty models.",
+  "coordinate": "The mode requirement is defined on the physical fraction/linear abundance axis. A log-density mode need not be its log transform because densities acquire a Jacobian; a log display must not recenter the kernel.",
+  "decision": "If the candidate fails individual mode preservation, reject it at this design gate. Preserve the user's requirement and do not silently substitute joint MAP, tune a prior, inject reads, force a mode metadata field, or run unnecessary full-cohort tests. No new production behavior."
+}
