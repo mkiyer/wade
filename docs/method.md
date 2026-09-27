@@ -88,8 +88,10 @@ gene and direction actually uses, so strongly changed genes dominate runtime.
 
 ## Limits
 
-Within one gene, k cases above every control can reach at best
-p = C(n₁, k) / C(n₁ + n₀, k), whatever their amplitude. Borrowing information
+Within one gene, k cases above every control carry evidence worth
+C(n₁, k) / C(n₁ + n₀, k), the chance that a random relabelling places all of
+them among the cases; when the other cases are no higher than the controls, the
+upward p-value stays near or above it, whatever their amplitude. Borrowing information
 across genes to judge how unusual an amplitude is would need a model of
 transcriptome-wide variation; this release does not attempt it. Batch or depth
 confounded with the groups breaks exchangeability, which neither normalization

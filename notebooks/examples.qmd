@@ -132,9 +132,11 @@ for gene in ["ERG","ETV1","ETV4","FLI1"]:
 table(pl.DataFrame(rows),"fusion-coverage")
 ```
 
-With 52 normals, how far can a subset go? If k tumours lie above every
-normal, no within-gene permutation test can give an upward p-value below
-C(445, k) / C(497, k), however high those tumours are.
+With 52 normals, how far can a subset go? A random relabelling puts k given
+tumours all among the cases with probability C(445, k) / C(497, k). When the
+other tumours are no higher than the normals, as for ETV1 and ETV4, the upward
+p-value stays near or above that value however high those k tumours are; ERG
+and SPINK1 go below it because their other tumours are raised too.
 
 ```{python}
 #| label: subset-floor

@@ -122,67 +122,65 @@ class Cohort:
 
 
 def load_cohort(cancer, out, config_path=None):
+    """Read an rna100k cohort bundle, join the frozen TCGA annotations, fix the design.
+
+    The configuration names one bundle per cancer (written by `rna100k extract`)
+    and the annotation snapshot from tools/fetch_tcga_annotations.py; relative
+    paths resolve against the configuration's folder.
+    """
     config_path = config_path or os.environ.get("WADE_TCGA_CONFIG")
     if not config_path:
         raise ValueError("Set WADE_TCGA_CONFIG; see docs/tcga-examples.md")
     config_path = Path(config_path).resolve()
     config = json.loads(config_path.read_text())
-    def path(key):
-        value = Path(config[key]).expanduser()
+    def path(value):
+        value = Path(value).expanduser()
         return value if value.is_absolute() else (config_path.parent / value).resolve()
-    counts_path, genes_path, meta_path = (path(k) for k in ("counts", "genes", "samples"))
-    scan = pl.scan_ipc(counts_path)
-    libraries = set(scan.collect_schema().names())
-    samples = pl.read_parquet(meta_path)
+    bundle = path(config["bundles"][cancer])
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    for name, digest in manifest["files"].items():
+        if sha256(bundle / name) != digest:
+            raise ValueError(f"Bundle file changed since extraction: {name}")
+    samples, genes = pl.read_parquet(bundle / "samples.parquet"), pl.read_parquet(bundle / "genes.parquet")
     required = ["library", "sample", "patient", "study", "tissue_of_origin", "sample_class",
                 "library_protocol", "preservation", "oncotree_code"]
-    samples = samples.select(required).filter((pl.col("study") == "TCGA") &
-        (pl.col("tissue_of_origin") == {"prostate": "Prostate", "breast": "Breast"}[cancer]))
-    if samples["library"].n_unique() != samples.height:
-        raise ValueError("Duplicate library metadata")
-    samples = samples.with_columns(in_counts=pl.col("library").is_in(sorted(libraries)))
-    export_table(samples, out, "input-library-inventory")
-    eligible = samples.filter(pl.col("in_counts") &
-        pl.col("sample_class").is_in(["tumor", "normal_adjacent"]))
+    tissue = {"prostate": "Prostate", "breast": "Breast"}[cancer]
+    export_table(samples.select(required), out, "input-library-inventory")
+    eligible = samples.select(required).filter((pl.col("study") == "TCGA") & (pl.col("tissue_of_origin") == tissue)
+                                               & pl.col("sample_class").is_in(["tumor", "normal_adjacent"]))
     for column in ("library", "sample", "patient"):
         if eligible[column].null_count():
             raise ValueError(f"Missing {column} in eligible samples")
-    eligible = eligible.with_columns(
+    meta = eligible.with_columns(
         group=pl.when(pl.col("sample_class") == "tumor").then(pl.lit("tumor")).otherwise(pl.lit("normal")),
         tcga_sample=pl.col("sample").str.slice(0, 15))
-    if eligible.filter(pl.col("sample").str.slice(0, 12) != pl.col("patient")).height:
+    if meta.filter(pl.col("sample").str.slice(0, 12) != pl.col("patient")).height:
         raise ValueError("Local sample/patient IDs disagree")
-    eligible = eligible.sort("group", "patient", "sample", "library", descending=[True, False, False, False])
-    meta = eligible.unique(subset=["patient", "group"], keep="first", maintain_order=True)
-    rejected = eligible.filter(~pl.col("library").is_in(meta["library"].to_list()))
-    export_table(rejected, out, "duplicate-libraries-excluded")
-    meta, sources = annotations(meta, cancer, path("annotations"))
+    if meta.select("patient", "group").is_duplicated().any():
+        raise ValueError("The bundle must hold one library per patient and sample class")
+    export_table(pl.read_parquet(bundle / "excluded.parquet"), out, "duplicate-libraries-excluded")
+    meta, sources = annotations(meta, cancer, path(config["annotations"]))
     if cancer == "breast":
         # Freeze the target population before fitting: female primary tumours
         # and their normal-adjacent references. Report all excluded records.
         export_table(meta.filter(pl.col("annotated_sex") != "Female"), out, "sex-eligibility-exclusions")
         meta = meta.filter(pl.col("annotated_sex") == "Female")
     independent, paired = independent_indices(meta)
-    genes = (pl.read_excel(genes_path) if genes_path.suffix == ".xlsx" else
-             pl.read_csv(genes_path, separator="\t"))
-    for column in ("gene_id", "gene_name"):
-        if genes[column].null_count() or genes[column].n_unique() != genes.height:
-            raise ValueError(f"Gene annotation requires unique nonmissing {column}")
-    counts = scan.select(meta["library"].to_list()).collect().to_numpy().astype(np.float64)
-    if counts.shape != (genes.height, meta.height):
-        raise ValueError("Count rows and gene-annotation rows differ")
-    if not np.isfinite(counts).all() or np.any(counts < 0) or np.any(counts != np.floor(counts)):
-        raise ValueError("Examples require finite nonnegative integer gene counts")
+    frame = pl.read_ipc(bundle / "counts.feather", memory_map=False)
+    if not frame["gene_id"].equals(genes["gene_id"]):
+        raise ValueError("Bundle counts and genes.parquet rows differ")
+    counts = frame.select(meta["library"].to_list()).to_numpy().astype(np.float64)
     lib_sizes = counts.sum(axis=0)
     if np.any(lib_sizes <= 0):
         raise ValueError("Empty gene-count library")
+    names = genes["label"].to_numpy()
     fitting_cohorts = {"primary": independent, "paired": paired,
                        "descriptive": np.arange(meta.height)}
     if cancer == "breast":
         fitting_cohorts["subtypes"] = np.flatnonzero(
             ((meta["group"] == "tumor") & meta["subtype"].is_in(SUBTYPES)).to_numpy())
     normalizations = {name: wade.fit_normalization(counts[:, idx], method="rle",
-        gene_names=genes["gene_name"].to_numpy(), sample_names=meta["library"].to_numpy()[idx])
+        gene_names=names, sample_names=meta["library"].to_numpy()[idx])
         for name, idx in fitting_cohorts.items()}
     normalization = normalizations["descriptive"]
     cpm = counts / lib_sizes * 1e6
@@ -195,25 +193,16 @@ def load_cohort(cancer, out, config_path=None):
     export_table(meta, out, "samples")
     provenance = dict(assay="gene counts", normalizations={k: v.to_dict() for k, v in normalizations.items()},
         normalization_cohort="sample eligibility first within each analysis family, then full genes; nested contrasts reuse exposures",
-        jitter="disabled",
         filter="raw counts >= 10 in >= 5 pooled samples and pooled mean CPM >= 0.1",
         breast_target="female primary tumour and normal-adjacent" if cancer == "breast" else None,
-        gene_annotation_sha256=sha256(genes_path), metadata_sha256=sha256(meta_path),
-        count_slice_sha256=array_hash(counts), gene_order_sha256=array_hash(genes["gene_id"].to_numpy()),
-        sample_order_sha256=array_hash(meta["library"].to_numpy()),
-        matrix_file=dict(name=counts_path.name, size=counts_path.stat().st_size,
-                         mtime_ns=counts_path.stat().st_mtime_ns),
+        bundle=dict(path=str(bundle), release=manifest["release"]["name"], query=manifest["query"],
+                    files=manifest["files"], rna100k_version=manifest["rna100k_version"]),
+        count_slice_sha256=array_hash(counts), sample_order_sha256=array_hash(meta["library"].to_numpy()),
         annotation_sources=sources, config_sha256=sha256(config_path),
-        processing_reference=config.get("processing_reference", "Not supplied; release documentation pending"),
         source_fingerprint=os.environ.get("WADE_SOURCE_FINGERPRINT"),
         genes_supplied=genes.height, genes_tested=int(keep.sum()), samples=meta.height)
     (Path(out) / "inputs.json").write_text(json.dumps(provenance, indent=2) + "\n")
-    np.savez_compressed(Path(out) / "selected-gene-counts.npz", counts=counts.astype(np.int64),
-        gene_id=genes["gene_id"].to_numpy().astype(str),
-        gene_name=genes["gene_name"].to_numpy().astype(str),
-        sample_names=meta["library"].to_numpy().astype(str), lib_sizes=lib_sizes, keep=keep)
-    # Hash selected count values rather than reading the ~10-GB whole-cohort
-    # file solely for hashing. Gene order is an explicit upstream assumption.
+    genes = genes.with_columns(gene_name=pl.col("label"))    # unique names for WADE and plots
     return Cohort(cancer, counts, genes, meta, normalization, normalizations,
                   independent, paired, provenance, keep)
 
@@ -279,14 +268,14 @@ def log2_expression(result, gene):
 
 
 def subset_floor(result, genes):
-    """Cases above every control, and the smallest upward p-value that count permits."""
+    """Cases above every control, and the upward p-value a pure subset of that size gives."""
     from math import comb
     n1, n0 = int(result.cond.sum()), int((result.cond == 0).sum())
     rows = []
     for gene in (g for g in genes if g in result.gene):
         k = len(result.drivers(gene, "up"))
         rows.append(dict(gene=gene, cases_above_every_control=k,
-                         best_attainable_p=comb(n1, k) / comb(n1 + n0, k),
+                         pure_subset_p=comb(n1, k) / comb(n1 + n0, k),
                          pvalue_up=float(result.pvalue_up[result.gene_index(gene)])))
     return pl.DataFrame(rows)
 

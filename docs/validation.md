@@ -102,8 +102,10 @@ proportions above are the calibration evidence.
 
 ## How many controls
 
-If k cases lie above every control, no within-gene permutation test can give
-an upward p-value below C(n_case, k) / C(n_case + n_control, k):
+A random relabelling puts k given samples all among the cases with
+probability C(n_case, k) / C(n_case + n_control, k). For a pure subset (k cases
+above every control, the other cases no higher than the controls) the upward
+p-value stays near or above this value:
 
 | Cases : controls | k = 18 | k = 36 | k needed for p ≤ 2.5 × 10⁻⁶ |
 | --- | ---: | ---: | ---: |
@@ -112,8 +114,10 @@ an upward p-value below C(n_case, k) / C(n_case + n_control, k):
 | 445 : 52 (TCGA prostate) | 0.13 | 0.016 | 104 (23%) |
 | 971 : 112 (TCGA breast) | 0.14 | 0.018 | 112 (12%) |
 
-This is exact arithmetic, not a simulation. In TCGA prostate, 18 ETV4-high
-tumours cannot reach p < 0.13 against 52 normals by any within-gene test.
+The values are exact arithmetic. In the TCGA prostate example, 22 tumours lie
+above every normal for ETV4 (value 0.083) and its upward p-value is 0.15. ERG,
+whose other tumours are raised too, reaches 10⁻⁶, although its 76 tumours above
+every normal would alone give 1.1 × 10⁻⁴.
 
 ## Comparison with DESeq2 and edgeR
 

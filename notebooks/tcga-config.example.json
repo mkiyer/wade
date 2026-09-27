@@ -1,7 +1,7 @@
 {
-  "counts": "/path/to/cohort_gene_counts.feather",
-  "genes": "/path/to/cohort_genes.xlsx",
-  "samples": "/path/to/harmonized_samples.parquet",
-  "annotations": "/path/to/frozen-tcga-annotations",
-  "processing_reference": "Specify the counting workflow, reference annotation and row-order manifest."
+  "bundles": {
+    "prostate": "/path/to/prostate-tcga-gtex",
+    "breast": "/path/to/breast-tcga-gtex"
+  },
+  "annotations": "/path/to/frozen-tcga-annotations"
 }

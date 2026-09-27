@@ -7,25 +7,28 @@ the author's approval before release.
 
 ## Inputs and provenance
 
-Copy [the configuration template](../notebooks/tcga-config.example.json)
-to a local location, fill in paths, and set `WADE_TCGA_CONFIG` to that JSON.
-Relative paths resolve against the configuration's directory. Large data
-and local paths stay outside tracked source.
+The counts and sample metadata come from the RNA100K compendium (release
+`rna100k_2026-01-28`: STAR gene counts for 62,846 GENCODE genes, uniformly
+processed by the lab's `mibulkrnaseq` pipeline, with metadata harmonized by
+`rnaseq-metadata-harmonize`). The lab's `rna100k` package
+extracts one cohort bundle per cancer: TCGA primary tumours and normal-adjacent
+tissue plus GTEx normal tissue, one library per patient and sample class.
 
-- `counts`: Arrow IPC/Feather, genes in rows and library IDs as columns;
-  finite, nonnegative integer gene counts. Only the selected TCGA columns
-  are loaded. These are raw counts, not precomputed TPM/log expression.
-- `genes`: an Excel table or tab-delimited table with unique `gene_id` and
-  unique nonmissing `gene_name`, in exactly the count matrix's row order.
-  Other gene annotations are retained in the filtering export.
-- `samples`: Parquet with `library`, `sample`, `patient`, `study`,
-  `tissue_of_origin`, `sample_class`, `library_protocol`, `preservation`,
-  and `oncotree_code`. Study is `TCGA`; tissue is `Prostate` or `Breast`;
-  sample classes are `tumor` and `normal_adjacent`.
-- `annotations`: a frozen directory from the downloader below.
-- `processing_reference`: document the count-producing workflow/version,
-  reference genome and gene annotation, counting/assignment conventions,
-  upstream gene exclusions, and the matrix/annotation row-order contract.
+```sh
+rna100k extract cohorts/prostate-tcga-gtex --one-per patient_uid,sample_class \
+  --where "tissue_of_origin = 'Prostate' AND specimen_class = 'in_vivo' AND ((study = 'TCGA'
+           AND sample_class IN ('tumor', 'normal_adjacent')) OR (study = 'gtex' AND sample_class = 'control'))"
+```
+
+(and the same with `'Breast'`). Each bundle records the release, the query and
+checksums of its files; the loader verifies them. Gene rows are joined by
+GENCODE ID, and the bundle's unique `label` (the symbol, or `symbol|gene_id`
+where symbols repeat) names genes in WADE. The primary examples use the TCGA
+libraries only; the GTEx normals are there for sensitivity analyses.
+
+The configuration (copy [the template](../notebooks/tcga-config.example.json)
+and set `WADE_TCGA_CONFIG`) names the two bundles and the annotation snapshot;
+relative paths resolve against its folder.
 
 ```sh
 python tools/fetch_tcga_annotations.py /path/to/frozen-tcga-annotations
@@ -48,16 +51,10 @@ and [breast TCGA clinical](https://www.cbioportal.org/study/summary?id=brca_tcga
 The PanCancer GISTIC profile supplies the discrete ERBB2 copy-number value;
 `2` denotes its high-level amplification category, not an absolute copy count.
 
-The local matrices are previously harmonized TCGA data, not a newly
-downloaded GDC count release. The exact upstream processing manifest has
-been requested and remains a release documentation requirement. Matching
-row counts cannot establish row identity in an unlabeled matrix. Candidate
-outputs therefore record that row-order assumption, plus hashes of the
-selected count values, gene order, sample order and annotation inputs.
-An exported NPZ contains all selected raw counts and labels, allowing the
-numerical input to be preserved without hashing or copying unrelated cohorts.
-An independently downloaded TCGA count release should not be advertised as
-numerically identical to these harmonized inputs.
+These counts come from the lab's own processing of the TCGA reads, not a
+GDC count release, and should not be described as numerically identical to one.
+The pipeline version, genome and annotation build belong in the release notes
+of the compendium.
 
 ## Fixed preprocessing and primary populations
 
@@ -104,8 +101,8 @@ are not part of the migrated example; they are preserved as historical work.
 
 | Cohort | Unique eligible tumours / normals | Independent primary | Tested genes |
 |---|---:|---:|---:|
-| Prostate | 497 / 52 | 445 / 52 | 20,517 |
-| Female breast | 1,083 / 112 | 971 / 112 | 21,431 |
+| Prostate | 497 / 52 | 445 / 52 | 24,246 |
+| Female breast | 1,083 / 112 | 971 / 112 | 25,328 |
 
 These are design counts, not approved results.
 
@@ -137,7 +134,7 @@ disease.
 `bulk_shift` is a log2 median difference. `upper_tail` and `lower_tail` are
 decile-mean differences minus that shift, so a lowered bulk and a raised
 upper tail can coexist. `padj_up` tests the upward area; it does not infer an
-affected fraction or an individual's rarity. With 52 prostate normals, k
-tumours above every normal cannot reach an upward p-value below
-C(445, k) / C(497, k); the prostate notebook reports that floor for its
+affected fraction or an individual's rarity. With 52 prostate normals, a
+pure subset of k tumours above every normal gives an upward p-value near or
+above C(445, k) / C(497, k); the prostate notebook reports this value for its
 fusion markers.

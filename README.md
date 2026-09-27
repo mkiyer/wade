@@ -58,17 +58,20 @@ lists the cases above every control. Descriptions carry no p-values.
 
 ## What limits discovery: the controls
 
-Within one gene, no permutation test can be surer than the control cohort
-allows. If k cases lie above every control, the smallest possible p-value is
-C(n_case, k) / C(n_case + n_control, k), whatever the fold change:
+A random relabelling puts k given samples all among the cases with
+probability C(n_case, k) / C(n_case + n_control, k). So when k cases lie above
+every control and the other cases are no higher than the controls (a pure
+subset, like ETV1 or ETV4 in prostate cancer), the upward p-value stays near or
+above that value, whatever the fold change:
 
 | Cases : controls | 18 cases above all controls | 36 cases above all controls |
 | --- | ---: | ---: |
 | 445 : 52 (TCGA prostate) | 0.13 | 0.016 |
 | 250 : 250 | 2.8 × 10⁻⁶ | 3.7 × 10⁻¹² |
 
-Subset discovery needs enough controls. The [manual](docs/manual.md#how-many-controls)
-gives the arithmetic for your design.
+Other cases that are also raised add evidence beyond it. Subset discovery
+needs enough controls; the [manual](docs/manual.md#how-many-controls) gives the
+arithmetic for your design.
 
 ## Evidence
 

@@ -124,13 +124,15 @@ change memory and speed, never the answer.
 
 ## How many controls
 
-Within one gene, the evidence for a raised subset cannot exceed what the
-controls allow. If k cases lie above every control, the smallest attainable
-p-value is
+Within one gene, the controls limit the evidence for a raised subset. A
+random relabelling puts k given samples all among the cases with probability
 
     C(n_case, k) / C(n_case + n_control, k)
 
-however large the fold change. Cases needed above every control to reach a
+When k cases lie above every control and the other cases are no higher than
+the controls (a pure subset), the upward p-value stays near or above this
+value, however large the fold change; other cases that are also raised add
+evidence beyond it. Cases a pure subset needs above every control to reach a
 given p-value:
 
 | Cases : controls | p ≤ 10⁻² | p ≤ 10⁻⁴ | p ≤ 2.5 × 10⁻⁶ |
@@ -188,5 +190,5 @@ size-factor medians and every stopping record.
   explains. It does not say which patients are outliers, that a subset is
   clinically separable, or how prevalent it is.
 - Very low counts carry little information on either scale; filter them.
-- The within-gene floor above cannot be beaten without borrowing information
-  across genes, which this release does not do.
+- A pure subset cannot beat the within-gene bound above without borrowing
+  information across genes, which this release does not do.
