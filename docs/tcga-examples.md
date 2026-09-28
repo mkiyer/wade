@@ -8,8 +8,9 @@ the author's approval before release.
 ## Inputs and provenance
 
 The counts and sample metadata come from the RNA100K compendium (release
-`rna100k_2026-01-28`: STAR gene counts for 62,846 GENCODE genes, uniformly
-processed by the lab's `mibulkrnaseq` pipeline, with metadata harmonized by
+`rna100k_2026-01-28`: STAR gene counts for the 62,754 genes of GENCODE v44,
+GRCh38 primary assembly, plus 92 ERCC spike-ins, uniformly processed by the
+lab's `mibulkrnaseq` pipeline, with metadata harmonized by
 `rnaseq-metadata-harmonize`). The lab's `rna100k` package
 extracts one cohort bundle per cancer: TCGA primary tumours and normal-adjacent
 tissue plus GTEx normal tissue, one library per patient and sample class.
@@ -22,7 +23,7 @@ rna100k extract cohorts/prostate-tcga-gtex --one-per patient_uid,sample_class \
 
 (and the same with `'Breast'`). Each bundle records the release, the query and
 checksums of its files; the loader verifies them. Gene rows are joined by
-GENCODE ID, and the bundle's unique `label` (the symbol, or `symbol|gene_id`
+GENCODE v44 ID, and the bundle's unique `label` (the symbol, or `symbol|gene_id`
 where symbols repeat) names genes in WADE. The primary examples use the TCGA
 libraries only; the GTEx normals are there for sensitivity analyses.
 
@@ -53,8 +54,9 @@ The PanCancer GISTIC profile supplies the discrete ERBB2 copy-number value;
 
 These counts come from the lab's own processing of the TCGA reads, not a
 GDC count release, and should not be described as numerically identical to one.
-The pipeline version, genome and annotation build belong in the release notes
-of the compendium.
+Reads were aligned with STAR to the GRCh38 primary assembly and counted
+against GENCODE v44; each bundle's manifest records the annotation version read
+from the GTF itself.
 
 ## Fixed preprocessing and primary populations
 
