@@ -191,17 +191,119 @@ def test_scale_sets_the_tested_expression_and_descriptions_stay_log2(scale):
     np.testing.assert_array_equal(result.expression, expected)
     np.testing.assert_allclose(np.c_[result.area_up, result.area_down], AreaState(expected, cond).observed)
     other = wade.wade(x, cond, scale="log" if scale == "linear" else "linear", max_permutations=19)
-    np.testing.assert_allclose(result.bulk_shift, other.bulk_shift, rtol=1e-12)
-    np.testing.assert_allclose(result.upper_tail, other.upper_tail, rtol=1e-12, atol=1e-12)
+    for column in ("bulk_shift", "subset_up_fraction", "subset_up_log2fc", "subset_down_fraction",
+                   "subset_down_log2fc"):
+        np.testing.assert_allclose(getattr(result, column), getattr(other, column), rtol=1e-12, equal_nan=True)
 
 
-def test_opposing_tails_do_not_cancel_and_description_has_no_significance():
+def test_opposing_subsets_do_not_cancel_and_are_both_learned():
     from wade._descriptions import describe
     x = np.array([[0, 0, 4, 4, 2, 2, 2, 2]], float)
     cond = np.array([1]*4+[0]*4)
     np.testing.assert_array_equal(AreaState(x, cond).observed, [[1, 1]])
-    bulk, upper, lower = describe(x, cond)
-    np.testing.assert_allclose([bulk[0], upper[0], lower[0]], [0, 2, -2])
+    np.testing.assert_allclose(np.ravel(describe(x, cond)), [0, .5, 2, .5, -2])
+
+
+def brute_walk(x, cond):
+    """Every cut between distinct values, in plain Python; ties go to the stringent side."""
+    n, n1 = len(x), int(sum(cond))
+    n0 = n - n1
+    best_up = best_down = (0.0, None)
+    for cut in sorted(set(x)):
+        if cut == max(x):
+            continue
+        above = [i for i in range(n) if x[i] > cut]
+        k = len(above)
+        excess = sum(cond[i] for i in above) / n1 - sum(1 - cond[i] for i in above) / n0
+        z = excess / np.sqrt(k * (n - k) / (n1 * n0 * (n - 1)))
+        if z > best_up[0] or (z == best_up[0] and best_up[1] is not None):      # highest cut wins ties
+            best_up = (z, cut) if z > 0 else best_up
+        if z < best_down[0]:                                                   # lowest cut wins ties
+            best_down = (z, cut)
+    up = [x[i] for i in range(n) if cond[i] and best_up[1] is not None and x[i] > best_up[1]]
+    down = [x[i] for i in range(n) if cond[i] and best_down[1] is not None and x[i] <= best_down[1]]
+    # A subset must sit on its own side of the control median.
+    middle = np.median([x[i] for i in range(n) if not cond[i]])
+    return (len(up) if up and np.median(up) > middle else 0,
+            len(down) if down and np.median(down) < middle else 0)
+
+
+def test_walk_matches_brute_force_on_tied_data():
+    from wade._descriptions import subsets
+    rng = np.random.default_rng(12)
+    for n1, n0 in ((3, 4), (7, 5), (20, 31)):
+        cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
+        x = rng.integers(0, 6, (60, n1 + n0)).astype(float)
+        x[:5, :n1] += 4                                 # some genes with a raised case subset
+        _, up, _, _, down, _, _ = subsets(x, cond)
+        for row, u, d in zip(x, up, down):
+            assert (u, d) == brute_walk(row.tolist(), cond.tolist())
+
+
+def test_learned_subsets_on_analytic_patterns():
+    base = np.arange(1, 101) / 100
+    patterns = {"spike": (np.r_[np.repeat(base, 9), np.full(100, 10.)], np.repeat(base, 10), 100, 0),
+                "lowered bulk, raised subset": (np.r_[np.full(90, .5), np.full(10, 4.)], np.ones(100), 10, 90),
+                "identical": (np.arange(1, 101.), np.arange(1, 101.), 0, 0)}
+    for name, (case, control, n_up, n_down) in patterns.items():
+        counts = np.r_[case, control][None] * 100
+        names = [f"s{i}" for i in range(counts.shape[1])]
+        unit = wade.Normalization.from_size_factors(wade.as_counts(counts, sample_names=names),
+                                                    dict.fromkeys(names, 1.0), source="test")
+        cond = np.r_[np.ones(len(case), int), np.zeros(len(control), int)]
+        for scale in ("linear", "log"):
+            r = wade.wade(counts, cond, normalization=unit, sample_names=names, max_permutations=19, scale=scale)
+            up, down = r.subset(0, "up"), r.subset(0, "down")
+            assert (len(up.samples), len(down.samples)) == (n_up, n_down), (name, scale)
+            assert up.fraction == n_up / len(case) and down.fraction == n_down / len(case)
+    counts = np.r_[np.full(90, 50), np.full(10, 400), np.full(100, 100)][None]
+    names = [f"s{i}" for i in range(200)]
+    unit = wade.Normalization.from_size_factors(wade.as_counts(counts, sample_names=names),
+                                                dict.fromkeys(names, 1.0), source="test")
+    r = wade.wade(counts, np.r_[np.ones(100, int), np.zeros(100, int)], normalization=unit,
+                  sample_names=names, max_permutations=19)
+    up, down = r.subset(0, "up"), r.subset(0, "down")
+    assert (len(up.samples), up.boundary, down.boundary) == (10, 400, 50)
+    assert up.log2fc == pytest.approx(np.log2(401 / 101)) and down.log2fc == pytest.approx(np.log2(51 / 101))
+
+
+def test_mathematically_tied_values_do_not_split_a_subset():
+    counts = np.random.default_rng(4).integers(1, 50, (1, 40))
+    r = wade.wade(counts, [1] * 20 + [0] * 20, normalization="library", max_permutations=19)
+    # A lone gene under library normalization gives every sample the same value, up to rounding.
+    assert r.subset(0, "up").fraction == 0 and len(r.subset(0, "up").samples) == 0
+
+
+def test_table_and_subset_agree_for_every_gene():
+    x = np.random.default_rng(31).poisson(30, (40, 30))
+    x[:6, :4] *= 20
+    x[6:9, 4:15] //= 4
+    cond = np.r_[np.ones(15, int), np.zeros(15, int)]
+    r = wade.wade(x, cond, max_permutations=19)
+    for g in range(40):
+        for d in ("up", "down"):
+            s = r.subset(g, d)
+            assert len(s.samples) == round(getattr(r, f"subset_{d}_fraction")[g] * 15)
+            assert set(s.samples) <= set(r.sample_names[:15])
+        # Above every control z rises with each case, so a boundary never splits those cases
+        # (values within the walk's tie tolerance of the top control are ties, not above it).
+        walked = np.log2(r.expression[g] + 1)
+        beyond = r.sample_names[:15][walked[:15] > walked[15:].max() * (1 + TIE_RTOL)]
+        up = r.subset(g, "up").samples
+        assert len(up) == 0 or set(beyond) <= set(up)
+    assert all(len(r.subset(g, "up").samples) >= 4 for g in range(6))
+    with pytest.raises(ValueError):
+        r.subset(0, "both")
+
+
+def test_a_subset_must_sit_on_its_own_side_of_the_controls():
+    from wade._descriptions import describe
+    # Every case below the controls, except that the single lowest sample is a control.
+    x = np.array([[5, 6, 7, 8, 9, 1, 20, 21, 22, 23]], float)
+    cond = np.array([1] * 5 + [0] * 5)
+    bulk, up_fraction, up_fold, down_fraction, down_fold = (v[0] for v in describe(x, cond))
+    assert up_fraction == 0 and np.isnan(up_fold)
+    assert down_fraction == 1 and down_fold < 0
 
 
 def test_quantile_detail_integrates_to_the_exact_areas_with_unequal_sizes():
@@ -212,17 +314,6 @@ def test_quantile_detail_integrates_to_the_exact_areas_with_unequal_sizes():
     np.testing.assert_allclose([detail.area_up, detail.area_down], AreaState(x[None], cond).observed[0])
     assert detail.area_up + detail.area_down == pytest.approx(wasserstein_distance(x[:4], x[4:]))
     assert detail.area_up - detail.area_down == pytest.approx(x[:4].mean()-x[4:].mean())
-
-
-def test_drivers_are_the_cases_beyond_every_control():
-    x = wade.as_counts(np.array([[5, 90, 40, 1, 7, 8, 9, 10], [0, 3, 1, 9, 4, 5, 6, 7]]), sample_names=list("abcdefgh"))
-    unit = wade.Normalization.from_size_factors(x, dict.fromkeys("abcdefgh", 1.0), source="test")
-    result = wade.wade(x, [1]*4 + [0]*4, normalization=unit, max_permutations=19)
-    np.testing.assert_array_equal(result.drivers(0, "up"), ["b", "c"])
-    np.testing.assert_array_equal(result.drivers(1, "down"), ["a", "c", "b"])
-    np.testing.assert_array_equal(result.drivers(1, "up"), ["d"])
-    with pytest.raises(ValueError):
-        result.drivers(0, "both")
 
 
 @pytest.mark.kernel
@@ -261,3 +352,4 @@ def test_restricted_shuffle_preserves_each_group_and_missing_strata_rejected():
     assert (labels[:, 3:].sum(axis=1) == 1).all()
     with pytest.raises(ValueError, match="missing"):
         wade.draw_perms(cond, 3, strata=["a"]*5+[None])
+

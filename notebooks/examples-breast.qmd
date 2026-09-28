@@ -34,7 +34,7 @@ from notebook_support import output_dir, markdown_table, export_table
 OUT = output_dir("breast")
 cohort = TC.load_cohort("breast", OUT)
 PANEL = TC.BREAST_PANEL
-SHOW = ["gene","status","padj_up","padj_down","bulk_shift","upper_tail","lower_tail"]
+SHOW = ["gene","padj_up","padj_down","bulk_shift","subset_up_fraction","subset_up_log2fc","subset_down_fraction","subset_down_log2fc"]
 def table(frame,name):
     markdown_table(frame,OUT,name)
 ```
@@ -99,8 +99,8 @@ table(TC.panel_table(res,PANEL).select(SHOW),"primary-panel")
 
 ```{python}
 #| label: fig-patterns
-#| fig-cap: "Bulk shift and upper-decile difference beyond it for every tested gene, colored by upward calls."
-TC.plot_bulk_tail(res,["ERBB2","ESR1","PGR","KRT5","MKI67"])
+#| fig-cap: "Each tested gene's learned upward subset: the share of tumours in it against its median fold over the normals, colored by upward calls. Subset markers sit at a small share and a large fold."
+TC.plot_subsets(res,["ERBB2","ESR1","PGR","KRT5","MKI67"])
 ```
 
 ```{python}
@@ -130,6 +130,23 @@ table(primary_meta.filter(pl.col("group")=="tumor").group_by("subtype").len().so
 #| fig-cap: "ERBB2 distributions and quantile effects in the independent primary tumour-versus-normal comparison."
 res.plot_gene("ERBB2")
 ```
+
+The ERBB2 walk learned its upward subset without labels. The PanCancer GISTIC
+calls, which WADE never sees, mark high-level amplification (category 2);
+tumours with any other call count as negatives and missing calls are excluded.
+
+```{python}
+#| label: erbb2-subset
+#| output: asis
+amplified={g:("ERBB2_CNA",2,{-2,-1,0,1}) for g in ["ERBB2","GRB7"]}
+table(TC.annotated_subsets(cohort,res,amplified),"erbb2-subset")
+```
+
+Most tumours express ERBB2 and GRB7 somewhat above the normals, and the
+amplified tumours sit higher still. The walk compares tumours with normals, not
+tumours with each other, so each subset is the broad rise: it holds nearly
+every amplified tumour, and many others too (see the
+[manual](../docs/manual.md#learned-subsets)).
 
 ```{python}
 #| label: fig-subtypes
@@ -187,7 +204,7 @@ export_table(all_contrasts,OUT,"all-subtype-contrasts")
 #| label: subtype-panel
 #| output: asis
 table(all_contrasts.filter(pl.col("gene").is_in(["ERBB2","ESR1","KRT5","MKI67"])).select(
-    "subtype","gene","bulk_shift","upper_tail","q_up_four_contrasts","q_down_four_contrasts"),"subtype-panel")
+    "subtype","gene","bulk_shift","subset_up_fraction","subset_up_log2fc","q_up_four_contrasts","q_down_four_contrasts"),"subtype-panel")
 ```
 
 ## Review status

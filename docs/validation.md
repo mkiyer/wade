@@ -100,6 +100,60 @@ biologies), 17, 20, 13 and 15 genes had p ≤ 0.05 for the four statistics; the 
 tests are exact under exchangeability, and the confirmation's false discovery
 proportions above are the calibration evidence.
 
+## Learned subsets
+
+`research/subset_recovery.py` regenerates the confirmation's 60 mixed matrices
+from their frozen seeds and compares, for every planted gene, the cases each
+walk places in the planted direction's subset with the planted cases. Share of
+cases selected / precision / recall, baseline mean ≥ 5 counts, all planted
+genes (60 per row):
+
+| Planted pattern | Standardized walk (WADE) | Running sum | Cumulative area walk |
+| --- | --- | --- | --- |
+| 250 : 250, bulk × ½, 10% × 32–1,024 (up) | 0.10 / 1.00 / 0.95–1.00 | 0.10 / 1.00 / 0.96–1.00 | 0.11 / 0.88–0.91 / 0.99–1.00 |
+| 250 : 250, 10% × 16 over unchanged bulk | 0.11 / 0.88 / 0.91 | 0.26 / 0.50 / 0.97 | 0.79 / 0.15 / 0.99 |
+| 250 : 250, 20% × 4 over unchanged bulk | 0.17 / 0.80 / 0.62 | 0.35 / 0.55 / 0.84 | 0.96 / 0.21 / 0.99 |
+| 250 : 250, every case × 1.5 | 0.51 / 1.00 / 0.51 | 0.58 / 1.00 / 0.58 | 1.00 / 1.00 / 1.00 |
+| 500 : 50, bulk × ½, 10% × 32–1,024 (up) | 0.10 / 0.99–1.00 / 0.97–1.00 | 0.10 / 0.99–1.00 / 0.97–1.00 | 0.11–0.12 / 0.87–0.91 / 0.99–1.00 |
+| 500 : 50, 10% × 16 over unchanged bulk | 0.34 / 0.54 / 0.96 | 0.38 / 0.38 / 0.98 | 0.85 / 0.13 / 1.00 |
+| 50 : 500, 10% × 16 over unchanged bulk | 0.09 / 0.95 / 0.88 | 0.40 / 0.36 / 0.98 | 0.87 / 0.13 / 1.00 |
+
+- The standardized walk is exact on raised subsets above a lowered bulk in
+  every design, and precise over an unchanged bulk when controls are plentiful.
+- With 50 controls it over-calls a subset over an unchanged bulk.
+- For a whole-cohort shift it reports the most-shifted part (31–89% of cases
+  across designs), not every case.
+- On unchanged genes its peak is noise: across 10,000 unchanged genes per
+  design the upward subset held 30–39% of cases on average and was empty for
+  only 16–17% of genes, so subsets are read with the q-value.
+- Without standardization, the running sum's peak drifts into the bulk. The
+  cumulative area walk selects nearly every case whenever the rest of the cases
+  match the controls, because a raised subset then lifts the whole case
+  distribution.
+
+### On TCGA tumours
+
+The example notebooks compare each learned upward subset with annotations WADE
+never sees: fusion calls for the prostate ETS genes, and GISTIC amplification
+calls for ERBB2 and GRB7, which share an amplicon. Only tumours annotated
+positive or negative enter precision and recall; the rest of each subset has
+neither annotation (53 of ERG's 186 tumours).
+
+| Gene | Subset | Positives in subset | Negatives in subset | Precision | Recall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ERG (prostate, 445 tumours) | 186 | 127 of 130 | 6 | 0.95 | 0.98 |
+| ETV1 | 43 | 17 of 17 | 2 | 0.89 | 1.00 |
+| ETV4 | 22 | 9 of 9 | 1 | 0.90 | 1.00 |
+| FLI1 | 4 | 2 of 2 | 0 | 1.00 | 1.00 |
+| ERBB2 (breast, 971 tumours) | 588 | 106 of 107 | 465 | 0.19 | 0.99 |
+| GRB7 | 963 | 107 of 107 | 830 | 0.11 | 1.00 |
+
+The fusion subsets recover the fusion-positive tumours. ERBB2 and GRB7 are
+raised in most breast tumours, and the amplified tumours form a higher mode
+within them. The walk places one boundary, at the broad rise, which contains
+the amplified tumours but is not them: telling a high mode from other raised
+cases compares cases with each other, which the walk does not do.
+
 ## How many controls
 
 A random relabelling puts k given samples all among the cases with

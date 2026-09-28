@@ -26,6 +26,9 @@ def gene(spec):
     d = spec["detail"]
     fig.add_trace(go.Scatter(x=d.probability, y=np.r_[d.effect,d.effect[-1]], mode="lines",
                             line=dict(color=t.ink, shape="hv"), name="Quantile effect"),row=1,col=2)
+    for edge, label, style in spec["boundaries"]:
+        fig.add_vline(x=edge, line_dash="dash" if style == "--" else "dot", line_color=t.ink, row=1, col=1,
+                      annotation_text=label, annotation_position="top left")
     fig.add_hline(y=spec["bulk"], line_dash="dash", line_color=t.case, row=1, col=2)
     fig.update_xaxes(title_text=EXPRESSION_LABEL,row=1,col=1)
     fig.update_yaxes(title_text="Cumulative fraction",row=1,col=1)
@@ -46,7 +49,8 @@ def scatter(spec):
     for i in spec["labelled"]:
         if spec["keep"][i]:
             fig.add_annotation(x=spec["x"][i],y=spec["y"][i],text=str(spec["gene"][i]),showarrow=False,yshift=10)
-    fig.add_vline(x=0,line_color=t.axis)
+    if spec["kind"] == "volcano":
+        fig.add_vline(x=0,line_color=t.axis)
     fig.add_hline(y=-np.log10(spec["alpha"]) if spec["kind"] == "volcano" else 0,line_color=t.axis,line_dash="dash")
     fig.update_xaxes(title_text=spec["xlabel"])
     fig.update_yaxes(title_text=spec["ylabel"])

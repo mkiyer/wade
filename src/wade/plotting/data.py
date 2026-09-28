@@ -32,8 +32,9 @@ def _display(result, i):
 def plot_gene(result, gene, *, backend="matplotlib", theme="light", title=None):
     """ECDF and exact empirical quantile effects for one gene, on the log2 scale.
 
-    The annotation gives each tested direction's q-value. A tail shape or a
-    sample extreme is descriptive, not a separately significant event.
+    The annotation gives each tested direction's q-value; vertical lines mark
+    the boundaries of the subsets the walk learned. Subsets are descriptions,
+    not separately significant events.
     """
     from ..diagnostics import gene_detail
     i = result.gene_index(gene)
@@ -41,9 +42,17 @@ def plot_gene(result, gene, *, backend="matplotlib", theme="light", title=None):
               if np.isfinite(q)]
     annotation = ", ".join(tested) if tested else str(result.status[i])
     x = _display(result, i)
+    scale = result.params["scale"]
+    boundaries = []
+    for direction in ("up", "down"):
+        s = result.subset(gene, direction)
+        if len(s.samples):
+            edge = s.boundary if scale == "log" else np.log2(s.boundary + 1)
+            boundaries.append((float(edge), f"{direction.capitalize()} subset: {len(s.samples)} cases",
+                               "--" if direction == "up" else ":"))
     spec = dict(title=f"{result.gene[i] if title is None else title} · {annotation}",
                 expression=x, cond=result.cond, detail=gene_detail(x, result.cond),
-                bulk=float(result.bulk_shift[i]), theme=_theme(theme))
+                bulk=float(result.bulk_shift[i]), boundaries=boundaries, theme=_theme(theme))
     return _renderer(backend).gene(spec)
 
 
@@ -55,9 +64,10 @@ def _scatter(result, kind, direction, alpha, label):
     padj = getattr(result, f"padj_{direction}")
     if not np.isfinite(padj).any() and result.tested.any():
         raise ValueError(f"direction {direction!r} was not tested in this result")
-    tail = "upper" if direction == "up" else "lower"
-    x = result.bulk_shift
-    y = -np.log10(padj) if kind == "volcano" else getattr(result, tail + "_tail")
+    if kind == "volcano":
+        x, y = result.bulk_shift, -np.log10(padj)
+    else:
+        x, y = getattr(result, f"subset_{direction}_fraction"), getattr(result, f"subset_{direction}_log2fc")
     keep = result.tested & np.isfinite(x) & np.isfinite(y)
     labelled = []
     if isinstance(label, (int, np.integer)):
@@ -68,9 +78,10 @@ def _scatter(result, kind, direction, alpha, label):
         labelled = [result.gene_index(g) for g in label]
     return dict(x=x, y=y, gene=result.gene, keep=keep, significant=keep & (padj <= alpha),
                 labelled=labelled, alpha=alpha, kind=kind, called=f"{direction.capitalize()} q ≤ {alpha:g}",
-                xlabel="Bulk: difference in medians (log₂ units)",
+                xlabel="Bulk: difference in medians (log₂ units)" if kind == "volcano" else
+                       f"Share of cases in the {direction} subset",
                 ylabel=f"−log₁₀({direction} q)" if kind == "volcano" else
-                       f"{tail.capitalize()} decile difference above bulk (log₂ units)")
+                       f"{direction.capitalize()} subset median − control median (log₂ units)")
 
 
 def plot_volcano(result, *, direction="up", alpha=.05, label=None, backend="matplotlib", theme="light", title=None):
@@ -84,7 +95,11 @@ def plot_volcano(result, *, direction="up", alpha=.05, label=None, backend="matp
 
 
 def plot_patterns(result, *, direction="up", alpha=.05, label=None, backend="matplotlib", theme="light", title=None):
-    """Bulk shift against the matching tail description, colored by that direction's calls."""
+    """Each gene's learned subset: the share of cases in it against its fold over controls.
+
+    Subset biomarkers sit at a small share and a large fold; whole-cohort
+    shifts at a large share and a modest fold. Colored by that direction's calls.
+    """
     spec = _scatter(result, "patterns", direction, alpha, label)
-    spec.update(theme=_theme(theme), title=title or "Bulk shift and tail shape")
+    spec.update(theme=_theme(theme), title=title or f"{direction.capitalize()} subsets")
     return _renderer(backend).scatter(spec)

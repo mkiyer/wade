@@ -7,7 +7,7 @@
 | `src/wade/` | The package: `api.py` (`wade`, `wade_contrast`, `WadeResult`), `_wasserstein.py` (areas and the permutation engine), normalization, filtering, permutations, p-values, input/output, diagnostics and plotting |
 | `rust/src/lib.rs` | The native permutation kernel; the same ordered sums as the NumPy path |
 | `tests/` | Package tests against independent oracles |
-| `research/` | The fresh-seed confirmation runner and the single-gene limits study; excluded from distributions |
+| `research/` | The fresh-seed confirmation runner, the single-gene limits study and the subset-recovery study; excluded from distributions |
 | `tools/` | TCGA inputs and notebook support, the install smoke test and the workspace check |
 | `notebooks/` | Demo, prostate and breast examples (Quarto) |
 | `docs/` | Manual, method, validation, changes and the TCGA data contract |
@@ -46,6 +46,7 @@ python tools/check_workspace.py
 ```sh
 PYTHONPATH=src:research python research/confirm.py --output .release/0.2.0/confirmation-new
 PYTHONPATH=src:research python research/subset_limits.py gamma 8
+PYTHONPATH=src:research python research/subset_recovery.py --confirmation .release/0.2.0/confirmation-new
 ```
 
 The confirmation takes about 30 minutes on a 16-core laptop and refuses to

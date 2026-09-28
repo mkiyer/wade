@@ -133,10 +133,12 @@ in the same patients, not an independent cohort. HER2-enriched is not
 synonymous with clinical HER2 positivity, nor basal-like with triple-negative
 disease.
 
-`bulk_shift` is a log2 median difference. `upper_tail` and `lower_tail` are
-decile-mean differences minus that shift, so a lowered bulk and a raised
-upper tail can coexist. `padj_up` tests the upward area; it does not infer an
-affected fraction or an individual's rarity. With 52 prostate normals, a
+`bulk_shift` is a log2 median difference, and the subset columns describe the
+subsets each gene's walk learned, so a lowered bulk and a raised subset can
+coexist. The notebooks compare the learned ERG, ETV1, ETV4 and FLI1 subsets
+with the fusion annotations, and the ERBB2 and GRB7 subsets with GISTIC
+amplification calls; WADE never sees either. `padj_up` tests the upward area;
+it does not certify individual patients. With 52 prostate normals, a
 pure subset of k tumours above every normal gives an upward p-value near or
 above C(445, k) / C(497, k); the prostate notebook reports this value for its
 fusion markers.

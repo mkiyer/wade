@@ -456,7 +456,7 @@ def condition(
 
 RESULT_COLUMNS = (
     "gene", "status", "area_up", "area_down", "pvalue_up", "pvalue_down", "padj_up", "padj_down",
-    "bulk_shift", "upper_tail", "lower_tail",
+    "bulk_shift", "subset_up_fraction", "subset_up_log2fc", "subset_down_fraction", "subset_down_log2fc",
 )
 
 

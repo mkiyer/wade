@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 import numpy as np
 
-from ._descriptions import describe
+from ._descriptions import describe, subsets
 from ._wasserstein import DIRECTIONS, SCALES, STOP_EXCEEDANCES, expression, infer, resolve_backend
 from .io import Condition, Counts, as_counts, result_columns
 from .normalize import Normalization, _fingerprint, _indices, _named, fit_normalization
@@ -15,6 +15,16 @@ DEFAULT_MAX_PERMUTATIONS = 999_999
 _ACTIVE = {"both": (True, True), "up": (True, False), "down": (False, True)}
 
 
+@dataclass(frozen=True)
+class Subset:
+    """The cases one gene's walk places in its upward or downward subset."""
+    direction: str
+    samples: np.ndarray    # case sample names, most extreme first
+    boundary: float        # expression at the subset's inner edge (params["scale"]); NaN if empty
+    fraction: float        # share of cases in the subset
+    log2fc: float          # subset median minus control median, log2(count/size_factor+1)
+
+
 @dataclass
 class WadeResult:
     """Each gene's upward and downward areas, with the declared hypothesis's q-values.
@@ -23,9 +33,10 @@ class WadeResult:
     higher; area_down where they are lower; both on params["scale"]. padj_up and
     padj_down share one BH family for direction="both", or cover the tested
     genes for one direction (the other is NaN). bulk_shift is the case minus
-    control median of log2(count/size_factor+1); upper_tail/lower_tail are
-    upper/lower decile mean differences minus bulk_shift. Descriptions carry
-    no p-values, and no sample outlier probabilities are inferred.
+    control median of log2(count/size_factor+1). The subset columns describe
+    the enriched subsets each gene's walk learns (see subset()): the share of
+    cases in them and their median minus the control median, in log2 units.
+    Descriptions carry no p-values, and no sample outlier probabilities are inferred.
     """
     gene: np.ndarray
     status: np.ndarray
@@ -36,8 +47,10 @@ class WadeResult:
     padj_up: np.ndarray
     padj_down: np.ndarray
     bulk_shift: np.ndarray
-    upper_tail: np.ndarray
-    lower_tail: np.ndarray
+    subset_up_fraction: np.ndarray
+    subset_up_log2fc: np.ndarray
+    subset_down_fraction: np.ndarray
+    subset_down_log2fc: np.ndarray
     n_permutations: np.ndarray
     n_exceedances: np.ndarray
     expression: np.ndarray
@@ -82,22 +95,38 @@ class WadeResult:
         from .diagnostics import gene_detail
         return gene_detail(self.expression[self.gene_index(gene)], self.cond)
 
-    def drivers(self, gene, direction="up"):
-        """Case samples beyond every control, most extreme first.
+    def subset(self, gene, direction="up"):
+        """The cases the gene's walk places in its upward or downward subset.
 
-        "up" returns cases above the highest control, "down" cases below the
-        lowest. A description of who carries the area, not an outlier test.
+        The walk steps down the pooled ranking of samples. At each cut it takes
+        the fraction of cases above minus the fraction of controls above, divided
+        by that difference's standard deviation under random labelling. The
+        upward subset is the cases at or above the cut where this peaks; the
+        downward subset, the cases at or below its lowest point. A subset whose
+        median is not on its own side of the control median is empty. Nothing
+        is chosen in advance, and the walk depends only on ranks, so the scale
+        does not change it. It describes where cases concentrate; read it with
+        the direction's q-value, since a walk on noise also has a peak.
         """
         if direction not in DIRECTIONS:
             raise ValueError("direction must be 'up' or 'down'")
-        x, case = self.expression[self.gene_index(gene)], self.cond == 1
+        i = self.gene_index(gene)
+        x = self.expression[i]
+        # Walk on the same log2 values as the table, so both give the same subset on either scale.
+        walked = x if self.params["scale"] == "log" else np.log2(x + 1)
+        up_cut, up_cases, _, down_cut, down_cases, _, values = subsets(walked[None], self.cond)
+        fraction = float(getattr(self, f"subset_{direction}_fraction")[i])
+        log2fc = float(getattr(self, f"subset_{direction}_log2fc")[i])
+        if (up_cases if direction == "up" else down_cases)[0] == 0:
+            return Subset(direction, self.sample_names[:0], float("nan"), fraction, log2fc)
+        case = self.cond == 1
         if direction == "up":
-            keep = case & (x > x[~case].max())
-            order = np.argsort(-x[keep], kind="stable")
+            members = case & (walked >= values[0, up_cut[0]])
+            order, boundary = np.argsort(-x[members], kind="stable"), x[members].min()
         else:
-            keep = case & (x < x[~case].min())
-            order = np.argsort(x[keep], kind="stable")
-        return self.sample_names[keep][order]
+            members = case & (walked <= values[0, down_cut[0] - 1])
+            order, boundary = np.argsort(x[members], kind="stable"), x[members].max()
+        return Subset(direction, self.sample_names[members][order], float(boundary), fraction, log2fc)
 
     def plot_gene(self, gene, **kwargs):
         from .plotting import plot_gene
@@ -197,12 +226,12 @@ def wade(counts, cond, *, direction="both", scale="linear", normalization="rle",
     values = np.empty(data.shape, float)
     area, pvalue = np.full((g, 2), np.nan), np.full((g, 2), np.nan)
     exceed, tried = np.zeros((g, 2), np.uint64), np.zeros((g, 2), np.uint64)
-    bulk, upper, lower = np.empty(g), np.empty(g), np.empty(g)
+    described = np.empty((5, g))
     for start in range(0, g, chunk):
         rows = slice(start, min(start + chunk, g))
         x = expression(data.values[rows], fitted.size_factors, scale)
         values[rows] = x
-        bulk[rows], upper[rows], lower[rows] = describe(x if scale == "log" else np.log2(x + 1), labels)
+        described[:, rows] = describe(x if scale == "log" else np.log2(x + 1), labels)
         local = np.flatnonzero(tested[rows])
         if len(local):
             idx = start + local
@@ -224,11 +253,11 @@ def wade(counts, cond, *, direction="both", scale="linear", normalization="rle",
                   size_factor_median=dict(case=float(np.median(factors[labels == 1])),
                                           control=float(np.median(factors[labels == 0]))),
                   test_selection="nonzero" if test_genes is None else "explicit; all-zero genes excluded",
-                  description="log2 median shift; decile mean differences minus the median shift")
+                  description="log2 median shift; standardized running-sum subsets up and down")
     if isinstance(cond, Condition):
         params.update(case_label=cond.case, control_label=cond.control, condition_column=cond.column)
     return WadeResult(data.gene_names.copy(), status, area[:, 0], area[:, 1], pvalue[:, 0], pvalue[:, 1],
-                      padj[:, 0], padj[:, 1], bulk, upper, lower, tried, exceed, values, labels.copy(),
+                      padj[:, 0], padj[:, 1], *described, tried, exceed, values, labels.copy(),
                       data.sample_names.copy(), fitted, params, dict(data.meta))
 
 

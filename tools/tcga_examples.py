@@ -273,14 +273,35 @@ def subset_floor(result, genes):
     n1, n0 = int(result.cond.sum()), int((result.cond == 0).sum())
     rows = []
     for gene in (g for g in genes if g in result.gene):
-        k = len(result.drivers(gene, "up"))
-        rows.append(dict(gene=gene, cases_above_every_control=k,
-                         pure_subset_p=comb(n1, k) / comb(n1 + n0, k),
+        x = result.expression[result.gene_index(gene)]
+        k = int(np.sum(x[result.cond == 1] > x[result.cond == 0].max()))
+        rows.append(dict(gene=gene, cases_above_every_control=k, pure_subset_p=comb(n1, k) / comb(n1 + n0, k),
                          pvalue_up=float(result.pvalue_up[result.gene_index(gene)])))
     return pl.DataFrame(rows)
 
 
-def plot_bulk_tail(result, panel):
+def annotated_subsets(cohort, result, labels):
+    """Each gene's learned upward subset against an annotation WADE never sees.
+
+    `labels` maps gene -> (column, positive value, negative values). Only tumours
+    annotated positive or negative enter the denominators; other and missing
+    annotations are never counted as negatives.
+    """
+    tumours = cohort.meta.filter(pl.col("library").is_in(result.sample_names.tolist()) & (pl.col("group") == "tumor"))
+    rows = []
+    for gene, (column, positive, negatives) in labels.items():
+        status = dict(zip(tumours["library"].to_list(), tumours[column].to_list()))
+        members = set(result.subset(gene, "up").samples.tolist())
+        pos = {lib for lib, v in status.items() if v == positive}
+        neg = {lib for lib, v in status.items() if v in negatives}
+        rows.append(dict(gene=gene, subset=len(members), annotated_positive=len(pos),
+                         positive_in_subset=len(members & pos), negative_in_subset=len(members & neg),
+                         precision=len(members & pos) / max(1, len(members & (pos | neg))),
+                         recall=len(members & pos) / max(1, len(pos))))
+    return pl.DataFrame(rows)
+
+
+def plot_subsets(result, panel):
     return wade.plot_patterns(result, direction="up", label=[g for g in panel if g in result.gene])
 
 

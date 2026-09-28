@@ -70,12 +70,37 @@ the validation includes correlated gene modules.
 ## Descriptions
 
 The bulk shift is median(case) − median(control) of log2(count/s + 1), with
-the ordinary average at even group sizes. The upper and lower tails integrate
-each empirical quantile function over [0.9, 1] or [0, 0.1], take case minus
-control, and subtract the bulk shift; fractional boundaries are integrated
-exactly. These descriptions use log2 whatever the tested scale, so they are
-comparable across genes. They are fixed summaries, not tests or prevalence
-estimates.
+the ordinary average at even group sizes.
+
+**Learned subsets.** Rank a gene's N samples, and let a cut c place the c
+lowest below it (c = 1, …, N−1), allowing cuts only between distinct values
+(equal within 100 ulps). With a_c cases and b_c controls above the cut and
+k_c = a_c + b_c,
+
+\[z_c=\frac{a_c/n_1-b_c/n_0}{\sqrt{k_c(N-k_c)/\{n_1n_0(N-1)\}}},\]
+
+the excess of cases above the cut divided by its standard deviation when k_c
+labels are drawn at random. The upward subset is the cases above the cut with
+the largest positive z_c (the highest such cut on ties); the downward subset is
+the cases below the cut with the most negative z_c (the lowest on ties). A
+subset must lie on its own side of the controls: a direction with no positive
+(negative) z, or whose subset median is not above (below) the control median,
+is empty. The second condition removes a peak at the end of the ranking, as
+when a few low controls lift z just above zero for nearly every case.
+`subset_*_fraction` is the subset's share of cases and `subset_*_log2fc` its
+median minus the control median. The walk depends on ranks only, so both scales
+give the same subsets. It sees how cases and controls interleave, not the gaps
+between values: among cuts above every control, z rises with each case taken
+in, so a boundary never falls between two cases that both lie above every
+control, and a high mode within raised cases gets no boundary of its own.
+It is the running sum of gene set enrichment analysis, standardized as in
+higher-criticism thresholding (Donoho & Jin, 2004): without standardization the
+peak drifts into the bulk, and the cumulative quantile area peaks at the bottom
+whenever the rest of the cases match the controls (see
+[validation](validation.md#learned-subsets)).
+
+These descriptions use log2 whatever the tested scale, so they are comparable
+across genes. They are summaries, not tests or prevalence estimates.
 
 ## Implementation
 

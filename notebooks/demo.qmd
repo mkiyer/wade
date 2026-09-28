@@ -77,16 +77,23 @@ _ = wade.write_results(result, OUT / "all-genes.tsv")
 #| label: marker-results
 #| output: asis
 markdown_table(result.to_frame().filter(pl.col("gene").is_in(marker_names)).select(
-    "gene","area_up","area_down","padj_up","padj_down","bulk_shift","upper_tail"), OUT, "marker-results")
+    "gene","padj_up","padj_down","bulk_shift","subset_up_fraction","subset_up_log2fc","subset_down_fraction"),
+    OUT, "marker-results")
 ```
 
 ## How each pattern reads
 
 `area_up` integrates the quantiles where cases are higher and `area_down` those
 where they are lower; their difference is the mean difference. `bulk_shift` is
-the difference in log2 medians, and `upper_tail` the top-decile difference beyond
-it. A raised subset above a lowered bulk has a negative `bulk_shift`, a large
-`upper_tail`, and is called up: the lowered majority does not cancel it.
+the difference in log2 medians. The subset columns come from a walk down the
+pooled ranking of samples: at each step it compares the fraction of cases above
+with the fraction of controls above, in units of that difference's noise, and
+the peak marks where cases are most enriched. `subset_up_fraction` is the share
+of cases at or above the peak, and `subset_up_log2fc` their median over the
+control median; the lowest point of the same walk gives the downward subset.
+Nothing is chosen in advance. A raised subset above a lowered bulk has a
+negative `bulk_shift`, a small `subset_up_fraction` with a large fold, and is
+called up: the lowered majority does not cancel it.
 
 ```{python}
 #| label: fig-demo-bulk
@@ -96,7 +103,7 @@ result.plot_gene("Bulk increase")
 
 ```{python}
 #| label: fig-demo-subset
-#| fig-cap: "10% of cases raised 32-fold: the median barely moves, and the upward area comes from the top decile."
+#| fig-cap: "10% of cases raised 32-fold: the median barely moves, and the walk's peak (dashed line) separates the raised cases from the rest."
 result.plot_gene("Raised subset")
 ```
 
@@ -106,12 +113,15 @@ result.plot_gene("Raised subset")
 result.plot_gene("Raised subset, lowered bulk")
 ```
 
-The cases that carry that upward area are the ones above every control:
+The walk learns both subsets of this gene, with no fraction given to it: the
+raised 10% up and the lowered majority down.
 
 ```{python}
-#| label: drivers
+#| label: learned-subsets
 #| echo: true
-result.drivers("Raised subset, lowered bulk", "up")
+up = result.subset("Raised subset, lowered bulk", "up")
+down = result.subset("Raised subset, lowered bulk", "down")
+len(up.samples), up.fraction, round(up.log2fc, 2), len(down.samples), round(down.log2fc, 2)
 ```
 
 ```{python}

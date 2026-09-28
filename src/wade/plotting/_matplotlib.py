@@ -31,6 +31,8 @@ def gene(spec):
         x = np.sort(spec["expression"][spec["cond"] == value])
         axes[0].step(np.r_[x[0], x], np.r_[0, np.arange(1, len(x)+1)/len(x)],
                      where="post", color=color, label=f"{name} (n={len(x)})", linewidth=1.8)
+    for edge, label, style in spec["boundaries"]:
+        axes[0].axvline(edge, color=t.ink, linestyle=style, linewidth=1, label=label)
     axes[0].set(xlabel=EXPRESSION_LABEL, ylabel="Cumulative fraction", ylim=(-.02, 1.02))
     axes[0].legend(loc="best", fontsize=9)
     d = spec["detail"]
@@ -51,11 +53,12 @@ def scatter(spec):
     for mask, color, name in [(spec["keep"] & ~spec["significant"], t.muted, "Not called"),
                               (spec["significant"], t.case, spec["called"])]:
         ax.scatter(spec["x"][mask], spec["y"][mask], s=15, c=color, alpha=.65, linewidths=0, label=name, rasterized=True)
-    ax.axvline(0, color=t.axis, linewidth=.8)
     if spec["kind"] == "volcano":
+        ax.axvline(0, color=t.axis, linewidth=.8)
         ax.axhline(-np.log10(spec["alpha"]), color=t.axis, linestyle="--", linewidth=.8)
     else:
         ax.axhline(0, color=t.axis, linewidth=.8)
+        ax.set_xlim(-.02, 1.02)
     for i in spec["labelled"]:
         if spec["keep"][i]:
             lo, hi = ax.get_xlim()

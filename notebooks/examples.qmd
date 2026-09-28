@@ -34,7 +34,7 @@ from notebook_support import output_dir, markdown_table, export_table
 OUT = output_dir("prostate")
 cohort = TC.load_cohort("prostate", OUT)
 PANEL = TC.PROSTATE_PANEL
-SHOW = ["gene","status","padj_up","padj_down","bulk_shift","upper_tail","lower_tail"]
+SHOW = ["gene","padj_up","padj_down","bulk_shift","subset_up_fraction","subset_up_log2fc","subset_down_fraction","subset_down_log2fc"]
 def table(frame,name):
     markdown_table(frame,OUT,name)
 ```
@@ -101,8 +101,8 @@ table(TC.panel_table(res,PANEL).select(SHOW),"primary-panel")
 
 ```{python}
 #| label: fig-patterns
-#| fig-cap: "Bulk shift and upper-decile difference beyond it for every tested gene, colored by upward calls."
-TC.plot_bulk_tail(res,PANEL[:5])
+#| fig-cap: "Each tested gene's learned upward subset: the share of tumours in it against its median fold over the normals, colored by upward calls. Subset markers sit at a small share and a large fold."
+TC.plot_subsets(res,PANEL[:5])
 ```
 
 ```{python}
@@ -142,6 +142,18 @@ and SPINK1 go below it because their other tumours are raised too.
 #| label: subset-floor
 #| output: asis
 table(TC.subset_floor(res,["ERG","ETV1","ETV4","SPINK1"]),"subset-floor")
+```
+
+Which tumours did each gene's walk choose? The fusion annotations, which WADE
+never sees, say whether the learned upward subsets are the fusion-positive
+tumours. Only tumours annotated fusion-positive or negative enter the ratios;
+expression-high and unknown annotations are never counted as negatives.
+
+```{python}
+#| label: fusion-subsets
+#| output: asis
+fusions={g:(g+"_STATUS","fusion",{"none"}) for g in ["ERG","ETV1","ETV4","FLI1"]}
+table(TC.annotated_subsets(cohort,res,fusions),"fusion-subsets")
 ```
 
 ```{python}

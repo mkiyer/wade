@@ -158,16 +158,49 @@ exchangeable within blocks.
 | `pvalue_up`, `pvalue_down` | Permutation p-values; NaN for an untested direction or gene |
 | `padj_up`, `padj_down` | BH q-values in the declared family |
 | `bulk_shift` | Case minus control median of log2(count / size factor + 1) |
-| `upper_tail`, `lower_tail` | Top/bottom decile mean differences minus `bulk_shift` (log2) |
+| `subset_up_fraction` | Share of cases in the learned upward subset |
+| `subset_up_log2fc` | That subset's median minus the control median (log2) |
+| `subset_down_fraction`, `subset_down_log2fc` | The same for the learned downward subset |
 | `status` | `tested`, `filtered` or `all_zero` |
 
 Areas are in the units of the tested scale and are not comparable across genes;
 use the log2 descriptions to compare and rank. A negative `bulk_shift` with a
-large positive `upper_tail` and a small `padj_up` is a raised subset above a
-lowered bulk. Descriptions have no p-values and are not prevalence estimates.
+small `subset_up_fraction`, a large `subset_up_log2fc` and a small `padj_up` is
+a raised subset above a lowered bulk. Descriptions have no p-values.
+
+### Learned subsets
+
+No subset size is chosen in advance. Each gene's samples are ranked, cases and
+controls together, and a walk steps down the ranking. At each step it takes the
+fraction of cases above minus the fraction of controls above, divided by the
+standard deviation that difference would have if the labels were random. The
+cases at or above the walk's peak form the upward subset; the cases at or below
+its lowest point form the downward subset. The walk uses only ranks, so the
+scale does not change it; ties never straddle a boundary. A subset must lie on
+its own side of the controls: an upward subset whose median is not above the
+control median is reported as empty, and likewise downward.
+
+- **Read subsets with the q-value.** A walk over noise also has a peak: on
+  unchanged genes the upward subset averaged a third of the cases, and was
+  empty for only about one gene in six.
+- **A raised subset over a lowered or unchanged bulk** is where the walk is
+  precise. With 250 cases and 250 controls it recovered planted 10% subsets
+  with precision 0.88–1.00 (see [validation](validation.md#learned-subsets)).
+- **With few controls** the boundary is uncertain, and a subset over an
+  unchanged bulk is over-called (precision about 0.5 with 50 controls).
+- **A whole-cohort shift** gives the most-shifted part of the cohort (31–89% of
+  cases in the confirmation designs), not every case; `bulk_shift` describes
+  the cohort-wide change.
+- **A high mode inside a raised majority** gets no boundary of its own: the
+  walk compares cases with controls, not cases with each other. In TCGA breast
+  tumours ERBB2's upward subset is the 588 of 971 raised above most normals; it
+  holds 106 of the 107 amplified tumours and 465 that are not amplified (see
+  [validation](validation.md#on-tcga-tumours)).
+- The subset is a description of where cases concentrate, not a set of
+  individually significant patients or a prevalence estimate.
 
 ```python
-result.drivers("ETV4", "up")      # cases above the highest control, most extreme first
+result.subset("ETV4", "up")       # member samples, boundary, share and fold
 result.gene_detail("ETV4")        # exact quantile intervals; .area_up and .area_down
 result.plot_gene("ETV4")          # ECDFs and quantile differences on log2
 result.plot_volcano(direction="up", label=["ETV1", "ETV4"])

@@ -23,7 +23,7 @@ import wade
 # Raw counts: genes × samples. 1 = case, 0 = control.
 result = wade.wade(counts, condition)          # direction="both", scale="linear"
 table = result.to_frame().sort("padj_up")      # optional Polars dependency
-result.drivers("ETV1", "up")                   # cases above every control
+result.subset("ETV1", "up")                    # the tumours its walk learned as the raised subset
 result.plot_gene("ETV1")
 ```
 
@@ -49,12 +49,23 @@ before running.
 | `pvalue_up`, `pvalue_down` | Monte Carlo permutation p-values, one per tested direction |
 | `padj_up`, `padj_down` | BH q-values in the family set by `direction` |
 | `bulk_shift` | Case minus control median of log2 expression |
-| `upper_tail`, `lower_tail` | Top/bottom decile mean differences minus `bulk_shift` (log2) |
+| `subset_up_fraction`, `subset_up_log2fc` | The learned upward subset: its share of cases, and its median over the control median (log2) |
+| `subset_down_fraction`, `subset_down_log2fc` | The same for the downward subset |
 | `status` | `tested`, `filtered` or `all_zero` |
 
+**Learning the subset.** WADE is never told a subset's size. For each gene it
+walks down the pooled ranking of samples, and at each step compares the
+fraction of cases above with the fraction of controls above, in units of that
+difference's noise under random labelling. Where the walk peaks, cases are most
+enriched: the cases at or above the peak are the upward subset. The walk's
+lowest point gives the downward subset. `result.subset(gene, "up")` returns
+the member samples and the boundary. The walk compares cases with controls, so
+a high mode inside already-raised cases, such as ERBB2 amplification in breast
+tumours, falls inside a broader subset.
+
 A raised subset above a lowered bulk reads as a small `padj_up`, a negative
-`bulk_shift` and a large positive `upper_tail`. `result.drivers(gene, "up")`
-lists the cases above every control. Descriptions carry no p-values.
+`bulk_shift` and a small `subset_up_fraction` with a large fold. Subsets are
+descriptions: a walk over noise also has a peak, so read them with the q-value.
 
 ## What limits discovery: the controls
 
@@ -79,8 +90,12 @@ On 120 fresh simulated transcriptomes (16,384 genes each), the default run kept
 the mean false discovery proportion at 2.5–5.4% for q ≤ 0.05. With 250 cases
 and 250 controls it found 95–100% of genes (baseline mean ≥ 5 counts) where
 10% of cases were raised 32–1,024× above a halved bulk; a one-sided Wilcoxon
-test found none of them upregulated and called most of them down. Details,
-limits and how to reproduce them are in [validation](docs/validation.md).
+test found none of them upregulated and called most of them down. On those
+genes the learned upward subset held the planted cases with precision 1.00
+and recall 0.95–1.00. On TCGA prostate tumours, the subsets learned for ERG,
+ETV1, ETV4 and FLI1 matched fusion annotations WADE never saw (precision
+0.89–1.00, recall 0.98–1.00). Details, limits and how to reproduce them are in
+[validation](docs/validation.md).
 
 ## Install
 

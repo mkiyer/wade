@@ -33,8 +33,12 @@ extrapolation, the saddlepoint and bootstrap intervals. Removed names:
 ## Results
 
 `area_up`, `area_down`, `pvalue_up`, `pvalue_down`, `padj_up`, `padj_down`,
-`bulk_shift`, `upper_tail`, `lower_tail` and `status`, one row per input gene.
-`result.drivers(gene, "up")` lists the cases above every control.
+`bulk_shift`, `subset_up_fraction`, `subset_up_log2fc`, `subset_down_fraction`,
+`subset_down_log2fc` and `status`, one row per input gene. The subsets are
+learned from each gene: a standardized running sum of cases over controls down
+the pooled ranking, whose peak bounds the upward subset and whose lowest point
+bounds the downward one. `result.subset(gene, direction)` returns the members
+and boundary. `plot_patterns` maps each gene's subset share against its fold.
 `gene_detail(gene)` returns exact quantile intervals with their two areas.
 Volcano and pattern plots take `direction=`; gene plots show log2 expression.
 The manifest records the hypothesis family, group size-factor medians and each
