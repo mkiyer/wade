@@ -17,12 +17,12 @@ _ACTIVE = {"both": (True, True), "up": (True, False), "down": (False, True)}
 
 @dataclass(frozen=True)
 class Subset:
-    """The cases one gene's walk places in its upward or downward subset."""
+    """The cases in one gene's upward or downward subset, on log2(count/size_factor+1)."""
     direction: str
     samples: np.ndarray    # case sample names, most extreme first
-    boundary: float        # expression at the subset's inner edge (params["scale"]); NaN if empty
+    boundary: float        # expression at the subset's inner edge; NaN if empty
     fraction: float        # share of cases in the subset
-    log2fc: float          # subset median minus control median, log2(count/size_factor+1)
+    log2fc: float          # subset median minus control median
 
 
 @dataclass
@@ -95,38 +95,43 @@ class WadeResult:
         from .diagnostics import gene_detail
         return gene_detail(self.expression[self.gene_index(gene)], self.cond)
 
-    def subset(self, gene, direction="up"):
-        """The cases the gene's walk places in its upward or downward subset.
+    def subset(self, gene, direction="up", cutoff=None):
+        """The cases in the gene's upward or downward subset.
 
-        The walk steps down the pooled ranking of samples. At each cut it takes
-        the fraction of cases above minus the fraction of controls above, divided
-        by that difference's standard deviation under random labelling. The
-        upward subset is the cases at or above the cut where this peaks; the
-        downward subset, the cases at or below its lowest point. A subset whose
-        median is not on its own side of the control median is empty. Nothing
-        is chosen in advance, and the walk depends only on ranks, so the scale
-        does not change it. It describes where cases concentrate; read it with
-        the direction's q-value, since a walk on noise also has a peak.
+        By default, the subset the gene's walk learned. The walk steps down the
+        pooled ranking of samples. At each cut it takes the fraction of cases
+        above minus the fraction of controls above, divided by that difference's
+        standard deviation under random labelling. The upward subset is the
+        cases at or above the cut where this peaks; the downward subset, the
+        cases at or below its lowest point. A subset whose median is not on its
+        own side of the control median is empty. Nothing is chosen in advance,
+        and the walk depends only on ranks, so the scale does not change it. It
+        describes where cases concentrate; read it with the direction's q-value,
+        since a walk on noise also has a peak.
+
+        With `cutoff`, on the log2(count/size_factor+1) scale of the plots, the
+        subset is instead the cases at or above it ("up") or at or below it
+        ("down"), described the same way.
         """
         if direction not in DIRECTIONS:
             raise ValueError("direction must be 'up' or 'down'")
-        i = self.gene_index(gene)
-        x = self.expression[i]
-        # Walk on the same log2 values as the table, so both give the same subset on either scale.
-        walked = x if self.params["scale"] == "log" else np.log2(x + 1)
-        up_cut, up_cases, _, down_cut, down_cases, _, values = subsets(walked[None], self.cond)
-        fraction = float(getattr(self, f"subset_{direction}_fraction")[i])
-        log2fc = float(getattr(self, f"subset_{direction}_log2fc")[i])
-        if (up_cases if direction == "up" else down_cases)[0] == 0:
-            return Subset(direction, self.sample_names[:0], float("nan"), fraction, log2fc)
-        case = self.cond == 1
-        if direction == "up":
-            members = case & (walked >= values[0, up_cut[0]])
-            order, boundary = np.argsort(-x[members], kind="stable"), x[members].min()
-        else:
-            members = case & (walked <= values[0, down_cut[0] - 1])
-            order, boundary = np.argsort(x[members], kind="stable"), x[members].max()
-        return Subset(direction, self.sample_names[members][order], float(boundary), fraction, log2fc)
+        x = self.expression[self.gene_index(gene)]
+        # The table's log2 values, so the learned subset matches the table on either scale.
+        log2 = x if self.params["scale"] == "log" else np.log2(x + 1)
+        case, up = self.cond == 1, direction == "up"
+        if cutoff is None:
+            up_cut, up_cases, _, down_cut, down_cases, _, values = subsets(log2[None], self.cond)
+            if (up_cases if up else down_cases)[0] == 0:
+                cutoff = np.inf if up else -np.inf          # the walk learned no subset
+            else:
+                cutoff = values[0, up_cut[0]] if up else values[0, down_cut[0] - 1]
+        members = case & ((log2 >= cutoff) if up else (log2 <= cutoff))
+        inside = log2[members]
+        order = np.argsort(-inside if up else inside, kind="stable")
+        edge = (inside.min() if up else inside.max()) if len(inside) else np.nan
+        fold = np.median(inside) - np.median(log2[~case]) if len(inside) else np.nan
+        return Subset(direction, self.sample_names[members][order], float(edge), len(inside) / int(case.sum()),
+                      float(fold))
 
     def plot_gene(self, gene, **kwargs):
         from .plotting import plot_gene

@@ -260,11 +260,16 @@ def test_learned_subsets_on_analytic_patterns():
     names = [f"s{i}" for i in range(200)]
     unit = wade.Normalization.from_size_factors(wade.as_counts(counts, sample_names=names),
                                                 dict.fromkeys(names, 1.0), source="test")
-    r = wade.wade(counts, np.r_[np.ones(100, int), np.zeros(100, int)], normalization=unit,
-                  sample_names=names, max_permutations=19)
-    up, down = r.subset(0, "up"), r.subset(0, "down")
-    assert (len(up.samples), up.boundary, down.boundary) == (10, 400, 50)
-    assert up.log2fc == pytest.approx(np.log2(401 / 101)) and down.log2fc == pytest.approx(np.log2(51 / 101))
+    for scale in ("linear", "log"):      # boundaries and cutoffs are log2, whatever the tested scale
+        r = wade.wade(counts, np.r_[np.ones(100, int), np.zeros(100, int)], normalization=unit,
+                      sample_names=names, max_permutations=19, scale=scale)
+        up, down = r.subset(0, "up"), r.subset(0, "down")
+        assert (len(up.samples), up.boundary, down.boundary) == (10, np.log2(401), np.log2(51))
+        assert up.log2fc == pytest.approx(np.log2(401 / 101)) and down.log2fc == pytest.approx(np.log2(51 / 101))
+        above = r.subset(0, "up", cutoff=np.log2(101))              # cases only: no control enters
+        assert (len(above.samples), above.fraction, above.boundary) == (10, .1, np.log2(401))
+        assert len(r.subset(0, "down", cutoff=np.log2(101)).samples) == 90
+        assert len(r.subset(0, "up", cutoff=20).samples) == 0 and np.isnan(r.subset(0, "up", cutoff=20).log2fc)
 
 
 def test_mathematically_tied_values_do_not_split_a_subset():
@@ -283,8 +288,11 @@ def test_table_and_subset_agree_for_every_gene():
     for g in range(40):
         for d in ("up", "down"):
             s = r.subset(g, d)
-            assert len(s.samples) == round(getattr(r, f"subset_{d}_fraction")[g] * 15)
+            assert s.fraction == getattr(r, f"subset_{d}_fraction")[g]
+            np.testing.assert_equal(s.log2fc, getattr(r, f"subset_{d}_log2fc")[g])
             assert set(s.samples) <= set(r.sample_names[:15])
+            if len(s.samples):      # the boundary, given as a cutoff, selects the same cases
+                np.testing.assert_array_equal(r.subset(g, d, cutoff=s.boundary).samples, s.samples)
         # Above every control z rises with each case, so a boundary never splits those cases
         # (values within the walk's tie tolerance of the top control are ties, not above it).
         walked = np.log2(r.expression[g] + 1)

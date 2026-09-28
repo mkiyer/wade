@@ -42,13 +42,11 @@ def plot_gene(result, gene, *, backend="matplotlib", theme="light", title=None):
               if np.isfinite(q)]
     annotation = ", ".join(tested) if tested else str(result.status[i])
     x = _display(result, i)
-    scale = result.params["scale"]
     boundaries = []
     for direction in ("up", "down"):
         s = result.subset(gene, direction)
         if len(s.samples):
-            edge = s.boundary if scale == "log" else np.log2(s.boundary + 1)
-            boundaries.append((float(edge), f"{direction.capitalize()} subset: {len(s.samples)} cases",
+            boundaries.append((s.boundary, f"{direction.capitalize()} subset: {len(s.samples)} cases",
                                "--" if direction == "up" else ":"))
     spec = dict(title=f"{result.gene[i] if title is None else title} · {annotation}",
                 expression=x, cond=result.cond, detail=gene_detail(x, result.cond),

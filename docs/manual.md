@@ -200,7 +200,8 @@ control median is reported as empty, and likewise downward.
   individually significant patients or a prevalence estimate.
 
 ```python
-result.subset("ETV4", "up")       # member samples, boundary, share and fold
+result.subset("ETV4", "up")              # learned members, log2 boundary, share and fold
+result.subset("ERBB2", "up", cutoff=16)  # the cases at or above log2 16, a level read off the plot
 result.gene_detail("ETV4")        # exact quantile intervals; .area_up and .area_down
 result.plot_gene("ETV4")          # ECDFs and quantile differences on log2
 result.plot_volcano(direction="up", label=["ETV1", "ETV4"])

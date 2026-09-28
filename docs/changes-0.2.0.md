@@ -38,7 +38,8 @@ extrapolation, the saddlepoint and bootstrap intervals. Removed names:
 learned from each gene: a standardized running sum of cases over controls down
 the pooled ranking, whose peak bounds the upward subset and whose lowest point
 bounds the downward one. `result.subset(gene, direction)` returns the members
-and boundary. `plot_patterns` maps each gene's subset share against its fold.
+and boundary; with `cutoff=` it returns the cases beyond any log2 level.
+`plot_patterns` maps each gene's subset share against its fold.
 `gene_detail(gene)` returns exact quantile intervals with their two areas.
 Volcano and pattern plots take `direction=`; gene plots show log2 expression.
 The manifest records the hypothesis family, group size-factor medians and each
