@@ -110,18 +110,18 @@ These are design counts, not approved results.
 
 ## Inference and interpretation
 
-Both primary comparisons use the defaults: both directions, the linear scale,
-seed 1 and the 999,999 permutation cap, with one BH family over every
-gene-direction pair. Every output includes the stopping records and the
-fitted normalization provenance.
+Both primary comparisons use the defaults: `direction="both"`, the linear
+scale, `pvalues="auto"`, `relative_error=0.2`, seed 1 and the 999,999-shuffle
+budget, with one BH family per test over the tested genes. Every output
+includes the stopping records and the fitted normalization provenance.
 
 The four breast subtype-versus-other-three contrasts use all eligible
 annotated tumours, one per patient. Normal-like and unknown labels are excluded
 only from those secondary contrasts. They use the same test-gene universe,
-tumour reference, seed and prespecified 99,999 cap. One additional BH family
-covers all four contrasts × both directions × all tested genes; with its 1e-5
-floor a discovery needs several genes at the floor together. This is an
-exploratory expression-label association analysis.
+tumour reference, seed and prespecified 99,999-shuffle budget. One additional
+BH family per test covers all four contrasts × all tested genes; with the
+shuffled floor of 10⁻⁵ a subset discovery needs several genes at the floor
+together. This is an exploratory expression-label association analysis.
 
 Prostate fusion-confirmed, expression-high, negative and unknown labels stay
 separate. SPINK1 is an expression-high comparator. The notebook reports observed
@@ -133,12 +133,9 @@ in the same patients, not an independent cohort. HER2-enriched is not
 synonymous with clinical HER2 positivity, nor basal-like with triple-negative
 disease.
 
-`bulk_shift` is a log2 median difference, and the subset columns describe the
-subsets each gene's walk learned, so a lowered bulk and a raised subset can
-coexist. The notebooks compare the learned ERG, ETV1, ETV4 and FLI1 subsets
+`mean_log2fc` is the fold of the group means, and the subset columns describe
+the cases that depart from that mean shift, so a lowered mean and a raised
+subset can coexist. The notebooks compare the ERG, ETV1, ETV4 and FLI1 subsets
 with the fusion annotations, and the ERBB2 and GRB7 subsets with GISTIC
-amplification calls; WADE never sees either. `padj_up` tests the upward area;
-it does not certify individual patients. With 52 prostate normals, a
-pure subset of k tumours above every normal gives an upward p-value near or
-above C(445, k) / C(497, k); the prostate notebook reports this value for its
-fusion markers.
+amplification calls; WADE never sees either. `subset_padj` tests whether every
+tumour could carry the mean shift; it does not certify individual patients.

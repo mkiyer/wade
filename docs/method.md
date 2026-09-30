@@ -1,123 +1,156 @@
 # WADE 0.2.0 method
 
+For each gene WADE measures two things and tests each: the **mean shift**, the
+signed area between the case and control quantile functions, and the **subset**,
+the cases that depart from that shift. This page gives the exact definitions;
+the [manual](manual.md) says how to use them and [validation](validation.md)
+what they were measured to do.
+
 ## Expression
 
-Fit label-independent size factors s_j on a declared normalization universe
-(RLE by default: genes positive in every fit sample, their geometric means,
-column medians of log ratios, centered to geometric mean one). The tested
-expression of gene g in sample j is
+Label-independent size factors s_j are fitted on a declared normalization
+universe (RLE by default: genes positive in every fit sample, their geometric
+means, column medians of log ratios, centered to geometric mean one). The test
+gene mask is fixed after fitting and never refits the factors.
 
-\[x_{gj}=c_{gj}/s_j \quad(\texttt{scale="linear"})
-\qquad\text{or}\qquad x_{gj}=\log_2(c_{gj}/s_j+1)\quad(\texttt{scale="log"}).\]
+Counts are discrete, and many samples share a count, above all zero. Each count
+c_gj therefore receives independent jitter u_gj ~ Uniform(0, 1), drawn from a
+stream seeded by the run's seed and the gene's row, so that it does not depend
+on chunking or on which other genes are tested. The tested expression is
 
-The test gene mask is fixed after fitting and never refits the factors.
+\[x_{gj}=(c_{gj}+u_{gj})/s_j \quad(\texttt{scale="linear"})
+\qquad\text{or}\qquad x_{gj}=\log_2\!\big((c_{gj}+u_{gj})/s_j+1\big)\quad(\texttt{scale="log2"}).\]
 
-## Areas
+The jitter spreads each count over its own unit, [c, c + 1). The subset test
+below moves every case by the mean shift; without jitter it would pull apart
+ties, zeros above all, that the observed data keep together.
 
-Let Q₁ and Q₀ be the empirical quantile functions of cases and controls, and
-F₁, F₀ their CDFs. The two areas are
+## The mean shift
 
-\[A_\uparrow=\int_0^1 \max\{Q_1(u)-Q_0(u),0\}\,du=\int \max\{F_0(x)-F_1(x),0\}\,dx,\]
-\[A_\downarrow=\int_0^1 \max\{Q_0(u)-Q_1(u),0\}\,du=\int \max\{F_1(x)-F_0(x),0\}\,dx.\]
+Let Q₁ and Q₀ be the empirical quantile functions of the n₁ cases and n₀
+controls. The signed area between them is exactly the difference in means,
 
-Both integrals describe the same region between the two curves, so each form
-is exact. A↑ + A↓ is the Wasserstein-1 distance and A↑ − A↓ is the difference
-in means. Quantiles where cases are lower add nothing to A↑ rather than
-subtracting from it, which is why a raised subset survives a lowered bulk: for
-controls [10, 10, 10, 10] and cases [2, 2, 2, 30], A↑ = 5, A↓ = 6, while the
-mean difference is −1.
+\[\int_0^1 \{Q_1(u)-Q_0(u)\}\,du=\bar x_1-\bar x_0,\]
 
-Sort the N pooled values; let d_k be the gap between sorted values k and k+1,
-and a_k the number of cases among the first k. With n₁ cases and n₀ controls,
-the scaled CDF difference over gap k is m_k = n₁k − N a_k, and
+for any group sizes, because an empirical quantile function is a step function
+whose integral is the group mean. Where cases are higher the area adds; where
+they are lower it subtracts. `mean_log2fc` reports it as a fold:
+log₂((x̄₁ + 1)/(x̄₀ + 1)) on the linear scale, x̄₁ − x̄₀ on the log2 scale.
 
-\[A_\uparrow=\frac{1}{n_1n_0}\sum_{k=1}^{N-1}\max(m_k,0)\,d_k,\qquad
-A_\downarrow=\frac{1}{n_1n_0}\sum_{k=1}^{N-1}\max(-m_k,0)\,d_k.\]
+## The mean test
 
-Each group keeps its own empirical mass; there is no common quantile grid,
-smoothing, trimming or interpolation. Ties have zero gaps.
+Under the null the labels are exchangeable. The difference in means is an
+increasing function of the cases' total A, the sum of n₁ of the gene's n values
+drawn without replacement, so its permutation p-value is a tail probability of
+A. `direction="both"` counts labellings whose total lies at least as far from
+its average n₁x̄ as the observed a, `"up"` those with A ≥ a, `"down"` those with
+A ≤ a.
 
-## Permutation test
+**Computed.** Independent Bernoulli selectors Z_i, conditioned on
+Σ Z_i = n₁, draw n₁ values without replacement, so (A, Σ Z_i) has the cumulant
+generating function K(s, t) = Σ_i log(1 + e^{s x_i + t}) up to a constant. With
+(ŝ, t̂) solving ∂K/∂s = a and ∂K/∂t = n₁ (Newton with backtracking on the
+convex φ(s, t) = K − s a − t n₁, to machine precision), Skovgaard's double
+saddlepoint gives
 
-Label shuffles preserve group sizes and, with strata, each stratum's case
-count. Every gene uses the same stream of shuffles, so results do not depend
-on chunking. The pooled values are sorted once per gene, and each shuffle
-yields both areas from one pass over the sorted values.
+\[P(A\ge a)\approx 1-\Phi(w)-\phi(w)\Big(\frac1w-\frac1u\Big),\quad
+w=\operatorname{sign}(\hat s)\sqrt{2\{\varphi(0,t_0)-\varphi(\hat s,\hat t)\}},\quad
+u=\hat s\sqrt{\det K''(\hat s,\hat t)\,/\,K_{tt}(0,t_0)},\]
 
-A shuffle counts as an exceedance when its area is at least the observed area
-times 1 − 100ε (a conservative tolerance for floating-point ties). Each
-direction has its own Besag–Clifford record: it stops at the h = 20th
-exceedance, drawn at shuffle T, with p = h/T, or it finishes the cap B with K
-exceedances and p = (K + 1)/(B + 1). The default cap is B = 999,999. Under
-exchangeability the rule is valid: the probability that p ≤ α is at most α
-at every attainable α ([Besag, §2.2.2](https://imsarchives.nus.edu.sg/oldwww/Programs/mcmc/files/besag_tl.pdf)).
-A direction that is not tested draws nothing and has no p-value.
+with t₀ = log(n₁/n₀) and K_tt(0, t₀) = n₁n₀/n. At the centre, 1/w − 1/u is
+0/0; its limit, the count-conditioned skewness κ₃/(6κ₂^{3/2}), is used once
+|ŝ| falls below ε^{1/3} (ε the machine precision), where the rounding of the
+difference meets the limit's own error. A total at the top of the reachable
+range has its exact chance, the labellings that take the n₁ largest values
+(ties included) over C(n, n₁); nothing is smaller. Two-sided p-values add the
+two tails.
+
+The p-value's error is estimated as the larger of two terms. One is the
+saddlepoint's own next term: the second-order correction of the joint density
+of (A, Σ Z) at the saddlepoint, ρ₄/8 − (2ρ₂₃² + 3ρ₁₃²)/24 in McCullagh's
+invariants of the cumulants of K, less the count's own λ₄/8 − 5λ₃²/24 at t₀.
+The other is the granularity of the exact distribution the saddlepoint
+smooths: with L = p·C(n, n₁) labellings at least as extreme, a smooth
+approximation can be off by about one of them, 1/L. A gene whose estimate
+exceeds `relative_error` is shuffled instead, so a small design shuffles the
+genes whose tail holds fewer than 1/`relative_error` labellings. All genes are
+shuffled when `strata` restrict the shuffles, since the representation above
+assumes free exchange.
+
+**Shuffled.** Label shuffles preserve the group sizes and, with strata, each
+stratum's case count; every gene sees the same stream, so results do not
+depend on chunking. A shuffle counts as an exceedance when its statistic
+reaches the observed one within a floating-point tolerance. Each gene stops at
+its h-th exceedance, h = ⌈1/relative_error²⌉, drawn at shuffle T, with
+p = h/T, whose relative standard error is about 1/√h; or it finishes the budget
+B = `max_permutations` with K exceedances and p = (K + 1)/(B + 1). Under
+exchangeability this sequential rule is valid: P(p ≤ α) ≤ α at every attainable
+α ([Besag, §2.2.2](https://imsarchives.nus.edu.sg/oldwww/Programs/mcmc/files/besag_tl.pdf)).
+`pvalues="permutation"` shuffles every gene.
+
+## The subset
+
+The mean shift, carried by every case alike, predicts the case quantiles: the
+same fold on count + 1 on the linear scale, the same difference on the log2
+scale,
+
+\[\hat Q_1(u)=f\{Q_0(u)+1\}-1,\ f=\frac{\bar x_1+1}{\bar x_0+1}
+\qquad\text{or}\qquad \hat Q_1(u)=Q_0(u)+(\bar x_1-\bar x_0),\]
+
+and in both cases ∫Q̂₁ = x̄₁. Walking up the case quantiles, the running
+departure from that prediction at the boundary after the k-th case,
+
+\[R(k)=\int_0^{k/n_1}\{Q_1(u)-\hat Q_1(u)\}\,du,\qquad k=1,\dots,n_1-1,\]
+
+starts and ends at zero, falls through cases that carry less than their share
+and rises through cases that carry more. Each R(k) is a prefix sum of the cases
+less the integral of the prediction, so a walk costs O(n). Boundaries fall only
+between distinct case values (equal within 100 ulps). The walk's lowest point,
+the highest boundary among the minima within rounding, splits the cases in two;
+if R never falls below the rounding of its sums, the gene has no subset. The
+depth −min R is the departure the split carries, a deficit below the cut
+matched by an excess above it.
+
+The subset is the smaller side of the split, which departs further per case:
+the cases above the cut (`"up"`, above the mean shift) or below it (`"down"`);
+equal sides count as up. `subset_fraction` is its share of the cases, and
+`subset_log2fc` its mean against the prediction's mean over the same quantiles:
+log₂ of their ratio on count + 1 on the linear scale, their difference on the
+log2 scale. One walk gives one split, so one gene reports one subset; a raised
+and a lowered subset in the same gene would need a second split.
+
+## The subset test
+
+The null is that every case carries the mean shift. Each shuffle removes the
+observed shift from the cases ((x + 1)/f − 1, or x − (x̄₁ − x̄₀)), pools them with
+the controls, draws new labels, applies the shift to the new cases and walks
+again. `direction="both"` counts shuffles whose depth reaches the observed
+depth; `"up"` scores each walk's depth signed by its subset's side (positive
+above the mean shift) and counts those at least the observed signed depth;
+`"down"` the reverse. Stopping and p-values follow the shuffled rule above; a
+gene without a subset has p = 1. The shift is estimated from the data, so the
+test is approximate; the jitter above is what keeps it calibrated at low counts
+([validation](validation.md#the-subset-test-and-jitter)).
 
 ## Hypothesis families
 
-`direction="both"` is a discovery hypothesis. Both directions are tested from
-the same shuffles, and one BH adjustment covers every tested gene-direction
-pair (2G hypotheses for G tested genes). `direction="up"` or `"down"` is a
-declared one-directional hypothesis with one BH adjustment over the G tested
-genes. Excluded genes have no p-values or q-values in either case.
-
-The null is exchangeability of the labels, equivalently equality of the two
-expression distributions. A pure downward shift leaves A↑ near zero, so it
-rarely produces an upward call; the confirmation measured no wrong-direction
-calls on whole-cohort shifts. BH is not guaranteed under arbitrary dependence;
-the validation includes correlated gene modules.
-
-## Descriptions
-
-The bulk shift is median(case) − median(control) of log2(count/s + 1), with
-the ordinary average at even group sizes.
-
-**Learned subsets.** Rank a gene's N samples, and let a cut c place the c
-lowest below it (c = 1, …, N−1), allowing cuts only between distinct values
-(equal within 100 ulps). With a_c cases and b_c controls above the cut and
-k_c = a_c + b_c,
-
-\[z_c=\frac{a_c/n_1-b_c/n_0}{\sqrt{k_c(N-k_c)/\{n_1n_0(N-1)\}}},\]
-
-the excess of cases above the cut divided by its standard deviation when k_c
-labels are drawn at random. The upward subset is the cases above the cut with
-the largest positive z_c (the highest such cut on ties); the downward subset is
-the cases below the cut with the most negative z_c (the lowest on ties). A
-subset must lie on its own side of the controls: a direction with no positive
-(negative) z, or whose subset median is not above (below) the control median,
-is empty. The second condition removes a peak at the end of the ranking, as
-when a few low controls lift z just above zero for nearly every case.
-`subset_*_fraction` is the subset's share of cases and `subset_*_log2fc` its
-median minus the control median. The walk depends on ranks only, so both scales
-give the same subsets. It sees how cases and controls interleave, not the gaps
-between values: among cuts above every control, z rises with each case taken
-in, so a boundary never falls between two cases that both lie above every
-control, and a high mode within raised cases gets no boundary of its own.
-It is the running sum of gene set enrichment analysis, standardized as in
-higher-criticism thresholding (Donoho & Jin, 2004): without standardization the
-peak drifts into the bulk, and the cumulative quantile area peaks at the bottom
-whenever the rest of the cases match the controls (see
-[validation](validation.md#learned-subsets)).
-
-These descriptions use log2 whatever the tested scale, so they are comparable
-across genes. They are summaries, not tests or prevalence estimates.
+The mean test and the subset test each have one BH adjustment over the tested
+genes. Excluded genes have no p-values or q-values. BH is not guaranteed under
+arbitrary dependence; the validation includes correlated gene modules.
 
 ## Implementation
 
-The native Rust kernel and the readable NumPy path perform the same ordered
-sums and give identical stopping records; tests check both against an exact
-rational-arithmetic oracle that integrates the quantile functions instead.
-Genes are processed in bounded chunks, with no genes × permutations matrix.
-Sorting is O(G N log N); after that, work is proportional to the shuffles each
-gene and direction actually uses, so strongly changed genes dominate runtime.
+The walk is native code (`rust/src/lib.rs`), one implementation for the
+observed split and for every shuffle, run over genes in parallel. The
+saddlepoint is NumPy, vectorized over genes. Genes are processed in bounded
+chunks with no genes × shuffles matrix, and the jitter, the shuffle stream and
+the saddlepoint depend only on the gene, the design and the seed, so neither
+chunking nor threads change an answer.
 
 ## Limits
 
-Within one gene, k cases above every control carry evidence worth
-C(n₁, k) / C(n₁ + n₀, k), the chance that a random relabelling places all of
-them among the cases; when the other cases are no higher than the controls, the
-upward p-value stays near or above it, whatever their amplitude. Borrowing information
-across genes to judge how unusual an amplitude is would need a model of
-transcriptome-wide variation; this release does not attempt it. Batch or depth
-confounded with the groups breaks exchangeability, which neither normalization
-nor permutation repairs.
+Exchangeability is assumed: batch or depth confounded with the groups breaks
+it, and neither normalization nor permutation repairs it. The subset test
+plugs in the estimated mean shift. A subset is a description of where cases
+depart from the mean shift, not a set of individually significant patients or
+a prevalence estimate.

@@ -1,9 +1,9 @@
 # WADE 0.2.0 manual
 
-WADE tests, gene by gene, whether case expression is raised above or lowered
-below a control cohort, in the whole cohort or in a subset of patients. The
-[method](method.md) gives exact definitions; [validation](validation.md) gives
-the measured performance.
+For every gene WADE reports two things and tests each: the **mean shift**
+between cases and controls, and the **subset** of cases that departs from it.
+The [method](method.md) gives exact definitions; [validation](validation.md)
+gives the measured performance.
 
 ## Before running
 
@@ -68,144 +68,127 @@ filter keep their descriptions but have no test (`status == "filtered"`).
 `wade_contrast(data, case_ids, control_ids, normalization=norm)` selects
 groups by sample ID and keeps an existing fit.
 
+## What WADE reports
+
+**The mean shift** is the signed area between the case and control quantile
+functions, which is exactly the difference in group means. `mean_log2fc`
+states it as a log2 fold; `mean_pvalue` and `mean_padj` test it.
+
+**The subset** is found from the mean shift itself. If every case carried the
+mean shift alike (the same fold on count + 1, or on the log2 scale the same
+difference), each case quantile would sit at a predicted level. Walking up the
+cases, WADE tracks how far they have fallen below or risen above those
+predictions in total; the walk's lowest point splits the cases into those that
+carry less than their share and those that carry more. The smaller side, which
+departs further per case, is the subset: above the mean shift
+(`subset_log2fc > 0`) or below it (`subset_log2fc < 0`). `subset_fraction` is
+its share of the cases. `subset_pvalue` and `subset_padj` test the null that
+every case carries the mean shift.
+
+Any combination can occur: a mean shift up with a subset further up (an
+amplified subgroup among raised tumours), a mean shift down with a subset
+raised above it (a fusion-driven subgroup in tumours that otherwise lose the
+gene), or either with a lowered subset. No subset size is chosen in advance,
+and a walk over noise also has a lowest point, so read the subset with its
+q-value. One gene reports one subset; a raised and a lowered subset in the same
+gene share one split.
+
 ## Direction and scale
 
 ```python
-wade.wade(data, cond)                   # discovery: both directions, one FDR family
-wade.wade(data, cond, direction="up")   # a declared upward hypothesis
-wade.wade(data, cond, scale="log")      # areas on log2(count / size_factor + 1)
+wade.wade(data, cond)                    # both tests two-sided
+wade.wade(data, cond, direction="up")    # is the gene higher in cases, as a whole or in a subset?
+wade.wade(data, cond, scale="log2")      # tests log2(count / size_factor + 1)
 ```
 
-**`direction="both"`** tests both areas in one pass with shared permutations,
-and BH covers every tested gene-direction pair (2 × genes hypotheses); a gene
-can be called up, down, or both. **`direction="up"`** or **`"down"`** tests one
-direction; BH covers the tested genes and the other direction is not computed. Declaring one direction
-halves the family and saves the permutations the other direction would use.
-Do not run "both" and then report one direction's q-values as if it had been
-declared.
+**`direction`** sets the alternative of both tests. `"both"` (default) tests
+the mean shift two-sided and counts subsets on either side. `"up"` asks whether
+cases are higher: a mean shift up, and a subset above the mean shift. `"down"`
+asks the reverse. A one-sided subset test compares the observed subset only
+with chance subsets on its own side. Declare the direction before looking; do
+not run `"both"` and report one side as if it had been declared.
 
-**`scale="linear"`** integrates normalized counts. A subset 100× above normal
-dominates the area, which is what makes linear areas sensitive to subsets.
-**`scale="log"`** integrates log2 expression, which compresses large subsets
-and weights relative changes. Descriptions and plots use log2 on either scale.
+**`scale="linear"`** (default) tests `count / size_factor`. A subset far above
+normal dominates the linear mean and the linear walk, which is what makes the
+linear scale sensitive to raised subsets. **`scale="log2"`** tests
+`log2(count / size_factor + 1)`, where a halving weighs as much as a doubling;
+it is the better scale for lowered subsets and whole-cohort decreases. The two
+scales can disagree about the same gene: a strong raised subset can pull the
+linear mean up while most cases fall, which the log2 mean reports as a
+decrease. Choose the scale before running.
 
-The linear scale is asymmetric. An increase is unbounded, but a decrease can
-remove at most the control level, and a large raised subset widens the
-permutation spread of both areas. So the lowered bulk beside a raised subset
-is rarely called down on the linear scale: the confirmation called 2 of 960
-such genes down, and in the development comparison linear areas called 7 of 80 such
-genes down where log areas called 56. Whole-cohort decreases are detected on
-either scale. When decreases, or the bulk beside a subset, are the question,
-declare `scale="log"`.
+## P-values
 
-## Permutations and resolution
+Every p-value is estimated to about `relative_error` (default 0.2).
 
-Each gene and direction stops at its 20th permutation at least as extreme as
-the observed area, giving p = 20 / draws, or finishes the cap B and gives
-p = (exceedances + 1) / (B + 1). The default B = 999,999 resolves p down to
-10⁻⁶. BH's first discovery among m hypotheses needs p ≤ 0.05 / m, so the
-default can make an isolated discovery among up to 50,000 hypotheses (25,000
-genes with `direction="both"`). The manifest's `minimum_discovery_rank` says
-how many genes must sit at the floor before any can pass.
+- **The subset test is shuffled.** Label shuffles preserve group sizes and any
+  strata. Each gene stops at its ⌈1/relative_error²⌉-th exceedance (25 at the
+  default), whose count estimates p to that relative standard error, or at
+  `max_permutations` shuffles.
+- **The mean test is computed** with `pvalues="auto"` (default): the exact
+  permutation distribution of the cases' total has a double-saddlepoint tail,
+  with no shuffles and no floor above the chance of the single most extreme
+  labelling. Its error is estimated from the saddlepoint's own next term and
+  from how coarse the exact distribution is there: a smooth approximation
+  cannot be much closer than one labelling among those in the tail. A gene
+  whose estimate exceeds `relative_error` is shuffled instead, as are all genes
+  when `strata` are given. In a small design this shuffles the genes far enough
+  in the tail that only a handful of labellings reach them.
+- **`pvalues="permutation"`** shuffles every p-value, including the mean test's.
 
-Monte Carlo p-values near a threshold vary with the seed. Fix the seed and cap
-before looking, and never rerun borderline genes until they pass. Genes with
-strong differences use the whole budget, so runtime grows with the number of
-changed genes; a smaller `max_permutations` is fine for exploration.
+A smaller `relative_error` buys precision with shuffles: each shuffled gene
+that stops early needs about 1/(relative_error² · p) of them. The default
+budget, `max_permutations=999_999`, lets a shuffled p-value reach 10⁻⁶, so an
+isolated BH discovery at q ≤ 0.05 stays possible among up to 50,000 genes. The
+manifest's `minimum_discovery_rank` says how many genes must sit at the
+shuffled floor before any can pass. Genes with strong subsets use the whole
+budget, so they dominate runtime; a smaller budget is fine for exploration.
+
+Shuffled p-values near a threshold vary with the seed. Fix the seed, budget and
+precision before looking, and never rerun borderline genes until they pass.
 
 ```python
-result = wade.wade(data, cond, strata=batch_ids, max_permutations=999_999, seed=1)
+result = wade.wade(data, cond, strata=batch_ids, seed=1)
 ```
 
 `strata` restricts shuffles to exchangeable blocks, preserving each block's
 case count. A block with only cases or only controls contributes no freedom;
-a design with no possible exchange is rejected. `gene_chunk` and `backend`
-change memory and speed, never the answer.
+a design with no possible exchange is rejected. `gene_chunk` changes memory,
+never the answer.
 
-## How many controls
+## Jitter
 
-Within one gene, the controls limit the evidence for a raised subset. A
-random relabelling puts k given samples all among the cases with probability
-
-    C(n_case, k) / C(n_case + n_control, k)
-
-When k cases lie above every control and the other cases are no higher than
-the controls (a pure subset), the upward p-value stays near or above this
-value, however large the fold change; other cases that are also raised add
-evidence beyond it. Cases a pure subset needs above every control to reach a
-given p-value:
-
-| Cases : controls | p ≤ 10⁻² | p ≤ 10⁻⁴ | p ≤ 2.5 × 10⁻⁶ |
-| --- | ---: | ---: | ---: |
-| 250 : 250 | 7 | 14 | 19 |
-| 50 : 500 | 2 | 4 | 6 |
-| 445 : 52 (TCGA prostate) | 40 | 77 | 104 |
-| 971 : 112 (TCGA breast) | 42 | 82 | 112 |
-| 445 : 302 (prostate + 250 normals) | 9 | 18 | 25 |
-
-This is information, not method: 52 normals with none high cannot rule out a
-few percent of high normals. In tumour/normal comparisons where thousands of
-genes change, BH thresholds are lenient and ranking by the descriptions
-matters more than calling. For recurrent subsets, add controls: a larger
-normal reference processed compatibly, or strata that make external normals
-exchangeable within blocks.
+Each count receives independent Uniform(0, 1) jitter before normalization,
+drawn from a stream seeded by the run's seed and the gene, so no two values
+tie. Counts are discrete, and many samples share one, above all zero; the
+subset test's null moves every case by the mean shift and would pull such ties
+apart, which the observed data never do. Without jitter the subset test is
+anti-conservative for low-count genes in unbalanced designs
+([validation](validation.md#the-subset-test-and-jitter)). The jitter moves a
+count by less than one, so it barely changes well-expressed genes; for a gene
+full of zeros, which zeros fall inside a subset depends on the seed.
 
 ## Read, plot and export
 
 | Column | Meaning |
 | --- | --- |
-| `area_up`, `area_down` | Exact areas on the tested scale; `area_up − area_down` is the mean difference |
-| `pvalue_up`, `pvalue_down` | Permutation p-values; NaN for an untested direction or gene |
-| `padj_up`, `padj_down` | BH q-values in the declared family |
-| `bulk_shift` | Case minus control median of log2(count / size factor + 1) |
-| `subset_up_fraction` | Share of cases in the learned upward subset |
-| `subset_up_log2fc` | That subset's median minus the control median (log2) |
-| `subset_down_fraction`, `subset_down_log2fc` | The same for the learned downward subset |
+| `mean_log2fc` | The mean shift: log2((case mean + 1)/(control mean + 1)) on the linear scale, the difference in mean log2 expression on the log2 scale |
+| `mean_pvalue`, `mean_padj` | Its p-value and BH q-value over the tested genes |
+| `subset_fraction` | The subset's share of the cases (0 when every case carries the mean shift) |
+| `subset_log2fc` | The subset's fold over the mean shift's prediction for the same cases: positive above it, negative below |
+| `subset_pvalue`, `subset_padj` | The test that every case carries the mean shift, and its q-value |
 | `status` | `tested`, `filtered` or `all_zero` |
 
-Areas are in the units of the tested scale and are not comparable across genes;
-use the log2 descriptions to compare and rank. A negative `bulk_shift` with a
-small `subset_up_fraction`, a large `subset_up_log2fc` and a small `padj_up` is
-a raised subset above a lowered bulk. Descriptions have no p-values.
-
-### Learned subsets
-
-No subset size is chosen in advance. Each gene's samples are ranked, cases and
-controls together, and a walk steps down the ranking. At each step it takes the
-fraction of cases above minus the fraction of controls above, divided by the
-standard deviation that difference would have if the labels were random. The
-cases at or above the walk's peak form the upward subset; the cases at or below
-its lowest point form the downward subset. The walk uses only ranks, so the
-scale does not change it; ties never straddle a boundary. A subset must lie on
-its own side of the controls: an upward subset whose median is not above the
-control median is reported as empty, and likewise downward.
-
-- **Read subsets with the q-value.** A walk over noise also has a peak: on
-  unchanged genes the upward subset averaged a third of the cases, and was
-  empty for only about one gene in six.
-- **A raised subset over a lowered or unchanged bulk** is where the walk is
-  precise. With 250 cases and 250 controls it recovered planted 10% subsets
-  with precision 0.88–1.00 (see [validation](validation.md#learned-subsets)).
-- **With few controls** the boundary is uncertain, and a subset over an
-  unchanged bulk is over-called (precision about 0.5 with 50 controls).
-- **A whole-cohort shift** gives the most-shifted part of the cohort (31–89% of
-  cases in the confirmation designs), not every case; `bulk_shift` describes
-  the cohort-wide change.
-- **A high mode inside a raised majority** gets no boundary of its own: the
-  walk compares cases with controls, not cases with each other. In TCGA breast
-  tumours ERBB2's upward subset is the 588 of 971 raised above most normals; it
-  holds 106 of the 107 amplified tumours and 465 that are not amplified (see
-  [validation](validation.md#on-tcga-tumours)).
-- The subset is a description of where cases concentrate, not a set of
-  individually significant patients or a prevalence estimate.
+`result.mean_permutations` and `result.subset_permutations` record the
+shuffles each test used (0 for a computed mean test); the exceedances sit
+beside them.
 
 ```python
-result.subset("ETV4", "up")              # learned members, log2 boundary, share and fold
-result.subset("ERBB2", "up", cutoff=16)  # the cases at or above log2 16, a level read off the plot
-result.gene_detail("ETV4")        # exact quantile intervals; .area_up and .area_down
+result.subset("ETV4")             # the subset's cases, its side, share, fold, p-value and q-value
+result.gene_detail("ETV4")        # exact quantile intervals; .area is the signed area
 result.plot_gene("ETV4")          # ECDFs and quantile differences on log2
-result.plot_volcano(direction="up", label=["ETV1", "ETV4"])
-result.plot_patterns(direction="down")
+result.plot_volcano(label=["ETV1", "ETV4"])
+result.plot_patterns()            # each gene's subset share against its fold
 wade.write_results(result, "results.tsv")   # also writes results.manifest.json
 ```
 
@@ -220,9 +203,13 @@ size-factor medians and every stopping record.
 - Samples must be exchangeable under the null. Batch or depth confounded with
   the groups violates this; normalization and strata help only where the
   design allows.
-- A small `padj_up` means the upward area is larger than label exchange
-  explains. It does not say which patients are outliers, that a subset is
-  clinically separable, or how prevalent it is.
+- A small `subset_padj` means the cases depart from the mean shift more than
+  relabelling explains. It does not say which patients are individually
+  outliers, that a subset is clinically separable, or how prevalent it is.
+- The subset test plugs in the estimated mean shift, which makes it
+  approximate; its calibration is measured, not guaranteed.
+- In large, heterogeneous cohorts nearly every gene's cases depart from a
+  uniform shift (tumour purity alone does it), so the subset test rejects
+  almost everywhere. There the subset's fold and share, not its q-value, rank
+  the genes.
 - Very low counts carry little information on either scale; filter them.
-- A pure subset cannot beat the within-gene bound above without borrowing
-  information across genes, which this release does not do.

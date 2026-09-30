@@ -7,7 +7,7 @@ build-backend = "maturin"
 # project); the import name is `wade`.
 name = "wade-rnaseq"
 version = "0.2.0"
-description = "Directional Wasserstein-area tests for RNA-seq biomarker discovery: bulk shifts and raised or lowered subsets"
+description = "Wasserstein-area differential expression for RNA-seq biomarker discovery: each gene's mean shift, and the subset of cases that departs from it"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-only"
@@ -51,5 +51,4 @@ pythonpath = ["research"]
 norecursedirs = ["archive", ".release", "target", ".git"]
 markers = [
     "validation: method-validation simulations, not parity",
-    "kernel: requires the compiled Rust kernel",
 ]

@@ -1,8 +1,9 @@
 """Confirm the selected public procedure on fresh transcriptome-scale seeds.
 
 Runs only the public API, wade.wade(direction="both", scale="linear"), plus a
-one-sided Wilcoxon comparator on the same normalized counts, test mask and
-BH family. Calls are scored against each profile's intended direction.
+two-sided Wilcoxon comparator on the same normalized counts, test mask and BH
+family. Mean calls are scored against each profile's intended direction, and
+subset calls against the profiles that carry no subset.
 
     PYTHONPATH=src:research python research/confirm.py --output .release/0.2.0/confirmation
 """
@@ -25,15 +26,20 @@ PROTOCOL = ROOT / "research/protocols/confirmation.json"
 METHODS = ("wade", "wilcoxon")
 
 
+def sided(q, sign):
+    """A gene's q-value in the column of its call's side (up, down); NaN in the other."""
+    return np.c_[np.where(sign > 0, q, np.nan), np.where(sign < 0, q, np.nan)]
+
+
 def wilcoxon(x, cond, tested):
-    """One-sided rank-sum p-values (columns up, down) and one joint BH family."""
-    p = np.full((len(x), 2), np.nan)
+    """Two-sided rank-sum p-values, one BH family over the tested genes, q-values by side."""
+    p, sign = np.full(len(x), np.nan), np.zeros(len(x))
     case, control = x[tested][:, cond == 1], x[tested][:, cond == 0]
-    for d, alternative in enumerate(("greater", "less")):
-        with np.errstate(invalid="ignore", divide="ignore"):
-            p[tested, d] = mannwhitneyu(case, control, alternative=alternative, axis=1, method="asymptotic").pvalue
-    p[tested] = np.nan_to_num(p[tested], nan=1.0)     # an all-tied gene carries no evidence
-    return p, wade.bh_adjust(p.ravel()).reshape(p.shape)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        test = mannwhitneyu(case, control, alternative="two-sided", axis=1, method="asymptotic")
+    p[tested] = np.nan_to_num(test.pvalue, nan=1.0)   # an all-tied gene carries no evidence
+    sign[tested] = test.statistic - case.shape[1] * control.shape[1] / 2
+    return p, sided(wade.bh_adjust(p), sign)
 
 
 def run_one(cfg, setting, folder):
@@ -43,28 +49,39 @@ def run_one(cfg, setting, folder):
     keep = wade.filter_counts(counts, min_count=3, min_samples=2)
     start = time.time()
     res = wade.wade(counts, cond, normalization=norm, test_genes=keep, direction="both", scale="linear",
+                    pvalues=cfg["procedure"]["pvalues"], relative_error=cfg["procedure"]["relative_error"],
                     max_permutations=cfg["procedure"]["max_permutations"], seed=setting["permutation_seed"])
     seconds = time.time() - start
     wp, wq = wilcoxon(res.expression, cond, res.tested)
     np.savez_compressed(folder / f"{setting['id']}.npz", profile=data["profile"], baseline_mean=data["baseline_mean"],
                         altered=data["altered"], tested=res.tested, size_factors=norm.size_factors,
-                        wade_area=np.c_[res.area_up, res.area_down], wade_p=np.c_[res.pvalue_up, res.pvalue_down],
-                        wade_q=np.c_[res.padj_up, res.padj_down], wade_permutations=res.n_permutations,
-                        wilcoxon_p=wp, wilcoxon_q=wq)
+                        wade_mean=res.mean_log2fc, wade_p=res.mean_pvalue, wade_q=sided(res.mean_padj, res.mean_log2fc),
+                        wade_permutations=res.mean_permutations, wade_subset=np.c_[res.subset_fraction, res.subset_log2fc],
+                        wade_subset_q=sided(res.subset_padj, res.subset_log2fc), wilcoxon_p=wp, wilcoxon_q=wq)
     return dict(id=setting["id"], seconds=round(seconds, 1), tested=int(res.tested.sum()),
-                capped=int((res.n_permutations == cfg["procedure"]["max_permutations"]).sum()))
+                shuffled_mean=int((res.mean_permutations > 0).sum()))
 
 
 def summarize(cfg, folder):
-    """Calibration per matrix, and intended-direction power per profile and abundance."""
+    """Calibration per matrix, intended-direction power per profile and abundance, and the subset test's."""
     alpha, gen = cfg["procedure"]["alpha"], cfg["generator"]
-    calibration, power = [], {}
+    calibration, power, subsets = [], {}, {}
     for setting in datasets(cfg):
         path = folder / f"{setting['id']}.npz"
         if not path.exists():
             continue
         z = np.load(path)
         design = f"{setting['n_case']}:{setting['n_control']}"
+        called = z["wade_subset_q"] <= alpha
+        none = np.isin(z["profile"], cfg["no_subset"])
+        calls, false = int(called.sum()), int(called[none].sum())
+        calibration.append(dict(design=design, panel=setting["panel"], biology=setting["biology"], method="subset",
+                                calls=calls, false=false, fdp=false / max(calls, 1)))
+        for profile in gen["profiles"] if setting["panel"] == "mixed" else ():
+            for mean in gen["profile_means"]:
+                genes = (z["profile"] == profile) & (z["baseline_mean"] == mean)
+                tally = subsets.setdefault((design, profile, mean), np.zeros(3, int))
+                tally += [genes.sum(), called[genes, 0].sum(), called[genes, 1].sum()]
         for method in METHODS:
             called = z[f"{method}_q"] <= alpha
             calls, false = int(called.sum()), int(called[~z["altered"]].sum())
@@ -80,6 +97,8 @@ def summarize(cfg, folder):
     intended = {p: d for d, profiles in cfg["intended_direction"].items() for p in profiles}
     power_rows = [dict(design=d, method=m, profile=p, mean=mu, intended=intended[p], genes=int(n),
                        up=u / n, down=v / n) for (d, m, p, mu), (n, u, v) in power.items()]
+    power_rows += [dict(design=d, method="subset", profile=p, mean=mu, intended=intended[p], genes=int(n),
+                        up=u / n, down=v / n) for (d, p, mu), (n, u, v) in subsets.items()]
     for name, rows in (("calibration", calibration), ("power", power_rows)):
         if rows:
             with (folder / f"{name}.tsv").open("w", newline="") as stream:
@@ -90,10 +109,10 @@ def summarize(cfg, folder):
 
 
 def report(calibration, power_rows):
-    print("\nCalibration (alpha 0.05, gene-direction calls):")
+    print("\nCalibration (alpha 0.05; subset: calls on genes with no planted subset):")
     print(f"{'design':>8} {'method':>9} | {'null: any call':>15} | {'mixed: mean FDP':>15} {'mean calls':>10}")
     for design in dict.fromkeys(r["design"] for r in calibration):
-        for method in METHODS:
+        for method in METHODS + ("subset",):
             rows = [r for r in calibration if r["design"] == design and r["method"] == method]
             null = [r["calls"] > 0 for r in rows if r["panel"] == "complete_null"]
             mixed = [r for r in rows if r["panel"] == "mixed"]
@@ -105,7 +124,7 @@ def report(calibration, power_rows):
         print(f"  {design}")
         for profile in dict.fromkeys(r["profile"] for r in power_rows):
             cells = []
-            for method in METHODS:
+            for method in METHODS + ("subset",):
                 rows = [r for r in power_rows if (r["design"], r["profile"], r["method"]) == (design, profile, method)
                         and r["mean"] >= 5]
                 n = sum(r["genes"] for r in rows)
@@ -116,7 +135,7 @@ def report(calibration, power_rows):
 
 
 def provenance(cfg_text):
-    files = sorted(ROOT.glob("src/wade/**/*.py")) + [ROOT / "rust/src/lib.rs", Path(__file__)]
+    files = sorted(ROOT.glob("src/wade/**/*.py")) + [Path(__file__)]
     head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     return dict(wade_version=wade.__version__, git_head=head, protocol_sha256=hashlib.sha256(cfg_text.encode()).hexdigest(),
                 sources={str(f.relative_to(ROOT)): hashlib.sha256(f.read_bytes()).hexdigest() for f in files})

@@ -1,5 +1,5 @@
 ---
-title: "WADE: raised and lowered expression, in the whole cohort or a subset"
+title: "WADE: the mean shift, and the subset that departs from it"
 subtitle: "WADE 0.2.0 · demonstration on simulated counts"
 format:
   html:
@@ -18,11 +18,11 @@ execute:
   echo: false
 ---
 
-WADE asks, for each gene, whether case expression is raised above or lowered
-below the controls, and measures each direction as an area between the case and
-control quantile functions. This notebook plants known patterns in simulated
-counts and shows how each one reads. It demonstrates behavior; the
-[validation](../docs/validation.md) page measures performance.
+For each gene WADE measures the mean shift between cases and controls, the
+signed area between their quantile functions, and finds the subset of cases
+that departs from that shift. It tests both. This notebook plants known
+patterns in simulated counts and shows how each one reads. It demonstrates
+behavior; the [validation](../docs/validation.md) page measures performance.
 
 ## A complete workflow
 
@@ -42,15 +42,17 @@ OUT = output_dir("demo")
 rng = np.random.default_rng(811)
 n_case = n_control = 200
 cond = np.r_[np.ones(n_case,int),np.zeros(n_control,int)]
-marker_names = ["Bulk increase", "Raised subset", "Raised subset, lowered bulk", "Opposing subsets", "Unchanged"]
+marker_names = ["Mean increase", "Raised subset", "Raised subset, halved majority", "Lowered subset",
+                "Opposing subsets", "Unchanged"]
 names = [f"background_{j}" for j in range(800)] + marker_names
 mean = np.exp(rng.uniform(np.log(5),np.log(500),len(names)))
-mean[-5:] = 40
+mean[-6:] = 40
 mu = np.repeat(mean[:,None],len(cond),axis=1)
-mu[-5,:n_case] *= 2          # every case doubled
-mu[-4,:20] *= 32             # 10% of cases raised 32-fold
-mu[-3,:n_case] *= .5         # every case halved ...
-mu[-3,:20] *= 64             # ... except 10%, now 32-fold above the controls
+mu[-6,:n_case] *= 2          # every case doubled
+mu[-5,:20] *= 32             # 10% of cases raised 32-fold
+mu[-4,:n_case] *= .5         # every case halved ...
+mu[-4,:20] *= 64             # ... except 10%, now 32-fold above the controls
+mu[-3,:40] *= .05            # 20% of cases cut twentyfold
 mu[-2,:50] *= 3              # 25% of cases tripled
 mu[-2,50:100] *= .1          # another 25% cut tenfold
 sf = 2**rng.uniform(-.5,.5,len(cond))
@@ -59,9 +61,9 @@ data = wade.as_counts(counts,gene_names=names)
 np.savez_compressed(OUT / "simulation.npz", counts=counts, cond=cond, genes=np.asarray(names), known_factors=sf)
 ```
 
-Normalization is fitted once; the filter chooses tested genes without refitting.
-The default tests both directions on normalized counts, with one false
-discovery family over every gene-direction pair.
+Normalization is fitted once, and the filter chooses the tested genes without
+refitting. The defaults test both questions two-sided on normalized counts,
+each with its own false discovery family over the tested genes.
 
 ```{python}
 #| label: simple-workflow
@@ -77,83 +79,123 @@ _ = wade.write_results(result, OUT / "all-genes.tsv")
 #| label: marker-results
 #| output: asis
 markdown_table(result.to_frame().filter(pl.col("gene").is_in(marker_names)).select(
-    "gene","padj_up","padj_down","bulk_shift","subset_up_fraction","subset_up_log2fc","subset_down_fraction"),
+    "gene","mean_log2fc","mean_padj","subset_fraction","subset_log2fc","subset_padj"),
     OUT, "marker-results")
 ```
 
 ## How each pattern reads
 
-`area_up` integrates the quantiles where cases are higher and `area_down` those
-where they are lower; their difference is the mean difference. `bulk_shift` is
-the difference in log2 medians. The subset columns come from a walk down the
-pooled ranking of samples: at each step it compares the fraction of cases above
-with the fraction of controls above, in units of that difference's noise, and
-the peak marks where cases are most enriched. `subset_up_fraction` is the share
-of cases at or above the peak, and `subset_up_log2fc` their median over the
-control median; the lowest point of the same walk gives the downward subset.
-Nothing is chosen in advance. A raised subset above a lowered bulk has a
-negative `bulk_shift`, a small `subset_up_fraction` with a large fold, and is
-called up: the lowered majority does not cancel it.
+`mean_log2fc` is the mean shift, the signed area between the quantile
+functions: exactly the difference in group means, as a log2 fold. The subset
+comes from the same shift. If every case carried it alike, each case quantile
+would sit at a predicted level; walking up the cases, the running departure
+from those predictions falls through cases that carry less than their share and
+rises through cases that carry more, and its lowest point splits them. The
+smaller side, which departs further per case, is the subset. `subset_log2fc` is
+its fold over the prediction: positive above the mean shift, negative below.
+Nothing is chosen in advance.
 
 ```{python}
-#| label: fig-demo-bulk
-#| fig-cap: "Every case doubled: the whole case distribution moves right, so the quantile difference is positive everywhere and only the upward area is called."
-result.plot_gene("Bulk increase")
+#| label: fig-demo-mean
+#| fig-cap: "Every case doubled: the whole case distribution moves right. The mean shift is up, and every case carries it, so no subset departs from it."
+result.plot_gene("Mean increase")
 ```
 
 ```{python}
 #| label: fig-demo-subset
-#| fig-cap: "10% of cases raised 32-fold: the median barely moves, and the walk's peak (dashed line) separates the raised cases from the rest."
+#| fig-cap: "10% of cases raised 32-fold: the linear mean rises with them, and the raised cases stand far above what that shift predicts for them."
 result.plot_gene("Raised subset")
 ```
 
 ```{python}
 #| label: fig-demo-crossing
-#| fig-cap: "Most cases halved while 10% sit 32-fold above the controls. The quantile difference is negative for the bulk and large and positive at the top."
-result.plot_gene("Raised subset, lowered bulk")
+#| fig-cap: "Most cases halved while 10% sit 32-fold above the controls. The quantile difference is negative for most cases and large and positive at the top; on the linear scale the raised tenth still pulls the mean up."
+result.plot_gene("Raised subset, halved majority")
 ```
 
-The walk learns both subsets of this gene, with no fraction given to it: the
-raised 10% up and the lowered majority down.
+The raised tenth is this gene's subset, found with no fraction given to it:
 
 ```{python}
-#| label: learned-subsets
+#| label: learned-subset
 #| echo: true
-up = result.subset("Raised subset, lowered bulk", "up")
-down = result.subset("Raised subset, lowered bulk", "down")
-len(up.samples), up.fraction, round(up.log2fc, 2), len(down.samples), round(down.log2fc, 2)
+s = result.subset("Raised subset, halved majority")
+s.side, len(s.samples), s.fraction, round(s.log2fc, 2), s.padj
+```
+
+```{python}
+#| label: fig-demo-lowered
+#| fig-cap: "20% of cases cut twentyfold: a subset below the mean shift. On the linear scale its boundary is loose, as the next section shows."
+result.plot_gene("Lowered subset")
 ```
 
 ```{python}
 #| label: fig-demo-opposing
-#| fig-cap: "One quarter of cases tripled and another quarter cut tenfold: both areas are large, and neither cancels the other."
+#| fig-cap: "One quarter of cases tripled and another quarter cut tenfold. One walk makes one split, so the gene reports one of the two subsets."
 result.plot_gene("Opposing subsets")
 ```
 
 ```{python}
 #| label: fig-demo-volcano
-#| fig-cap: "Upward q-values against the bulk shift. Upward calls left of zero are raised subsets above a lowered bulk."
-result.plot_volcano(direction="up", label=marker_names[:-1])
+#| fig-cap: "Mean shifts and their q-values."
+result.plot_volcano(label=marker_names[:-1])
 ```
+
+```{python}
+#| label: fig-demo-patterns
+#| fig-cap: "Each gene's subset share against its fold over the mean shift, colored by its q-value."
+result.plot_patterns(label=marker_names[:-1])
+```
+
+## The two scales
+
+The linear scale tests normalized counts, where a subset far above normal
+dominates; the log2 scale weighs a halving like a doubling. The same genes on
+both:
+
+```{python}
+#| label: scales
+#| output: asis
+log2 = wade.wade(data, cond, normalization=norm, test_genes=keep, seed=1, scale="log2")
+rows = []
+for gene in marker_names:
+    for scale, r in (("linear", result), ("log2", log2)):
+        s = r.subset(gene)
+        rows.append(dict(gene=gene, scale=scale, mean_log2fc=float(r.mean_log2fc[r.gene_index(gene)]),
+                         mean_padj=float(r.mean_padj[r.gene_index(gene)]), subset=s.side,
+                         subset_fraction=s.fraction, subset_padj=s.padj))
+markdown_table(pl.DataFrame(rows), OUT, "scales")
+```
+
+For the raised subset over a halved majority, the linear mean rises with the
+raised tenth while the log2 mean falls with the majority, and on both scales
+the subset is the raised tenth. For the lowered subset the log2 walk turns
+close to the planted fifth, and the linear walk runs past it. With the planted
+cases at the bottom, every other case sits at a higher quantile than its value
+would earn among the controls, so it falls short of the prediction there. On
+the log2 scale the planted cases lower the mean shift enough that the rest
+clear the prediction at once; on the linear scale a count can fall by no more
+than its own level, the mean shift stays small, and the walk keeps falling
+through the lower unchanged cases. This is why the log2 scale is the choice for
+lowered subsets.
 
 ## Themes
 
 ```{python}
 #| label: fig-theme-dark
 #| fig-cap: "The same gene in the dark theme."
-result.plot_gene("Raised subset, lowered bulk", theme="dark")
+result.plot_gene("Raised subset, halved majority", theme="dark")
 ```
 
 ```{python}
 #| label: fig-theme-contrast
 #| fig-cap: "The same gene in the high-contrast theme."
-result.plot_gene("Raised subset, lowered bulk", theme="high-contrast")
+result.plot_gene("Raised subset, halved majority", theme="high-contrast")
 ```
 
 ## What the calls mean
 
-A small `padj_up` says the upward area is larger than random relabelling of
-the samples explains. It does not certify which patients are outliers or how
-common the subset is in the population. With few controls even a dramatic
-subset cannot reach significance: the [manual](../docs/manual.md#how-many-controls)
-shows how many cases must exceed every control for a given design.
+A small `mean_padj` says the cases' mean differs from the controls' more than
+random relabelling explains. A small `subset_padj` says the cases depart from
+that shift more than relabelling explains: not every case carries it. Neither
+certifies which patients are outliers or how common the subset is in the
+population.

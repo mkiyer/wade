@@ -14,14 +14,9 @@ class GeneDetail:
     effect: np.ndarray
 
     @property
-    def area_up(self):
-        """Integral of the case-minus-control quantile difference where it is positive."""
-        return float(np.maximum(self.effect, 0) @ np.diff(self.probability))
-
-    @property
-    def area_down(self):
-        """Integral of the control-minus-case quantile difference where it is positive."""
-        return float(np.maximum(-self.effect, 0) @ np.diff(self.probability))
+    def area(self):
+        """The signed area between the quantile functions: exactly the difference in means."""
+        return float(self.effect @ np.diff(self.probability))
 
 
 def gene_detail(expression, cond):

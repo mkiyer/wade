@@ -34,7 +34,7 @@ from notebook_support import output_dir, markdown_table, export_table
 OUT = output_dir("prostate")
 cohort = TC.load_cohort("prostate", OUT)
 PANEL = TC.PROSTATE_PANEL
-SHOW = ["gene","padj_up","padj_down","bulk_shift","subset_up_fraction","subset_up_log2fc","subset_down_fraction","subset_down_log2fc"]
+SHOW = ["gene","mean_log2fc","mean_padj","subset_fraction","subset_log2fc","subset_padj"]
 def table(frame,name):
     markdown_table(frame,OUT,name)
 ```
@@ -53,8 +53,8 @@ RLE is fitted on the full measured gene universe after primary sample selection.
 The prespecified example test mask requires at least 10 counts in five pooled
 samples and pooled mean CPM at least 0.1, using the eligible input cohort.
 This is an example recipe, not a universal threshold. Test filtering reuses
-the fitted factors. The test uses normalized counts, `count / size_factor`;
-figures and descriptions use log2. Repeated observations, depth and tissue mixture remain relevant to
+the fitted factors. The test uses normalized counts with WADE's seeded count
+jitter, `(count + jitter) / size_factor`; figures use log2. Repeated observations, depth and tissue mixture remain relevant to
 interpretation. The upstream count processing/reference record remains a
 release documentation requirement.
 
@@ -65,12 +65,13 @@ primary_meta = cohort.meta[cohort.independent.tolist()]
 table(primary_meta.group_by("group").len(),"primary-accounting")
 ```
 
-## Whole-transcriptome test, both directions
+## Whole-transcriptome tests
 
-Both areas are tested in one pass with the default settings (linear scale,
-cap 999,999, seed 1), and one BH family covers every gene-direction pair.
-Display markers were fixed in advance; their inclusion does not imply
-significance.
+Each gene's mean shift and subset are tested with the default settings (both
+directions, the linear scale, `pvalues="auto"`, `relative_error=0.2`, the
+999,999-shuffle budget, seed 1), and each test has one BH family over the
+tested genes. Display markers were fixed in advance; their inclusion does not
+imply significance.
 
 ```{python}
 #| label: primary
@@ -83,8 +84,11 @@ export_table(annotation_values,OUT,"panel-expression-annotations")
 ```{python}
 #| label: transcriptome-calls
 #| output: asis
-up,down=int(np.sum(res.padj_up <= .05)),int(np.sum(res.padj_down <= .05))
-table(pl.DataFrame({"Tested genes":[int(res.tested.sum())],"Up calls":[up],"Down calls":[down]}),"transcriptome-calls")
+mean,subset=res.mean_padj<=.05,res.subset_padj<=.05
+table(pl.DataFrame({"Tested genes":[int(res.tested.sum())],
+    "Mean shift up":[int(np.sum(mean&(res.mean_log2fc>0)))],"Mean shift down":[int(np.sum(mean&(res.mean_log2fc<0)))],
+    "Subset above":[int(np.sum(subset&(res.subset_log2fc>0)))],"Subset below":[int(np.sum(subset&(res.subset_log2fc<0)))]}),
+    "transcriptome-calls")
 ```
 
 These broad call sets require review of the normalization reference, tissue
@@ -101,7 +105,7 @@ table(TC.panel_table(res,PANEL).select(SHOW),"primary-panel")
 
 ```{python}
 #| label: fig-patterns
-#| fig-cap: "Each tested gene's learned upward subset: the share of tumours in it against its median fold over the normals, colored by upward calls. Subset markers sit at a small share and a large fold."
+#| fig-cap: "Each tested gene's subset: its share of the tumours against its fold over the mean shift, colored by the subset test's q-value. A few tumours far above the mean shift sit at a small share and a large fold."
 TC.plot_subsets(res,PANEL[:5])
 ```
 
@@ -132,21 +136,9 @@ for gene in ["ERG","ETV1","ETV4","FLI1"]:
 table(pl.DataFrame(rows),"fusion-coverage")
 ```
 
-With 52 normals, how far can a subset go? A random relabelling puts k given
-tumours all among the cases with probability C(445, k) / C(497, k). When the
-other tumours are no higher than the normals, as for ETV1 and ETV4, the upward
-p-value stays near or above that value however high those k tumours are; ERG
-and SPINK1 go below it because their other tumours are raised too.
-
-```{python}
-#| label: subset-floor
-#| output: asis
-table(TC.subset_floor(res,["ERG","ETV1","ETV4","SPINK1"]),"subset-floor")
-```
-
-Which tumours did each gene's walk choose? The fusion annotations, which WADE
-never sees, say whether the learned upward subsets are the fusion-positive
-tumours. Only tumours annotated fusion-positive or negative enter the ratios;
+Which tumours depart from each gene's mean shift? The fusion annotations,
+which WADE never sees, say whether the subsets are the fusion-positive tumours.
+Only tumours annotated fusion-positive or negative enter the ratios;
 expression-high and unknown annotations are never counted as negatives.
 
 ```{python}
@@ -158,7 +150,7 @@ table(TC.annotated_subsets(cohort,res,fusions),"fusion-subsets")
 
 ```{python}
 #| label: fig-etv1
-#| fig-cap: "ETV1 in the independent-patient primary cohort. A raised subset can coexist with a lowered bulk."
+#| fig-cap: "ETV1 in the independent-patient primary cohort. A raised subset can depart from a mean shift that most tumours do not share."
 res.plot_gene("ETV1")
 ```
 
@@ -194,5 +186,3 @@ fig
 ```
 
 The plot is an annotation association, not a ground-truth FDR assessment.
-The limiting factor for ETV1 and ETV4 is the number of normals, not the
-statistic: more compatible normal samples would lower the floor above.

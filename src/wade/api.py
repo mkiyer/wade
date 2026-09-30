@@ -1,58 +1,75 @@
-"""Upward and downward area tests per gene, followed by descriptive effects."""
+"""Each gene's mean shift, and the subset of cases that departs from a common fold, with a permutation test for each."""
 from dataclasses import dataclass
 import numpy as np
 
-from ._descriptions import describe, subsets
-from ._wasserstein import DIRECTIONS, SCALES, STOP_EXCEEDANCES, expression, infer, resolve_backend
+from math import ceil, isfinite
+
+from ._means import DIRECTIONS, SCALES, expression, jittered, mean_saddlepoint, mean_test
+from ._subsets import split, subset_test
 from .io import Condition, Counts, as_counts, result_columns
 from .normalize import Normalization, _fingerprint, _indices, _named, fit_normalization
-from .permutation import permutation_space, strata_indices, validate_labels
+from .permutation import permutation_space, validate_labels
 from .pvalues import bh_adjust
 
-# Floor 1e-6: an isolated BH discovery at q <= 0.05 stays possible for up to
-# 50,000 gene-direction tests, i.e. a 25,000-gene direction="both" analysis.
+# Floor 1e-6: an isolated BH discovery at q <= 0.05 stays possible among up to 50,000 genes.
 DEFAULT_MAX_PERMUTATIONS = 999_999
-_ACTIVE = {"both": (True, True), "up": (True, False), "down": (False, True)}
+PVALUES = ("auto", "permutation")
+SUBSETS = ("cases", "either")
 
 
 @dataclass(frozen=True)
 class Subset:
-    """The cases in one gene's upward or downward subset, on log2(count/size_factor+1)."""
-    direction: str
-    samples: np.ndarray    # case sample names, most extreme first
-    boundary: float        # expression at the subset's inner edge; NaN if empty
-    fraction: float        # share of cases in the subset
-    log2fc: float          # subset median minus control median
+    """The samples that depart from the fold every case would share; see WadeResult.subset()."""
+    side: str              # "up" above the rest of their group, "down" below it, "none" if every case carries one fold
+    group: str             # "case" or "control" (only when both groups are tested), "none" without a subset
+    samples: np.ndarray    # the subset's sample names, furthest out first
+    fraction: float        # the subset's share of its group
+    log2fc: float          # the subset's fold over what the common fold predicts for it
+    pvalue: float          # against the null that every case carries one common fold
+    padj: float
 
 
 @dataclass
 class WadeResult:
-    """Each gene's upward and downward areas, with the declared hypothesis's q-values.
+    """Each gene's mean shift and subset, each with a permutation test.
 
-    area_up integrates case-minus-control quantile differences where cases are
-    higher; area_down where they are lower; both on params["scale"]. padj_up and
-    padj_down share one BH family for direction="both", or cover the tested
-    genes for one direction (the other is NaN). bulk_shift is the case minus
-    control median of log2(count/size_factor+1). The subset columns describe
-    the enriched subsets each gene's walk learns (see subset()): the share of
-    cases in them and their median minus the control median, in log2 units.
-    Descriptions carry no p-values, and no sample outlier probabilities are inferred.
+    mean_log2fc is the signed area between the case and control quantile functions, which is
+    the difference in means, as a fold: log2 of (mean case + 1) / (mean control + 1) on the
+    linear scale, the difference in mean log2 expression on the log2 scale. mean_pvalue tests
+    it against the declared direction, and mean_padj adjusts it by BH over the tested genes.
+    alignment_log2fc is the fold that best aligns the cases' quantile function of log(count + 1)
+    with the controls' (their Wasserstein-1 registration; on the log2 scale, a difference): the
+    common fold the subset test holds every case to. Under an alternative it is an alignment, not
+    necessarily any subgroup's fold. lorenz_gap is the subset test's statistic: the largest amount
+    by which one group's Lorenz curve of count + 1 falls below the other's (on log2, of absolute
+    Lorenz curves). The subset is the samples that depart from the common fold (see subset()):
+    subset_group says whether they are cases or, when both groups are tested, controls;
+    subset_side whether they are the upper ("up") or lower ("down") part of that group;
+    subset_fraction their share of it; and subset_log2fc their fold over what the alignment
+    predicts for their quantiles. The fold can point against the side in genes whose extreme
+    values dominate both groups: read the side from subset_side. subset_pvalue tests the null
+    that every case carries one common fold, against the declared direction, and subset_padj
+    adjusts it by BH over the tested genes. Every fold on the linear scale is of count + 1, a
+    pseudocount-regularized ratio. A gene-level p-value does not validate any one sample's
+    membership: no sample outlier probabilities are inferred.
     """
     gene: np.ndarray
     status: np.ndarray
-    area_up: np.ndarray
-    area_down: np.ndarray
-    pvalue_up: np.ndarray
-    pvalue_down: np.ndarray
-    padj_up: np.ndarray
-    padj_down: np.ndarray
-    bulk_shift: np.ndarray
-    subset_up_fraction: np.ndarray
-    subset_up_log2fc: np.ndarray
-    subset_down_fraction: np.ndarray
-    subset_down_log2fc: np.ndarray
-    n_permutations: np.ndarray
-    n_exceedances: np.ndarray
+    mean_log2fc: np.ndarray
+    mean_pvalue: np.ndarray
+    mean_padj: np.ndarray
+    alignment_log2fc: np.ndarray
+    lorenz_gap: np.ndarray
+    subset_group: np.ndarray
+    subset_side: np.ndarray
+    subset_fraction: np.ndarray
+    subset_log2fc: np.ndarray
+    subset_pvalue: np.ndarray
+    subset_padj: np.ndarray
+    mean_permutations: np.ndarray
+    mean_exceedances: np.ndarray
+    subset_permutations: np.ndarray
+    subset_exceedances: np.ndarray
     expression: np.ndarray
     cond: np.ndarray
     sample_names: np.ndarray
@@ -91,47 +108,38 @@ class WadeResult:
         raise KeyError(f"unknown gene {gene!r}")
 
     def gene_detail(self, gene):
-        """Exact quantile intervals on the test scale; their areas are area_up/area_down."""
+        """Exact quantile intervals on the test scale; their signed area is the difference in means."""
         from .diagnostics import gene_detail
         return gene_detail(self.expression[self.gene_index(gene)], self.cond)
 
-    def subset(self, gene, direction="up", cutoff=None):
-        """The cases in the gene's upward or downward subset.
+    def subset(self, gene):
+        """The samples that depart from the one fold every case would share.
 
-        By default, the subset the gene's walk learned. The walk steps down the
-        pooled ranking of samples. At each cut it takes the fraction of cases
-        above minus the fraction of controls above, divided by that difference's
-        standard deviation under random labelling. The upward subset is the
-        cases at or above the cut where this peaks; the downward subset, the
-        cases at or below its lowest point. A subset whose median is not on its
-        own side of the control median is empty. Nothing is chosen in advance,
-        and the walk depends only on ranks, so the scale does not change it. It
-        describes where cases concentrate; read it with the direction's q-value,
-        since a walk on noise also has a peak.
+        If every case carried the same fold (on the log2 scale, the same difference), the
+        cases' Lorenz curve of count + 1 would match the controls'. Walking up the case
+        quantiles, the running gap between them is lowest where the cases that carry less than
+        their share of the cases' total give way to those that carry more. The smaller side of
+        that split, which departs further per case, is the subset: above the rest of the cases
+        or below them. When both groups are tested (subsets="either"), the controls are walked
+        against the cases too, and the subset may be controls. Nothing is chosen in advance; a
+        walk on noise also has a lowest point, so read the subset with its p-value.
 
-        With `cutoff`, on the log2(count/size_factor+1) scale of the plots, the
-        subset is instead the cases at or above it ("up") or at or below it
-        ("down"), described the same way.
+        The side is the subset's part of its group, which the one-sided tests ask about. Its
+        log2fc is measured against what the alignment predicts for its quantiles; in genes whose
+        extreme values dominate both groups' means the two can point opposite ways.
         """
-        if direction not in DIRECTIONS:
-            raise ValueError("direction must be 'up' or 'down'")
-        x = self.expression[self.gene_index(gene)]
-        # The table's log2 values, so the learned subset matches the table on either scale.
-        log2 = x if self.params["scale"] == "log" else np.log2(x + 1)
-        case, up = self.cond == 1, direction == "up"
-        if cutoff is None:
-            up_cut, up_cases, _, down_cut, down_cases, _, values = subsets(log2[None], self.cond)
-            if (up_cases if up else down_cases)[0] == 0:
-                cutoff = np.inf if up else -np.inf          # the walk learned no subset
-            else:
-                cutoff = values[0, up_cut[0]] if up else values[0, down_cut[0] - 1]
-        members = case & ((log2 >= cutoff) if up else (log2 <= cutoff))
-        inside = log2[members]
-        order = np.argsort(-inside if up else inside, kind="stable")
-        edge = (inside.min() if up else inside.max()) if len(inside) else np.nan
-        fold = np.median(inside) - np.median(log2[~case]) if len(inside) else np.nan
-        return Subset(direction, self.sample_names[members][order], float(edge), len(inside) / int(case.sum()),
-                      float(fold))
+        i = self.gene_index(gene)
+        x = self.expression[i]
+        both = self.params["subsets"] == "either"
+        (size,), (side,), (group,), (fold,), _, _ = split(x[None], self.cond, self.params["scale"], both_groups=both,
+                                                          direction=self.params["direction"])
+        members = self.cond == group
+        values, names = x[members], self.sample_names[members]
+        order = np.argsort(-values if side > 0 else values, kind="stable")[:size]
+        part = "none" if size == 0 else "up" if side > 0 else "down"
+        label = "none" if size == 0 else "case" if group == 1 else "control"
+        return Subset(part, label, names[order], int(size) / len(values), float(fold),
+                      float(self.subset_pvalue[i]), float(self.subset_padj[i]))
 
     def plot_gene(self, gene, **kwargs):
         from .plotting import plot_gene
@@ -152,55 +160,81 @@ def _positive_int(value, name):
     return int(value)
 
 
-def wade(counts, cond, *, direction="both", scale="linear", normalization="rle", test_genes=None,
-         max_permutations=DEFAULT_MAX_PERMUTATIONS, seed=1, strata=None,
-         gene_names=None, sample_names=None, gene_chunk=None, backend="auto"):
-    """Test upward and downward expression differences on raw counts (genes x samples).
+def wade(counts, cond, *, direction="both", scale="linear", subsets="cases", normalization="rle", test_genes=None,
+         pvalues="auto", relative_error=0.2, max_permutations=DEFAULT_MAX_PERMUTATIONS, seed=1, strata=None,
+         gene_names=None, sample_names=None, gene_chunk=None):
+    """Test each gene's mean shift, and whether a subset of cases departs from a common fold (raw counts, genes x samples).
 
-    area_up integrates the case-minus-control quantile differences where cases
-    are higher. Quantiles where cases are lower add nothing to it instead of
-    cancelling it, so a subset raised above a lowered bulk keeps its evidence;
-    area_down is the mirror image, and area_up - area_down is the mean difference.
+    The mean shift is the signed area between the case and control quantile functions: where
+    cases are higher it adds, where they are lower it subtracts. It is exactly the difference
+    in means on the tested scale. scale="linear" uses count/size_factor, which favours raised
+    subsets; "log2" uses log2(count/size_factor+1), which treats a halving like a doubling. Each
+    count first gets independent Uniform(0, 1) jitter, seeded like the shuffles, so that no two
+    values tie: the subset test's null moves cases by a fold, which would split the ties of
+    discrete counts (above all zeros) that the observed data keep.
 
-    direction="both" tests both areas in one pass with shared label draws: a
-    discovery hypothesis with one BH family over every tested gene-direction
-    pair. direction="up" or "down" tests one declared direction, and BH covers
-    the tested genes. scale="linear" uses count/size_factor; "log" uses
-    log2(count/size_factor+1). Choose both before looking at results.
+    The subset is the cases that depart from the one fold every case would share, above the
+    rest of the cases or below them (see WadeResult.subset()). Its test asks whether every case
+    could carry one common fold: it registers the cases onto the controls by the fold that best
+    aligns their quantile functions of log(count + 1) (the Wasserstein-1 fold), pools the two,
+    and walks label shuffles of the pool. Its statistic, the largest gap between the cases' and
+    the controls' Lorenz curves of count + 1 (on log2, of their absolute Lorenz curves), is
+    unchanged by any fold on the cases. subsets="cases" asks for a subset among the cases: are
+    the cases more unequal than the controls? subsets="either" also walks the controls against
+    the cases and keeps the larger gap: do the two groups' shapes differ at all?
 
-    The default fits RLE before excluding all-zero genes from testing. Pass
-    test_genes as gene IDs or a pooled Boolean mask to define a smaller family
-    without changing normalization. A fitted Normalization supports validated
-    reference genes, external factors, and reuse across contrasts.
+    Samples must be independent: strata, paired samples and repeated measures are not supported
+    until a construction is validated for them (docs/subset-null-plan.md, section 4.9), and
+    passing strata is an error.
 
-    Independent random label shuffles preserve group sizes and optional strata.
-    Each direction stops at its 20th inclusive exceedance or max_permutations.
-    The minimum Monte Carlo p-value is 1/(max_permutations+1). Small budgets
-    are useful for exploration but limit transcriptome discovery.
+    direction="both" tests both two-sided. "up" asks whether cases are higher, as a whole or in
+    a subset: a mean shift up, and a subset of cases above the rest (with subsets="either", or
+    a subset of controls below the rest). "down" asks the reverse.
+    Choose the direction and the scale before looking at results.
 
-    Samples must be independent exchangeable units under the null, conditional
-    on any strata. Normalization does not remove batch/depth confounding; the
-    run record reports median size factors per group. gene_chunk and backend
-    affect computation, not the statistical procedure.
+    The default fits RLE before excluding all-zero genes from testing. Pass test_genes as gene
+    IDs or a pooled Boolean mask to define a smaller family without changing normalization. A
+    fitted Normalization supports validated reference genes, external factors, and reuse
+    across contrasts.
+
+    Every p-value is estimated to about relative_error. A shuffled p-value draws independent
+    label shuffles that preserve group sizes, and stops at its
+    ceil(1/relative_error^2)-th exceedance (the 25th at the default 0.2), whose count estimates p
+    to that relative standard error, or at max_permutations shuffles, below which it cannot go.
+    The subset test is always shuffled. With pvalues="auto" the mean test is computed instead:
+    the exact permutation distribution of the cases' total has a double-saddlepoint tail with
+    no floor above one labelling in C(n, n1). Its error is estimated as the larger of the
+    saddlepoint's second-order term and one labelling among the L = p C(n, n1) in the tail. A
+    gene whose estimate exceeds relative_error is shuffled.
+    pvalues="permutation" shuffles every p-value. BH covers the tested genes. Samples must be independent exchangeable units under the null.
+    Normalization does not remove batch or depth confounding; the
+    run record reports median size factors per group. gene_chunk affects computation, not the
+    statistical procedure.
     """
-    if direction not in _ACTIVE:
+    if direction not in DIRECTIONS:
         raise ValueError("direction must be 'both', 'up' or 'down'")
     if scale not in SCALES:
-        raise ValueError("scale must be 'linear' or 'log'")
-    active = _ACTIVE[direction]
+        raise ValueError("scale must be 'linear' or 'log2'")
+    if pvalues not in PVALUES:
+        raise ValueError("pvalues must be 'auto' or 'permutation'")
+    if subsets not in SUBSETS:
+        raise ValueError("subsets must be 'cases' or 'either'")
+    both = subsets == "either"
+    if isinstance(relative_error, bool) or not isinstance(relative_error, (int, float, np.number)) \
+            or not isfinite(relative_error) or not 0 < relative_error < 1:
+        raise ValueError("relative_error must be a number between 0 and 1")
+    stop = ceil(1 / relative_error ** 2)
     maximum = _positive_int(max_permutations, "max_permutations")
-    selected_backend = resolve_backend(backend)
     data = as_counts(counts, gene_names=gene_names, sample_names=sample_names)
     labels = cond.vector(data.sample_names) if isinstance(cond, Condition) else cond
     labels = validate_labels(labels, data.shape[1])
     if min(int(labels.sum()), int((labels == 0).sum())) < 2:
         raise ValueError("WADE requires at least two independent samples in each group")
     if strata is not None:
-        strata = np.asarray(strata).copy()
-        strata_indices(strata, data.shape[1])
-    space = permutation_space(labels, strata)
-    if space["log10_space"] == 0:
-        raise ValueError("the specified strata permit no label exchanges")
+        raise ValueError("strata are not supported: WADE tests independent samples until a stratified "
+                         "construction is validated (docs/subset-null-plan.md, section 4.9)")
+    space = permutation_space(labels)
+    computed = pvalues == "auto"
     if isinstance(normalization, str):
         fitted = fit_normalization(data, method=normalization)
     elif isinstance(normalization, Normalization):
@@ -217,7 +251,7 @@ def wade(counts, cond, *, direction="both", scale="linear", normalization="rle",
     nonzero = np.any(data.values > 0, axis=1)
     tested = selected & nonzero
     status = np.where(~nonzero, "all_zero", np.where(selected, "tested", "filtered"))
-    # Bounded sorting scratch and shuffle blocks; no genes x permutations bank.
+    # Bounded scratch per chunk and per shuffle block; no genes x permutations bank.
     chunk = max(1, (128 * 2**20) // max(n * 8 * 8, 1)) if gene_chunk is None else _positive_int(gene_chunk, "gene_chunk")
     batch = max(1, min(4096, (32 * 2**20) // max(n, 1)))
     # Store a concrete seed even when the caller requests a fresh random run.
@@ -229,49 +263,73 @@ def wade(counts, cond, *, direction="both", scale="linear", normalization="rle",
         raise TypeError("seed must be an integer, an integer sequence, or None")
     seed = np.asarray(seed).tolist()
     values = np.empty(data.shape, float)
-    area, pvalue = np.full((g, 2), np.nan), np.full((g, 2), np.nan)
-    exceed, tried = np.zeros((g, 2), np.uint64), np.zeros((g, 2), np.uint64)
-    described = np.empty((5, g))
+    shift, pvalue, subset_p = np.empty(g), np.full(g, np.nan), np.full(g, np.nan)
+    size, side, group = np.zeros(g, int), np.zeros(g, np.int8), np.ones(g, np.uint8)
+    fold, alignment, gap = np.full(g, np.nan), np.full(g, np.nan), np.zeros(g)
+    exceed, tried = np.zeros(g, np.uint64), np.zeros(g, np.uint64)
+    subset_exceed, subset_tried = np.zeros(g, np.uint64), np.zeros(g, np.uint64)
     for start in range(0, g, chunk):
         rows = slice(start, min(start + chunk, g))
-        x = expression(data.values[rows], fitted.size_factors, scale)
+        x = expression(jittered(data.values[rows], range(rows.start, rows.stop), seed), fitted.size_factors, scale)
         values[rows] = x
-        described[:, rows] = describe(x if scale == "log" else np.log2(x + 1), labels)
+        shift[rows] = _mean_log2fc(x, labels, scale)
+        size[rows], side[rows], group[rows], fold[rows], gap[rows], registered = split(
+            x, labels, scale, both_groups=both, direction=direction)
+        alignment[rows] = np.log2(registered) if scale == "linear" else registered
         local = np.flatnonzero(tested[rows])
         if len(local):
             idx = start + local
-            area[idx], pvalue[idx], exceed[idx], tried[idx] = infer(
-                x[local], labels, active=active, maximum=maximum, seed=seed, strata=strata,
-                backend=selected_backend, batch=batch)
-    padj = np.full((g, 2), np.nan)
-    columns = [d for d, on in enumerate(active) if on]
-    padj[:, columns] = bh_adjust(pvalue[:, columns].ravel()).reshape(g, len(columns))
+            shuffled = np.ones(len(local), bool)
+            if computed:
+                pvalue[idx], error = mean_saddlepoint(x[local], labels, direction=direction)
+                shuffled = error > relative_error                    # less precise than shuffling
+            if shuffled.any():
+                pvalue[idx[shuffled]], exceed[idx[shuffled]], tried[idx[shuffled]] = mean_test(
+                    x[local[shuffled]], labels, direction=direction, stop=stop, maximum=maximum,
+                    seed=seed, batch=batch)
+            subset_p[idx], subset_exceed[idx], subset_tried[idx] = subset_test(
+                x[local], labels, scale, direction=direction, stop=stop, maximum=maximum, seed=seed,
+                both_groups=both, batch=batch)
     factors = fitted.size_factors
-    params = dict(algorithm="directional-area-besag-clifford-v1", direction=direction, scale=scale,
-                  expression="count / size_factor" if scale == "linear" else "log2(count / size_factor + 1)",
-                  family="every tested gene-direction pair" if direction == "both" else f"tested genes, {direction} only",
-                  hypotheses=int(len(columns) * tested.sum()),
-                  max_permutations=maximum, stop_exceedances=min(STOP_EXCEEDANCES, maximum),
-                  minimum_pvalue=1 / (maximum + 1), seed=seed, strata=None if strata is None else strata.tolist(),
-                  backend=selected_backend, gene_chunk=chunk, permutation_batch=batch,
+    params = dict(algorithm="signed-area-and-subset-v3", direction=direction, scale=scale, subsets=subsets,
+                  subset_statistic="largest gap between the case and control Lorenz curves of count + 1"
+                  if scale == "linear" else "largest gap between the case and control absolute Lorenz curves",
+                  subset_registration="Wasserstein-1 fold on log(count + 1), the middle of any median interval"
+                  if scale == "linear" else "Wasserstein-1 difference, the middle of any median interval",
+                  expression="(count + jitter) / size_factor" if scale == "linear"
+                  else "log2((count + jitter) / size_factor + 1)", jitter="Uniform(0, 1) per count, seeded by seed and gene row",
+                  family="tested genes", hypotheses=int(tested.sum()), pvalues=pvalues,
+                  mean_pvalue="saddlepoint unless its error estimate exceeds relative_error"
+                  if computed else "shuffled", relative_error=relative_error, max_permutations=maximum,
+                  stop_exceedances=min(stop, maximum), minimum_shuffled_pvalue=1 / (maximum + 1),
+                  seed=seed,
+                  gene_chunk=chunk, permutation_batch=batch,
                   counts_sha256=_fingerprint(data), permutation_space=space,
                   size_factor_median=dict(case=float(np.median(factors[labels == 1])),
                                           control=float(np.median(factors[labels == 0]))),
-                  test_selection="nonzero" if test_genes is None else "explicit; all-zero genes excluded",
-                  description="log2 median shift; standardized running-sum subsets up and down")
+                  test_selection="nonzero" if test_genes is None else "explicit; all-zero genes excluded")
     if isinstance(cond, Condition):
         params.update(case_label=cond.case, control_label=cond.control, condition_column=cond.column)
-    return WadeResult(data.gene_names.copy(), status, area[:, 0], area[:, 1], pvalue[:, 0], pvalue[:, 1],
-                      padj[:, 0], padj[:, 1], *described, tried, exceed, values, labels.copy(),
+    n_group = np.where(group == 1, int(labels.sum()), int((labels == 0).sum()))
+    label = np.where(size == 0, "none", np.where(group == 1, "case", "control"))
+    part = np.where(size == 0, "none", np.where(side > 0, "up", "down"))
+    return WadeResult(data.gene_names.copy(), status, shift, pvalue, bh_adjust(pvalue), alignment, gap, label, part,
+                      size / n_group, fold, subset_p, bh_adjust(subset_p),
+                      tried, exceed, subset_tried, subset_exceed, values, labels.copy(),
                       data.sample_names.copy(), fitted, params, dict(data.meta))
+
+
+def _mean_log2fc(x, cond, scale):
+    """The mean shift as a fold: of the group means on count + 1, or of mean log2 expression."""
+    mean1, mean0 = x[:, cond == 1].mean(axis=1), x[:, cond == 0].mean(axis=1)
+    return np.log2((mean1 + 1) / (mean0 + 1)) if scale == "linear" else mean1 - mean0
 
 
 def wade_contrast(counts, case_samples, control_samples, *, gene_names=None, sample_names=None, **kwargs):
     """Select two groups by sample ID; preserve a previously fitted normalization.
 
     A method name fits on the selected samples. A fitted object retains its
-    original reference cohort and centering. strata, when supplied, must cover
-    the entire input matrix and is selected alongside the samples.
+    original reference cohort and centering.
     """
     data = as_counts(counts, gene_names=gene_names, sample_names=sample_names)
     i1 = _indices(case_samples, data.sample_names, "case samples")
@@ -279,10 +337,5 @@ def wade_contrast(counts, case_samples, control_samples, *, gene_names=None, sam
     if np.intersect1d(i1, i0).size:
         raise ValueError("samples appear in both groups")
     idx = np.r_[i1, i0]
-    if kwargs.get("strata") is not None:
-        strata = np.asarray(kwargs["strata"])
-        if strata.shape != (data.shape[1],):
-            raise ValueError("strata must cover the full input matrix")
-        kwargs["strata"] = strata[idx]
     selected = Counts(data.values[:, idx], data.gene_names, data.sample_names[idx], data.meta)
     return wade(selected, np.r_[np.ones(len(i1), int), np.zeros(len(i0), int)], **kwargs)

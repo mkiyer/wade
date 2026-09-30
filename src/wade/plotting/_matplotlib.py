@@ -31,14 +31,16 @@ def gene(spec):
         x = np.sort(spec["expression"][spec["cond"] == value])
         axes[0].step(np.r_[x[0], x], np.r_[0, np.arange(1, len(x)+1)/len(x)],
                      where="post", color=color, label=f"{name} (n={len(x)})", linewidth=1.8)
-    for edge, label, style in spec["boundaries"]:
-        axes[0].axvline(edge, color=t.ink, linestyle=style, linewidth=1, label=label)
+    for b in spec["boundaries"]:
+        axes[0].axvline(b["expression"], color=t.ink, linestyle=b["style"], linewidth=1, label=b["label"])
+        axes[1].axvline(b["quantile"], color=t.ink, linestyle=b["style"], linewidth=1)
     axes[0].set(xlabel=EXPRESSION_LABEL, ylabel="Cumulative fraction", ylim=(-.02, 1.02))
     axes[0].legend(loc="best", fontsize=9)
     d = spec["detail"]
     axes[1].stairs(d.effect, d.probability, color=t.ink, linewidth=1.5, baseline=None)
     axes[1].axhline(0, color=t.axis, linewidth=.8)
-    axes[1].axhline(spec["bulk"], color=t.case, linestyle="--", label="Median shift")
+    axes[1].axhline(spec["shift"], color=t.case, linestyle="--", label="Mean shift")
+    axes[1].axhline(spec["alignment"], color=t.case, linestyle=":", label="Alignment")
     axes[1].set(xlabel="Expression quantile", ylabel="Case − control (log₂ units)", xlim=(0, 1))
     axes[1].legend(loc="best", fontsize=9)
     fig.suptitle(spec["title"], color=t.ink, fontsize=12)

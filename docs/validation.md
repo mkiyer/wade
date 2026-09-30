@@ -1,190 +1,190 @@
 # Validation
 
 What the release procedure was measured to do, on what, and where it stops
-working. Every number here comes from a script in `research/`.
+working. Every number here comes from a script in `research/`; their outputs
+are kept in `.release/0.2.0/`, which is not distributed.
 
 ## Confirmation on fresh simulated transcriptomes
 
 `research/confirm.py` ran the public call, `wade.wade(direction="both",
-scale="linear")` at its default 999,999-shuffle cap, on 120 transcriptomes of
-16,384 genes generated after the procedure was frozen
-([protocol](../research/protocols/confirmation.json)). Twenty matrices per cell:
-complete nulls and mixed matrices at 250:250, 500:50 and 50:500 cases:controls,
-half Gamma–Poisson and half correlated lognormal–Poisson biology. Mixed
-matrices plant 15 patterns at baseline means 0.5, 5, 50 and 500 counts (60
-changed genes) among unchanged genes and shared-tail null genes. A one-sided
-Wilcoxon rank-sum per direction, with the same normalized counts, test mask
-and BH family, is the comparator. The whole run took 31 minutes on a
-16-core laptop (median 15 s per matrix).
+scale="linear")` with its defaults (`pvalues="auto"`, `relative_error=0.2`,
+the 999,999-shuffle budget), on 120 transcriptomes of 16,384 genes generated
+after the procedure was frozen ([protocol](../research/protocols/confirmation.json),
+version 6). Twenty matrices per cell: complete nulls and mixed matrices at
+250:250, 500:50 and 50:500 cases:controls, half Gamma–Poisson and half
+correlated lognormal–Poisson biology. Mixed matrices plant 15 patterns at
+baseline means 0.5, 5, 50 and 500 counts (60 changed genes) among unchanged
+genes and shared-tail null genes. A two-sided Wilcoxon rank-sum, with the same
+normalized counts, test mask and BH family, is the comparator for the mean
+test. A median matrix took 29 s on a laptop shared with other jobs; the mean
+test was shuffled for a median of one gene per matrix and computed for the
+rest.
 
-**Calibration** at q ≤ 0.05, counting gene-direction calls:
+**Calibration** at q ≤ 0.05. A mean-test call counts as false on an unchanged
+gene; a subset call counts as false on a gene with no planted subset,
+including whole-cohort shifts.
 
-| Cases : controls | Complete nulls with any call | Mixed: mean false discovery proportion [95% CI] | Mean calls |
+| Cases : controls | Mean test: complete nulls with any call | Mean test: false discovery proportion (calls) | Wilcoxon | Subset test: complete nulls with any call | Subset test: false discovery proportion (calls) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 250 : 250 | 1 of 20 | 5.1% (24.5) | 5.1% (20.6) | 1 of 20 | 5.2% (29.7) |
+| 500 : 50 | 2 of 20 | 3.8% (1.1) | 5.0% (6.0) | 0 of 20 | 7.0% (12.1) |
+| 50 : 500 | 0 of 20 | 3.3% (13.8) | 4.5% (7.2) | 1 of 20 | 3.6% (23.2) |
+
+No whole-cohort shift was called in the wrong direction, and no planted subset
+on the wrong side. The protocol's earlier runs are the record of two defects
+this confirmation caught and the fixes it checks: without count jitter
+(version 3) the subset test called a false subset in 9 of 20 complete nulls at
+500:50 ([below](#the-subset-test-and-jitter)); and version 5, whose
+saddlepoint lost precision when a total sat within a hair of its average,
+called a false mean shift in 5 of 20.
+
+**Power**: share of changed genes, baseline mean ≥ 5 counts, called by the
+subset test and in the intended direction by the mean test and Wilcoxon (the
+share Wilcoxon called in the opposite direction in brackets):
+
+| Pattern | Design | Subset test | Mean test | Wilcoxon |
+| --- | --- | ---: | ---: | ---: |
+| Every case × ½, 10% of cases × 8 / 32 / 128 / 1,024 | 250 : 250 | 100 / 100 / 100 / 100% | 0 / 65 / 100 / 100% | 0% [85–92%] |
+| | 50 : 500 | 80 / 100 / 100 / 100% | 0 / 8 / 93 / 98% | 0% [30–45%] |
+| | 500 : 50 | 8 / 48 / 93 / 100% | 0% | 0% [27–42%] |
+| 10% of cases × 16 | 250 : 250 | 100% | 97% | 2% |
+| | 50 : 500 | 87% | 67% | 0% |
+| 20% of cases × 4 | 250 : 250 | 52% | 78% | 18% |
+| Same mean, wider spread | 250 : 250 | 85% | 0% | 60% |
+| 20% × 4 and 20% × ¼ | 250 : 250 | 77% | 33% | 0% |
+| Every case × 1.5 / × ⅔ | 250 : 250 | no subset | 90 / 90% | 88 / 83% |
+
+A raised tenth above a halved majority is the pattern WADE is built for: the
+subset test found 80–100% of these genes at every fold from 8× at 250:250 and
+50:500, where the mean moves little until the fold is large, and Wilcoxon
+called most of them down. No design detected 5% of cases × 4, 10% of cases × ¼
+or a single case × 16 in more than 3% of genes: the first two are near the information
+limit, and the lowered subset is the linear scale's weakness (see
+[subsets](#subsets)). With 50 controls against 500 cases the subset test needs
+a large fold, because the 50 controls must stand in for the whole case
+distribution once the shift is removed.
+
+## The computed mean-test p-value
+
+`research/pvalue_accuracy.py` simulates one transcriptome per design with the
+confirmation's generator, multiplies every case by 2–8 in a quarter of the
+genes and one or two cases by 20 in a tenth of them (lumpy totals, where a
+saddlepoint strains), and compares the computed two-sided p-value of up to ten
+genes per decade of p, from 0.1 to 10⁻⁶, with the exact permutation p-value:
+every labelling where a design has at most 3 million, otherwise 20 million
+random labellings. 771 genes were checked across nine designs, from 3 v 52 to
+445 v 10, on both scales.
+
+| Estimated error | Genes | Median actual error | Actual error beyond 0.67–1.5× |
 | --- | ---: | ---: | ---: |
-| 250 : 250 | 1 of 20 | 5.4% [3.4, 7.4] | 27.1 |
-| 500 : 50 | 1 of 20 | 2.5% [0.0, 5.9] | 1.5 |
-| 50 : 500 | 0 of 20 | 4.7% [2.3, 7.1] | 15.3 |
+| below 0.05 | 365 | 1% | 0% |
+| 0.05–0.1 | 210 | 2% | 0% |
+| 0.1–0.2 | 113 | 6% | 1% |
+| 0.2–0.5 | 65 | 22% | 26% |
+| above 0.5 | 18 | 43% | 78% |
 
-Wilcoxon: 4.8%, 2.7% and 4.3%. No whole-cohort shift was called in the wrong
-direction.
+The estimate tracks the error, so the default `relative_error=0.2` keeps the
+computed p-value where it is accurate and shuffles where it is not: it kept
+688 of the 771 genes, of which 0.3% lay beyond 0.67–1.5× of the exact value;
+37% of the genes it sent to shuffling would have. The rule kept 99–100% of
+genes at 445 v 5, 445 v 10 and 50 v 500, and 68–83% in the smallest designs
+(3 v 52, 5 v 5, 8 v 8, 12 v 12), where the estimate, which includes the exact
+distribution's granularity, sends more of the tail to shuffling.
 
-**Power**: share of changed genes called in the intended direction, at 250:250
-and 50:500, baseline means 5 / 50 / 500 counts (Wilcoxon in brackets):
+## The subset test and jitter
 
-| Pattern | 250 : 250 | 50 : 500 |
-| --- | --- | --- |
-| All cases × 1.5 | 90 / 95 / 100% [85 / 90 / 95] | 15 / 35 / 25% [0 / 45 / 20] |
-| All cases × ⅔ | 75 / 95 / 100% [85 / 85 / 90] | 25 / 35 / 30% [10 / 20 / 20] |
-| 20% of cases × 4 | 90 / 80 / 85% [15 / 5 / 25] | 35 / 45 / 40% [0 / 0 / 0] |
-| 10% of cases × 16 | 80 / 100 / 90% [5 / 5 / 0] | 60 / 65 / 55% [0 / 5 / 0] |
-| Bulk × ½, 10% of cases × 32 | 95 / 100 / 95% [0 / 0 / 0] | 30 / 50 / 55% [0 / 0 / 0] |
-| Bulk × ½, 10% of cases × 128 | 100 / 100 / 100% [0 / 0 / 0] | 85 / 95 / 90% [0 / 0 / 0] |
-| Bulk × ½, 10% of cases × 1,024 | 100 / 100 / 100% [0 / 0 / 0] | 100 / 95 / 100% [0 / 0 / 0] |
-| Bulk × ½, 10% of cases × 8 | 0 / 0 / 10% [0 / 0 / 0] | 0 / 0 / 0% [0 / 0 / 0] |
+`research/subset_calibration.py` runs the subset test (99,999 shuffles) on five
+complete-null transcriptomes per design, on count / size_factor as it stands
+and with WADE's jitter, and reports observed over expected p-values by mean
+count:
 
-Wilcoxon called 83–92% of the raised-subset, lowered-bulk genes at 250:250
-*down*. WADE detected no pattern of 5% of cases × 4, 10% of cases × ¼, or a
-single case × 16 in any design. With 20% of cases × 4 and another 20% × ¼, it
-called 45–60% of genes up and none down at 250:250: on the linear scale the
-raised subset masks the lowered one (see the [manual](manual.md#direction-and-scale)).
-A same-mean variance increase was called in at most 5% of genes; Wilcoxon
-called 35–70% at 250:250, through the median shift that skewed variation
-brings. At 500:50 no subset pattern was detected by either method:
-that is the control floor below. At baseline mean 0.5 counts detection drops
-for every pattern (for example 75% for the × 32 subset at 250:250).
-
-## Where upward detection is possible
-
-`research/subset_limits.py` simulates single genes (250:250, baseline mean
-50, 8 genes per cell, both biologies) and asks where each statistic reaches an
-upward p ≤ 10⁻⁴. Its `oracle` picks the best expression cutoff *with
-hindsight*, deliberately anti-conservative: when it fails, no cutoff-type
-upward test can succeed. For 10% of cases raised above a halved bulk (Gamma /
-lognormal; biological CV² is the squared coefficient of variation):
-
-| Subset fold | CV² 0.2 | CV² 0.5 | CV² 1.0 |
+| Design | Mean count | Without jitter, p ≤ 0.01 / 0.001 | With jitter |
 | --- | --- | --- | --- |
-| 4× | 0 / 0% | 0 / 0% | 0 / 0% |
-| 8× | 88 / 100% | 0 / 0% | 0 / 0% |
-| 16× | 100 / 100% | 88 / 100% | 38 / 50% |
-| ≥ 32× | 100% | 100% | 100% |
-| hindsight oracle at 4× | 100 / 100% | 25 / 0% | 0 / 0% |
+| 500 : 50 | below 5 | 1.24× / 1.78× | 0.96× / 0.73× |
+| 500 : 50 | 5–50 | 0.94× / 1.06× | 0.97× / 1.33× |
+| 500 : 50 | 50 and above | 0.99× / 1.01× | 0.98× / 1.05× |
+| 50 : 500 | any | 0.33–1.00× | 0.63–0.99× |
+| 250 : 250 | any | 0.78–1.13× | 0.69–1.17× |
 
-At 4× and CV² ≥ 0.5 even the oracle fails; only 26–57% of such a "subset"
-lies above the control 99th percentile, so it is not separable from normal
-variation. This is why the 4× pattern of the development benchmark (0 of 80
-upward discoveries) was retired from the gate: it measured an information
-limit, not the statistic. Log-scale areas detected none of these genes at 32×
-at any CV², and a one-sided Wilcoxon had median p = 1.0 in every cell.
+Without jitter, low-count genes are anti-conservative when cases outnumber
+controls: zero counts cannot move with the mean shift, but the null moves them.
+In the confirmation run without jitter (protocol v3) this put a false subset
+call in 9 of 20 complete-null matrices at 500:50 and a mean false discovery
+proportion of 13.0% among subset calls; with jitter (protocol v4) the same
+design gave 1 of 20 and 5.6%. At p ≤ 0.001 each ratio above rests on 19–27
+expected genes.
 
-A tail statistic that searches the best top-k cutoff inside every permutation
-detected more 4–16× subsets above a halved bulk (at 4×, CV² 0.2: 62% vs 0%;
-at 8×, CV² 0.5: 75 / 50% vs 0%) but fewer whole-cohort shifts (below). The
-linear area is the better default for the stated purpose.
-
-### Whole-cohort shifts
-
-The same script shifts every case (Gamma / lognormal, p ≤ 10⁻⁴):
-
-| Shift, CV² | Linear area | Log area | Tail statistic | Wilcoxon |
-| --- | --- | --- | --- | --- |
-| × 1.25, 0.5 | 25 / 25% | 25 / 50% | 25 / 12% | 25 / 50% |
-| × 1.5, 0.5 | 100 / 88% | 100 / 100% | 100 / 88% | 100 / 100% |
-| × 1.5, 1.0 | 88 / 100% | 75 / 100% | 75 / 88% | 75 / 100% |
-| × 2, any | 100% | 100% | 100% | 100% |
-
-For whole-cohort shifts the linear area, the log area and Wilcoxon are about
-equal; log and Wilcoxon were slightly more sensitive to small shifts under
-lognormal biology. Under the null (no shift, 240 genes across both
-biologies), 17, 20, 13 and 15 genes had p ≤ 0.05 for the four statistics; the permutation
-tests are exact under exchangeability, and the confirmation's false discovery
-proportions above are the calibration evidence.
-
-## Learned subsets
+## Subsets
 
 `research/subset_recovery.py` regenerates the confirmation's 60 mixed matrices
-from their frozen seeds and compares, for every planted gene, the cases each
-walk places in the planted direction's subset with the planted cases. Share of
-cases selected / precision / recall, baseline mean ≥ 5 counts, all planted
-genes (60 per row):
+and scores every planted gene with baseline mean ≥ 5 counts: how often the
+split chose the planted side, the share of cases selected, precision, recall,
+and the subset test at 999 shuffles. On the linear scale at 250:250:
 
-| Planted pattern | Standardized walk (WADE) | Running sum | Cumulative area walk |
-| --- | --- | --- | --- |
-| 250 : 250, bulk × ½, 10% × 32–1,024 (up) | 0.10 / 1.00 / 0.95–1.00 | 0.10 / 1.00 / 0.96–1.00 | 0.11 / 0.88–0.91 / 0.99–1.00 |
-| 250 : 250, 10% × 16 over unchanged bulk | 0.11 / 0.88 / 0.91 | 0.26 / 0.50 / 0.97 | 0.79 / 0.15 / 0.99 |
-| 250 : 250, 20% × 4 over unchanged bulk | 0.17 / 0.80 / 0.62 | 0.35 / 0.55 / 0.84 | 0.96 / 0.21 / 0.99 |
-| 250 : 250, every case × 1.5 | 0.51 / 1.00 / 0.51 | 0.58 / 1.00 / 0.58 | 1.00 / 1.00 / 1.00 |
-| 500 : 50, bulk × ½, 10% × 32–1,024 (up) | 0.10 / 0.99–1.00 / 0.97–1.00 | 0.10 / 0.99–1.00 / 0.97–1.00 | 0.11–0.12 / 0.87–0.91 / 0.99–1.00 |
-| 500 : 50, 10% × 16 over unchanged bulk | 0.34 / 0.54 / 0.96 | 0.38 / 0.38 / 0.98 | 0.85 / 0.13 / 1.00 |
-| 50 : 500, 10% × 16 over unchanged bulk | 0.09 / 0.95 / 0.88 | 0.40 / 0.36 / 0.98 | 0.87 / 0.13 / 1.00 |
-
-- The standardized walk is exact on raised subsets above a lowered bulk in
-  every design, and precise over an unchanged bulk when controls are plentiful.
-- With 50 controls it over-calls a subset over an unchanged bulk.
-- For a whole-cohort shift it reports the most-shifted part (31–89% of cases
-  across designs), not every case.
-- On unchanged genes its peak is noise: across 10,000 unchanged genes per
-  design the upward subset held 30–39% of cases on average and was empty for
-  only 16–17% of genes, so subsets are read with the q-value.
-- Without standardization, the running sum's peak drifts into the bulk. The
-  cumulative area walk selects nearly every case whenever the rest of the cases
-  match the controls, because a raised subset then lifts the whole case
-  distribution.
-
-### On TCGA tumours
-
-The example notebooks compare each learned upward subset with annotations WADE
-never sees: fusion calls for the prostate ETS genes, and GISTIC amplification
-calls for ERBB2 and GRB7, which share an amplicon. Only tumours annotated
-positive or negative enter precision and recall; the rest of each subset has
-neither annotation (53 of ERG's 186 tumours).
-
-| Gene | Subset | Positives in subset | Negatives in subset | Precision | Recall |
+| Planted pattern | Side right | Share | Precision | Recall | Subset p ≤ 0.05 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| ERG (prostate, 445 tumours) | 186 | 127 of 130 | 6 | 0.95 | 0.98 |
-| ETV1 | 43 | 17 of 17 | 2 | 0.89 | 1.00 |
-| ETV4 | 22 | 9 of 9 | 1 | 0.90 | 1.00 |
-| FLI1 | 4 | 2 of 2 | 0 | 1.00 | 1.00 |
-| ERBB2 (breast, 971 tumours) | 588 | 106 of 107 | 465 | 0.19 | 0.99 |
-| GRB7 | 963 | 107 of 107 | 830 | 0.11 | 1.00 |
+| Every case × ½, 10% × 8–1,024 above | 100% | 0.09 | 0.97–1.00 | 0.87–0.95 | 100% |
+| 10% of cases × 16 | 100% | 0.09 | 0.97 | 0.88 | 100% |
+| 20% of cases × 4 | 100% | 0.17 | 0.77 | 0.62 | 97% |
+| 5% of cases × 4 | 97% | 0.12 | 0.39 | 0.66 | 47% |
+| 10% of cases × ¼ | 25% | 0.25 | 0.07 | 0.22 | 17% |
+| Every case × 1.5 or × ⅔ | no subset | | | | 5–7% |
 
-The fusion subsets recover the fusion-positive tumours. ERBB2 and GRB7 are
-raised in most breast tumours, and the amplified tumours form a higher mode
-within them. The walk places one boundary, at the broad rise, which contains
-the amplified tumours but is not them: telling a high mode from other raised
-cases compares cases with each other, which the walk does not do.
+- Raised subsets above a halved majority are found on their side, nearly
+  exactly, in all three designs (precision 0.96–1.00, significant in 97–100% of
+  genes).
+- A change every case carries is called a subset at the null rate.
+- On unchanged genes the split takes 15–21% of the cases and the subset test
+  is significant in 4.7–5.1%, on either scale and in every design.
+- Lowered subsets are the linear scale's weakness: the split chose the lowered
+  side in 25–28% of genes, against 65–72% on the log2 scale, where the test was
+  also more often significant (20–43% against 10–17%).
+- The log2 scale selects more cases around a raised subset (precision
+  0.53–0.97 where linear has 0.96–1.00).
 
-## How many controls
+`research/subset_significance.py` plants a share of cases raised by a fold in
+250:250 Gamma–Poisson genes (200 per row, 999 shuffles). The subset test is
+calibrated under the nulls (3–5% for no change and for every case doubled or
+halved; 0–8% when every case carries the fold), and its significance falls as
+the subset approaches the whole cohort: with tight biological spread, 100% of
+genes at 5–80% of cases, 60% (×4) and 100% (×100) at 95%; with realistic
+spread, 64–100% from 5% to 80% of cases, 20–29% at 95%. Past half the cases the
+smaller side is the unchanged remainder, reported as a subset below the mean
+shift.
 
-A random relabelling puts k given samples all among the cases with
-probability C(n_case, k) / C(n_case + n_control, k). For a pure subset (k cases
-above every control, the other cases no higher than the controls) the upward
-p-value stays near or above this value:
+## On TCGA tumours
 
-| Cases : controls | k = 18 | k = 36 | k needed for p ≤ 2.5 × 10⁻⁶ |
-| --- | ---: | ---: | ---: |
-| 250 : 250 | 2.8 × 10⁻⁶ | 3.7 × 10⁻¹² | 19 (8% of cases) |
-| 50 : 500 | 7.2 × 10⁻²¹ | 2.5 × 10⁻⁴⁵ | 6 (12%) |
-| 445 : 52 (TCGA prostate) | 0.13 | 0.016 | 104 (23%) |
-| 971 : 112 (TCGA breast) | 0.14 | 0.018 | 112 (12%) |
+The example notebooks run the default procedure on independent TCGA patients
+and compare each subset with annotations WADE never sees: fusion calls for the
+prostate ETS genes, and GISTIC high-level amplification for ERBB2 and GRB7,
+which share an amplicon. Only tumours annotated positive or negative enter
+precision and recall.
 
-The values are exact arithmetic. In the TCGA prostate example, 22 tumours lie
-above every normal for ETV4 (value 0.083) and its upward p-value is 0.15. ERG,
-whose other tumours are raised too, reaches 10⁻⁶, although its 76 tumours above
-every normal would alone give 1.1 × 10⁻⁴.
+| Gene | Mean shift q | Subset | Subset q | Positives in subset | Negatives in subset | Precision | Recall |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| ERG (prostate, 445 v 52) | 1.8 × 10⁻⁴ | 38% above | 0.046 | 122 of 130 | 0 | 1.00 | 0.94 |
+| ETV1 | 0.20 | 8% above | 4.0 × 10⁻⁴ | 16 of 17 | 0 | 1.00 | 0.94 |
+| ETV4 | 0.53 | 3% above | 1.6 × 10⁻⁴ | 8 of 9 | 0 | 1.00 | 0.89 |
+| FLI1 | 0.66 | 1% above | 0.66 | 2 of 2 | 0 | 1.00 | 1.00 |
+| ERBB2 (breast, 971 v 112) | 0.0024 | 10% above | 5.9 × 10⁻⁵ | 86 of 107 | 9 | 0.91 | 0.80 |
+| GRB7 | 0.016 | 9% above | 1.5 × 10⁻⁵ | 72 of 107 | 9 | 0.89 | 0.67 |
 
-## Comparison with DESeq2 and edgeR
+ETV1 and ETV4 are the case WADE is built for: fusion-driven expression in a
+few tumours, a mean shift no test calls, and a subset that holds only
+fusion-positive tumours. ERBB2 and GRB7 are raised in most breast tumours; the
+mean shift carries that broad rise, and the subset is what departs from it,
+the amplified tumours.
 
-The development comparison (preserved in history at commit `f07d5f9`) fitted
-native DESeq2 1.52.0 and edgeR 4.10.5 to 120 matrices from the same generator.
-At 250:250 their mean false discovery proportion was 5.7% / 5.1% under
-Gamma–Poisson biology but 28.6% / 26.4% under correlated lognormal–Poisson
-biology, consistent with Li et al. (*Genome Biology*, 2022) on large human
-cohorts. Their mean tests target a different question: a subset above a lowered
-bulk lowers the mean. The development comparison also measured directional
-linear areas against directional log areas on those matrices: 10% of cases ×16
-was called up in 75–95% vs 15–30% of genes (baseline mean ≥ 5), 20% of cases
-×4 in 70–80% vs 25–40%, with whole-cohort shifts about equal.
+Across the transcriptome, the prostate defaults called 7,877 mean shifts up and
+6,891 down, and 5,679 subsets above the mean shift and 414 below, among 24,246
+tested genes. In breast, 19,952 of 25,328 genes have a subset at q ≤ 0.05: with
+971 tumours, purity and subtype make almost every gene's tumours depart from a
+uniform shift, so the subset test rejects nearly everywhere, and the subset's
+fold and share, not its q-value, rank the genes. Such call sets need review of
+tissue mixture and technical effects, which marker recovery does not provide.
+The breast analysis took 89 minutes on a 16-core laptop shared with other
+jobs, nearly all of it the subset test spending its full budget on genes whose
+subsets were all but certain.
 
 ## Limits of this evidence
 
@@ -192,6 +192,7 @@ was called up in 75–95% vs 15–30% of genes (baseline mean ≥ 5), 20% of cas
   exposures. Batch or depth confounded with the groups is not simulated.
 - Twenty matrices per cell bound the mean false discovery proportion to within
   about ±2–3 percentage points.
-- DESeq2/edgeR were not refitted on the confirmation matrices.
+- DESeq2/edgeR and outlier statistics were not refitted on the confirmation
+  matrices.
 - Real-data behaviour is illustrated by the TCGA notebooks, where no complete
   truth exists.

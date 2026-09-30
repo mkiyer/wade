@@ -21,7 +21,7 @@ SUBTYPES = ["Luminal A", "Luminal B", "HER2-enriched", "Basal-like"]
 PROSTATE_PANEL = ["ERG", "ETV1", "ETV4", "FLI1", "SPINK1", "AMACR", "KRT5", "KRT15", "TP63"]
 BREAST_PANEL = ["ERBB2", "GRB7", "STARD3", "PGAP3", "ESR1", "PGR", "GATA3", "FOXA1",
                 "KRT5", "KRT14", "KRT17", "MKI67"]
-PARAMS = dict(seed=1, backend="rust")
+PARAMS = dict(seed=1)
 
 
 def clinical_wide(path, kind):
@@ -207,20 +207,19 @@ def load_cohort(cancer, out, config_path=None):
                   independent, paired, provenance, keep)
 
 
-def run(cohort, indices, out, name, *, max_permutations=wade.DEFAULT_MAX_PERMUTATIONS, paired=False,
-        condition=None, reference=None):
+def run(cohort, indices, out, name, *, max_permutations=wade.DEFAULT_MAX_PERMUTATIONS, condition=None,
+        reference=None):
     out = Path(out) / name
     out.mkdir(parents=True, exist_ok=True)
     meta = cohort.meta[indices.tolist()]
     cond = (meta["group"].to_numpy() == "tumor").astype(int) if condition is None else np.asarray(condition)
     if len(cond) != len(indices):
         raise ValueError("Condition is not aligned to selected samples")
-    strata = meta["patient"].to_numpy() if paired else None
-    reference = reference or ("paired" if paired else "primary")
+    reference = reference or "primary"
     normalization = cohort.normalizations[reference]
     settings = dict(PARAMS, max_permutations=max_permutations)
     export_table(meta.with_columns(condition=pl.Series(cond)), out, "sample-order")
-    (out / "design.json").write_text(json.dumps(dict(settings=settings, paired=paired,
+    (out / "design.json").write_text(json.dumps(dict(settings=settings,
         sample_order_sha256=array_hash(meta["library"].to_numpy()), inputs=cohort.provenance), indent=2) + "\n")
     start = time.perf_counter()
     print(f"Running {cohort.cancer}/{name}: {int(cohort.test_genes.sum())} selected genes, "
@@ -229,16 +228,16 @@ def run(cohort, indices, out, name, *, max_permutations=wade.DEFAULT_MAX_PERMUTA
         counts=array_hash(cohort.counts[:, indices]),
         normalization=normalization.select_samples(meta["library"].to_numpy()).to_dict(),
         genes=array_hash(cohort.genes["gene_name"].to_numpy()), test_genes=array_hash(cohort.test_genes),
-        samples=array_hash(meta["library"].to_numpy()), cond=array_hash(cond),
-        strata=None if strata is None else array_hash(strata))
+        samples=array_hash(meta["library"].to_numpy()), cond=array_hash(cond))
     result = cached_computation(key, lambda: wade.wade(
         cohort.counts[:, indices], cond, normalization=normalization, test_genes=cohort.test_genes,
         gene_names=cohort.genes["gene_name"].to_numpy(), sample_names=meta["library"].to_numpy(),
-        strata=strata, **settings), namespace="tcga")
+        **settings), namespace="tcga")
     wade.write_results(result, out / "all-genes.tsv")
     (out / "timing.json").write_text(json.dumps(dict(seconds=time.perf_counter()-start,
-        capped_gene_directions=int(np.sum(result.n_permutations == max_permutations)),
-        gene_permutations=int(result.n_permutations.sum())), indent=2)+"\n")
+        shuffled_mean_genes=int(np.sum(result.mean_permutations > 0)),
+        mean_permutations=int(result.mean_permutations.sum()),
+        subset_permutations=int(result.subset_permutations.sum())), indent=2)+"\n")
     print(f"Finished {name} in {time.perf_counter() - start:.1f}s", flush=True)
     return result
 
@@ -264,24 +263,11 @@ def annotation_expression(cohort, result, panel):
 def log2_expression(result, gene):
     """log2(count / size factor + 1) for display, whatever scale was tested."""
     x = result.expression[result.gene_index(gene)]
-    return x if result.params["scale"] == "log" else np.log2(x + 1)
-
-
-def subset_floor(result, genes):
-    """Cases above every control, and the upward p-value a pure subset of that size gives."""
-    from math import comb
-    n1, n0 = int(result.cond.sum()), int((result.cond == 0).sum())
-    rows = []
-    for gene in (g for g in genes if g in result.gene):
-        x = result.expression[result.gene_index(gene)]
-        k = int(np.sum(x[result.cond == 1] > x[result.cond == 0].max()))
-        rows.append(dict(gene=gene, cases_above_every_control=k, pure_subset_p=comb(n1, k) / comb(n1 + n0, k),
-                         pvalue_up=float(result.pvalue_up[result.gene_index(gene)])))
-    return pl.DataFrame(rows)
+    return x if result.params["scale"] == "log2" else np.log2(x + 1)
 
 
 def annotated_subsets(cohort, result, labels):
-    """Each gene's learned upward subset against an annotation WADE never sees.
+    """Each gene's subset against an annotation WADE never sees.
 
     `labels` maps gene -> (column, positive value, negative values). Only tumours
     annotated positive or negative enter the denominators; other and missing
@@ -291,10 +277,11 @@ def annotated_subsets(cohort, result, labels):
     rows = []
     for gene, (column, positive, negatives) in labels.items():
         status = dict(zip(tumours["library"].to_list(), tumours[column].to_list()))
-        members = set(result.subset(gene, "up").samples.tolist())
+        found = result.subset(gene)
+        members = set(found.samples.tolist())
         pos = {lib for lib, v in status.items() if v == positive}
         neg = {lib for lib, v in status.items() if v in negatives}
-        rows.append(dict(gene=gene, subset=len(members), annotated_positive=len(pos),
+        rows.append(dict(gene=gene, side=found.side, subset=len(members), annotated_positive=len(pos),
                          positive_in_subset=len(members & pos), negative_in_subset=len(members & neg),
                          precision=len(members & pos) / max(1, len(members & (pos | neg))),
                          recall=len(members & pos) / max(1, len(pos))))
@@ -302,7 +289,7 @@ def annotated_subsets(cohort, result, labels):
 
 
 def plot_subsets(result, panel):
-    return wade.plot_patterns(result, direction="up", label=[g for g in panel if g in result.gene])
+    return wade.plot_patterns(result, label=[g for g in panel if g in result.gene])
 
 
 def plot_qc(cohort, result):

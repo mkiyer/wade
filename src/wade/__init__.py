@@ -1,4 +1,4 @@
-"""WADE: upward and downward Wasserstein areas between case and control expression."""
+"""WADE: each gene's mean shift between cases and controls, and the subset of cases that departs from it."""
 from importlib.metadata import version as _version, PackageNotFoundError
 try:
     __version__ = _version("wade-rnaseq")
