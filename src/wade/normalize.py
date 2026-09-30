@@ -84,9 +84,9 @@ class Normalization:
     """Frozen sample size factors and their reference provenance.
 
     Factors have geometric mean one over the fit cohort. Selecting samples
-    never refits or recenters them. transform() returns counts / size_factor;
-    WADE then uses log2(value + 1). External factors must include sampling
-    depth, not just a composition correction.
+    never refits or recenters them. transform() returns counts / size_factor,
+    the scale WADE tests. External factors must include sampling depth, not
+    just a composition correction.
     """
     method: str
     sample_names: tuple

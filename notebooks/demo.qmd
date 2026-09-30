@@ -1,5 +1,5 @@
 ---
-title: "WADE: the mean shift, and the subset that departs from it"
+title: "WADE: the area between cases and controls, and the subset that departs from a common fold"
 subtitle: "WADE 0.2.0 · demonstration on simulated counts"
 format:
   html:
@@ -18,9 +18,9 @@ execute:
   echo: false
 ---
 
-For each gene WADE measures the mean shift between cases and controls, the
-signed area between their quantile functions, and finds the subset of cases
-that departs from that shift. It tests both. This notebook plants known
+For each gene WADE measures the area between cases and controls, the signed
+area between their quantile functions, and finds the subset of cases that
+departs from one fold shared by every case. It tests both. This notebook plants known
 patterns in simulated counts and shows how each one reads. It demonstrates
 behavior; the [validation](../docs/validation.md) page measures performance.
 
@@ -79,25 +79,30 @@ _ = wade.write_results(result, OUT / "all-genes.tsv")
 #| label: marker-results
 #| output: asis
 markdown_table(result.to_frame().filter(pl.col("gene").is_in(marker_names)).select(
-    "gene","mean_log2fc","mean_padj","subset_fraction","subset_log2fc","subset_padj"),
+    "gene","case_mean","control_mean","area_fraction","area_padj","subset_fraction","subset_log2fc","subset_padj"),
     OUT, "marker-results")
 ```
 
 ## How each pattern reads
 
-`mean_log2fc` is the mean shift, the signed area between the quantile
-functions: exactly the difference in group means, as a log2 fold. The subset
-comes from the same shift. If every case carried it alike, each case quantile
-would sit at a predicted level; walking up the cases, the running departure
-from those predictions falls through cases that carry less than their share and
-rises through cases that carry more, and its lowest point splits them. The
-smaller side, which departs further per case, is the subset. `subset_log2fc` is
-its fold over the prediction: positive above the mean shift, negative below.
-Nothing is chosen in advance.
+`area` is the signed area between the quantile functions of normalized
+counts: exactly the difference in group means, in reads per sample.
+`area_fraction` divides it by the total area under both curves, so it runs
+from −1 to 1 and reads like a fold: 1/3 for a doubling. Its test runs on counts
+thinned to the shallowest sample's depth, so a difference in sequencing depth
+cannot pass for a difference in expression, and genes with too few reads to
+trust wash out. The subset asks a different question: could every case carry
+one common fold? If every case carried it alike, each case quantile would sit
+at a predicted level; walking up the cases, the running departure from those
+predictions falls through cases that carry less than their share and rises
+through cases that carry more, and its lowest point splits them. The smaller
+side, which departs further per case, is the subset. `subset_log2fc` is its fold
+over what the alignment predicts: positive above it, negative below. Nothing is
+chosen in advance.
 
 ```{python}
 #| label: fig-demo-mean
-#| fig-cap: "Every case doubled: the whole case distribution moves right. The mean shift is up, and every case carries it, so no subset departs from it."
+#| fig-cap: "Every case doubled: the whole case distribution moves right. The area is positive, and every case carries the fold, so no subset departs from it."
 result.plot_gene("Mean increase")
 ```
 
@@ -109,7 +114,7 @@ result.plot_gene("Raised subset")
 
 ```{python}
 #| label: fig-demo-crossing
-#| fig-cap: "Most cases halved while 10% sit 32-fold above the controls. The quantile difference is negative for most cases and large and positive at the top; on the linear scale the raised tenth still pulls the mean up."
+#| fig-cap: "Most cases halved while 10% sit 32-fold above the controls. The quantile difference is negative for most cases and large and positive at the top; the raised tenth still pulls the mean up."
 result.plot_gene("Raised subset, halved majority")
 ```
 
@@ -124,7 +129,7 @@ s.side, len(s.samples), s.fraction, round(s.log2fc, 2), s.padj
 
 ```{python}
 #| label: fig-demo-lowered
-#| fig-cap: "20% of cases cut twentyfold: a subset below the mean shift. On the linear scale its boundary is loose, as the next section shows."
+#| fig-cap: "20% of cases cut twentyfold: a subset below the common fold. A count can fall by no more than its own level, so the boundary of a lowered subset is loose."
 result.plot_gene("Lowered subset")
 ```
 
@@ -136,47 +141,15 @@ result.plot_gene("Opposing subsets")
 
 ```{python}
 #| label: fig-demo-volcano
-#| fig-cap: "Mean shifts and their q-values."
+#| fig-cap: "Area fractions and their q-values."
 result.plot_volcano(label=marker_names[:-1])
 ```
 
 ```{python}
 #| label: fig-demo-patterns
-#| fig-cap: "Each gene's subset share against its fold over the mean shift, colored by its q-value."
+#| fig-cap: "Each gene's subset share against its fold over the alignment, colored by its q-value."
 result.plot_patterns(label=marker_names[:-1])
 ```
-
-## The two scales
-
-The linear scale tests normalized counts, where a subset far above normal
-dominates; the log2 scale weighs a halving like a doubling. The same genes on
-both:
-
-```{python}
-#| label: scales
-#| output: asis
-log2 = wade.wade(data, cond, normalization=norm, test_genes=keep, seed=1, scale="log2")
-rows = []
-for gene in marker_names:
-    for scale, r in (("linear", result), ("log2", log2)):
-        s = r.subset(gene)
-        rows.append(dict(gene=gene, scale=scale, mean_log2fc=float(r.mean_log2fc[r.gene_index(gene)]),
-                         mean_padj=float(r.mean_padj[r.gene_index(gene)]), subset=s.side,
-                         subset_fraction=s.fraction, subset_padj=s.padj))
-markdown_table(pl.DataFrame(rows), OUT, "scales")
-```
-
-For the raised subset over a halved majority, the linear mean rises with the
-raised tenth while the log2 mean falls with the majority, and on both scales
-the subset is the raised tenth. For the lowered subset the log2 walk turns
-close to the planted fifth, and the linear walk runs past it. With the planted
-cases at the bottom, every other case sits at a higher quantile than its value
-would earn among the controls, so it falls short of the prediction there. On
-the log2 scale the planted cases lower the mean shift enough that the rest
-clear the prediction at once; on the linear scale a count can fall by no more
-than its own level, the mean shift stays small, and the walk keeps falling
-through the lower unchanged cases. This is why the log2 scale is the choice for
-lowered subsets.
 
 ## Themes
 
@@ -194,8 +167,9 @@ result.plot_gene("Raised subset, halved majority", theme="high-contrast")
 
 ## What the calls mean
 
-A small `mean_padj` says the cases' mean differs from the controls' more than
-random relabelling explains. A small `subset_padj` says the cases depart from
-that shift more than relabelling explains: not every case carries it. Neither
+A small `area_padj` says the cases' mean differs from the controls' more than
+random relabelling explains, at a common sequencing depth. A small
+`subset_padj` says the cases depart from one common fold more than relabelling
+explains: not every case carries it. Neither
 certifies which patients are outliers or how common the subset is in the
 population.

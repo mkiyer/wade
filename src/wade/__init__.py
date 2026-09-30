@@ -1,4 +1,4 @@
-"""WADE: each gene's mean shift between cases and controls, and the subset of cases that departs from it."""
+"""WADE: each gene's area between cases and controls, and the subset of cases that departs from a common fold."""
 from importlib.metadata import version as _version, PackageNotFoundError
 try:
     __version__ = _version("wade-rnaseq")

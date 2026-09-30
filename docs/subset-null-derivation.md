@@ -10,9 +10,13 @@
 > null defined here, a common fold of observed count + 1, is not the RNA-seq
 > count-model null.
 >
-> The plan that follows the reviews is [subset-null-plan.md](subset-null-plan.md);
-> its section 8.3 lists the corrections. Several statements below are too
-> strong and will be rewritten with the redesign:
+> The plan that followed the reviews, with its section 8.3 of corrections, is
+> `docs/subset-null-plan.md` at tag `analysis-2026-09-30`. The present
+> [plan](subset-null-plan.md) records the decisions since, and
+> [method](method.md) the test as built on 30 September 2026. Its
+> registration is this page's W1 fold, and its claim is limited to genes whose
+> sparser group expects at least 128 reads per sample. Several statements
+> below are too strong and will be rewritten with the redesign:
 >
 > - **The alternative.** The depth over the case mean + 1 equals the largest
 >   gap between the controls' and the cases' Lorenz curves of count + 1. The
@@ -47,7 +51,7 @@ assume the reader has seen WADE's code. Section 4 describes the construction
 in the current release candidate (wade 0.2.0, not yet released) and its
 measured failure. Section 5 derives a replacement. Section 7 lists what we
 cannot yet justify and where we would most value criticism. Every number comes
-from [`research/subset_null_study.py`](../research/subset_null_study.py); its
+from `research/subset_null_study.py` (in git at tag `analysis-2026-09-30`); its
 output is kept in `.release/0.2.0/subset-null-study-20260929.txt`.
 
 ## 1. Summary
@@ -805,6 +809,9 @@ We would value the reviewer's view on each of these.
    method.
 
 ## 8. Reproduction
+
+The script and the package code it needs are in git at tag
+`analysis-2026-09-30`; run it from a checkout of that tag.
 
 ```sh
 WADE_TCGA_CONFIG=.release/0.2.0/tcga-config.json PYTHONPATH=src:research \

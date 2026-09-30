@@ -1,10 +1,15 @@
-"""The mean shift: each gene's signed area between the case and control quantile functions, and its test.
+"""The area: each gene's signed area between the case and control quantile functions, and its test.
 
 The signed area, the integral over u of Q_case(u) - Q_control(u), is exactly the difference in
-the group means on the tested scale: an empirical quantile function is a step function whose
-integral is the mean, whatever the group sizes. Its permutation test is therefore a question
-about the cases' total, a sum of n1 values drawn without replacement: shuffling answers it by
-brute force, and the saddlepoint of that sum's distribution answers it without shuffles.
+the group means: an empirical quantile function is a step function whose integral is the mean,
+whatever the group sizes. Its permutation test is therefore a question about the cases' total, a
+sum of n1 values drawn without replacement: shuffling answers it by brute force, and the
+saddlepoint of that sum's distribution answers it without shuffles.
+
+The test runs on counts thinned to one sequencing depth (equalized): read counts carry Poisson
+noise that shrinks with depth, so samples sequenced to different depths are not exchangeable at
+low counts even when nothing differs between the groups. Thinning every sample to the shallowest
+depth makes them exchangeable again, and washes out genes whose counts are too low to trust.
 """
 from math import erfc, exp, lgamma, log, pi, sqrt
 
@@ -13,7 +18,6 @@ import numpy as np
 from .permutation import draw_perms
 from .pvalues import sequential_p
 
-SCALES = ("linear", "log2")
 DIRECTIONS = ("both", "up", "down")
 EPS, TINY = np.finfo(float).eps, np.finfo(float).tiny
 TIE_RTOL = 100 * EPS
@@ -24,8 +28,8 @@ def jittered(counts, rows, seed):
     """Counts plus independent Uniform(0, 1) jitter, each gene's from its own stream (seed, row index).
 
     Counts are discrete, and many samples share one, above all zero. The subset test's null moves
-    each case by the mean shift and would pull such ties apart, which the observed data never
-    are; jittered values are all distinct. The jitter does not depend on the gene chunk.
+    each case by a fold and would pull such ties apart, which the observed data never are;
+    jittered values are all distinct. The jitter does not depend on the gene chunk.
     """
     out = np.array(counts, dtype=float)
     for row, index in zip(out, rows):
@@ -33,24 +37,43 @@ def jittered(counts, rows, seed):
     return out
 
 
-def expression(counts, factors, scale):
-    """Normalized counts on the test scale: count/size_factor, or log2 of that plus one."""
-    if scale not in SCALES:
-        raise ValueError("scale must be 'linear' or 'log2'")
-    # Keep the audited evaluation order, including the offset.
+def expression(counts, factors):
+    """Normalized counts: count / size_factor."""
     with np.errstate(over="ignore", invalid="ignore"):
         x = counts / factors
-        if scale == "log2":
-            x = np.log2(x + 1)
     if not np.isfinite(x).all():
         raise ValueError("counts / size_factors exceeds the finite expression range")
     return x
 
 
-def mean_test(x, cond, *, direction, stop, maximum, seed, strata=None, batch=4096):
+def equalized(counts, rows, factors, seed):
+    """Counts thinned binomially to the shallowest sample's depth, each gene from its own stream
+    (seed, row index, 1).
+
+    Sample j keeps each read with chance min(s) / s_j, s its size factor. A thinned Poisson count
+    is Poisson at the lower depth, so every sample ends at one depth and a difference in depth
+    between the groups cannot pass for a difference in expression. Counts are rounded to whole
+    reads first. factors holds one size factor per sample, or one row of them per gene. The draws
+    do not depend on the gene chunk.
+    """
+    keep = np.broadcast_to(factors.min(axis=-1, keepdims=True) / factors, np.shape(counts))
+    out = np.empty(np.shape(counts), np.int64)
+    for i, (row, index) in enumerate(zip(counts, rows)):
+        out[i] = np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(index, 1))).binomial(
+            np.rint(row).astype(np.int64), keep[i])
+    return out
+
+
+def area_values(counts, rows, factors, seed):
+    """The values the area test shuffles: equalized counts plus jitter, over the common depth."""
+    return expression(jittered(equalized(counts, rows, factors, seed), rows, seed),
+                      factors.min(axis=-1, keepdims=True))
+
+
+def mean_test(x, cond, *, direction, stop, maximum, seed, batch=4096):
     """Permutation p-values for each gene's signed area, the difference in means.
 
-    Rows are genes on the tested scale. direction "both" counts the shuffles whose difference
+    Rows are genes. direction "both" counts the shuffles whose difference
     lies at least as far from zero as the observed one, "up" those at least as high, and "down"
     those at least as low. Every gene sees the same shuffles and stops at its stop-th
     exceedance or at maximum (Besag-Clifford). Returns the p-values and the exceedance and
@@ -65,7 +88,7 @@ def mean_test(x, cond, *, direction, stop, maximum, seed, strata=None, batch=409
     exceed, tried = np.zeros(len(x), np.int64), np.zeros(len(x), np.int64)
     live, rng, drawn = np.ones(len(x), bool), np.random.default_rng(seed), 0
     while live.any():
-        labels = draw_perms(cond, min(batch, maximum - drawn), rng=rng, strata=strata)
+        labels = draw_perms(cond, min(batch, maximum - drawn), rng=rng)
         drawn += len(labels)
         genes = np.flatnonzero(live)
         sums = x[genes] @ labels.T.astype(float)                  # the cases' total in each shuffle

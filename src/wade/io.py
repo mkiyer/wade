@@ -455,8 +455,9 @@ def condition(
 
 
 RESULT_COLUMNS = (
-    "gene", "status", "mean_log2fc", "mean_pvalue", "mean_padj", "alignment_log2fc", "lorenz_gap",
-    "subset_group", "subset_side", "subset_fraction", "subset_log2fc", "subset_pvalue", "subset_padj",
+    "gene", "status", "case_mean", "control_mean", "area", "area_fraction", "area_pvalue", "area_padj",
+    "alignment_log2fc", "lorenz_gap", "subset_side", "subset_fraction", "subset_log2fc", "subset_pvalue",
+    "subset_padj",
 )
 
 
@@ -481,17 +482,16 @@ def manifest(res, *, alpha=0.05):
                     n_tested=int(tested.sum()), status=res.status.tolist(),
                     tested_reference_genes=[g for g, keep in zip(genes, tested)
                                             if keep and g in references]),
-        resampling=dict(mean_permutations=res.mean_permutations.tolist(),
-                        mean_exceedances=res.mean_exceedances.tolist(),
+        resampling=dict(area_permutations=res.area_permutations.tolist(),
+                        area_exceedances=res.area_exceedances.tolist(),
                         subset_permutations=res.subset_permutations.tolist(),
                         subset_exceedances=res.subset_exceedances.tolist(),
                         rule="per shuffled test: h/T at the h-th inclusive exceedance; otherwise (K+1)/(B+1) at cap B. "
-                             "A mean test with no shuffles was computed by the saddlepoint (run.mean_pvalue)"),
+                             "An area test with no shuffles was computed by the saddlepoint (run.area_pvalue)"),
         results=dict(alpha=alpha, family=res.params["family"], hypotheses=res.params["hypotheses"],
-                     n_significant=int(np.sum(res.mean_padj <= alpha)),
-                     n_subsets={f"{group} {side}": int(np.sum((res.subset_padj <= alpha) & (res.subset_group == group)
-                                                              & (res.subset_side == side)))
-                                for group in ("case", "control") for side in ("up", "down")},
+                     n_significant=int(np.sum(res.area_padj <= alpha)),
+                     n_subsets={side: int(np.sum((res.subset_padj <= alpha) & (res.subset_side == side)))
+                                for side in ("up", "down")},
                      minimum_discovery_rank=max(1, int(np.ceil(
                          res.params["hypotheses"] * res.params["minimum_shuffled_pvalue"] / alpha)))))
 

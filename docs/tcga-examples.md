@@ -79,15 +79,18 @@ its testing filter**, after sample eligibility and patient separation. The
 primary comparison has its own fitted object; the four breast subtype
 comparisons share one fit on their eligible tumour-only cohort. Subsetting a
 fitted object never re-centers its factors. The count denominator is that
-relative size factor, and the test uses `count / size_factor` without added
-noise; figures and descriptions use log2. Raw full-input totals accompany library QC, independently of the
-RLE factors. No genomic span is used as a transcript length.
+relative size factor. The area test runs on counts thinned binomially to the
+shallowest library's depth, and the subset test on `count / size_factor` with
+seeded jitter; figures and descriptions use log2. Raw full-input totals
+accompany library QC, independently of the RLE factors. No genomic span is used
+as a transcript length.
 
 This ordering distinguishes initial sample/reference QC from the subsequent
 testing filter; it is not a general prohibition on prefiltering. RLE's
-reference assumption must be justified. It does not remove depth-dependent
-sampling variance or confounding, and when many genes change together the
-reference itself can shift.
+reference assumption must be justified. RLE alone does not remove
+depth-dependent sampling variance (the area test's thinning does) or
+confounding, and when many genes change together the reference itself can
+shift.
 
 A gene is eligible if it has at least 10 raw counts in at least five pooled
 samples and pooled mean CPM of at least 0.1. No case/control or marker label
@@ -110,10 +113,11 @@ These are design counts, not approved results.
 
 ## Inference and interpretation
 
-Both primary comparisons use the defaults: `direction="both"`, the linear
-scale, `pvalues="auto"`, `relative_error=0.2`, seed 1 and the 999,999-shuffle
+Both primary comparisons use the defaults: `direction="both"`,
+`pvalues="auto"`, `relative_error=0.2`, seed 1 and the 999,999-shuffle
 budget, with one BH family per test over the tested genes. Every output
-includes the stopping records and the fitted normalization provenance.
+includes the stopping records, the depth kept by the area test's thinning and
+the fitted normalization provenance.
 
 The four breast subtype-versus-other-three contrasts use all eligible
 annotated tumours, one per patient. Normal-like and unknown labels are excluded
@@ -133,9 +137,10 @@ in the same patients, not an independent cohort. HER2-enriched is not
 synonymous with clinical HER2 positivity, nor basal-like with triple-negative
 disease.
 
-`mean_log2fc` is the fold of the group means, and the subset columns describe
-the cases that depart from that mean shift, so a lowered mean and a raised
-subset can coexist. The notebooks compare the ERG, ETV1, ETV4 and FLI1 subsets
-with the fusion annotations, and the ERBB2 and GRB7 subsets with GISTIC
-amplification calls; WADE never sees either. `subset_padj` tests whether every
-tumour could carry the mean shift; it does not certify individual patients.
+`area` and `area_fraction` compare the group means, and the subset columns
+describe the cases that depart from the one fold every tumour would share, so a
+lowered area and a raised subset can coexist. The notebooks compare the ERG,
+ETV1, ETV4 and FLI1 subsets with the fusion annotations, and the ERBB2 and GRB7
+subsets with GISTIC amplification calls; WADE never sees either. `subset_padj`
+tests whether every tumour could carry one common fold; it does not certify
+individual patients.

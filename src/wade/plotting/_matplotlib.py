@@ -39,7 +39,6 @@ def gene(spec):
     d = spec["detail"]
     axes[1].stairs(d.effect, d.probability, color=t.ink, linewidth=1.5, baseline=None)
     axes[1].axhline(0, color=t.axis, linewidth=.8)
-    axes[1].axhline(spec["shift"], color=t.case, linestyle="--", label="Mean shift")
     axes[1].axhline(spec["alignment"], color=t.case, linestyle=":", label="Alignment")
     axes[1].set(xlabel="Expression quantile", ylabel="Case − control (log₂ units)", xlim=(0, 1))
     axes[1].legend(loc="best", fontsize=9)

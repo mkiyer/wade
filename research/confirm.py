@@ -1,9 +1,15 @@
 """Confirm the selected public procedure on fresh transcriptome-scale seeds.
 
-Runs only the public API, wade.wade(direction="both", scale="linear"), plus a
-two-sided Wilcoxon comparator on the same normalized counts, test mask and BH
-family. Mean calls are scored against each profile's intended direction, and
-subset calls against the profiles that carry no subset.
+Runs only the public API, wade.wade(direction="both"), plus a two-sided
+Wilcoxon comparator on the same normalized counts, test mask and BH family.
+Area calls are scored against each profile's intended direction, and subset
+calls against the profiles that carry no subset.
+
+The protocol's "call" records the procedure confirmed under protocol v6: the
+mean test on unthinned counts, with a log2 option. This script runs the
+present wade(), whose area test thins every sample to the shallowest depth
+first; its settings (pvalues, relative_error, max_permutations, alpha) are the
+protocol's.
 
     PYTHONPATH=src:research python research/confirm.py --output .release/0.2.0/confirmation
 """
@@ -48,18 +54,19 @@ def run_one(cfg, setting, folder):
     norm = wade.fit_normalization(counts)
     keep = wade.filter_counts(counts, min_count=3, min_samples=2)
     start = time.time()
-    res = wade.wade(counts, cond, normalization=norm, test_genes=keep, direction="both", scale="linear",
+    res = wade.wade(counts, cond, normalization=norm, test_genes=keep, direction="both",
                     pvalues=cfg["procedure"]["pvalues"], relative_error=cfg["procedure"]["relative_error"],
                     max_permutations=cfg["procedure"]["max_permutations"], seed=setting["permutation_seed"])
     seconds = time.time() - start
     wp, wq = wilcoxon(res.expression, cond, res.tested)
     np.savez_compressed(folder / f"{setting['id']}.npz", profile=data["profile"], baseline_mean=data["baseline_mean"],
                         altered=data["altered"], tested=res.tested, size_factors=norm.size_factors,
-                        wade_mean=res.mean_log2fc, wade_p=res.mean_pvalue, wade_q=sided(res.mean_padj, res.mean_log2fc),
-                        wade_permutations=res.mean_permutations, wade_subset=np.c_[res.subset_fraction, res.subset_log2fc],
-                        wade_subset_q=sided(res.subset_padj, res.subset_log2fc), wilcoxon_p=wp, wilcoxon_q=wq)
+                        wade_area=res.area, wade_p=res.area_pvalue, wade_q=sided(res.area_padj, res.area),
+                        wade_permutations=res.area_permutations, wade_subset=np.c_[res.subset_fraction, res.subset_log2fc],
+                        wade_subset_q=sided(res.subset_padj, (res.subset_side == "up").astype(int)
+                                            - (res.subset_side == "down")), wilcoxon_p=wp, wilcoxon_q=wq)
     return dict(id=setting["id"], seconds=round(seconds, 1), tested=int(res.tested.sum()),
-                shuffled_mean=int((res.mean_permutations > 0).sum()))
+                shuffled_area=int((res.area_permutations > 0).sum()))
 
 
 def summarize(cfg, folder):

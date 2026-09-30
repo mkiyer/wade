@@ -30,7 +30,7 @@ def run(label, n1, n0, multiplier, cv2, seed):
     counts = wade.as_counts(design(rng, n1, n0, multiplier, cv2), sample_names=names)
     unit = wade.Normalization.from_size_factors(counts, dict.fromkeys(names, 1.0), source="unit")
     r = wade.wade(counts, cond, normalization=unit, max_permutations=SHUFFLES, seed=seed)
-    up, down = r.subset_log2fc > 0, r.subset_log2fc < 0
+    up, down = r.subset_side == "up", r.subset_side == "down"
     print(f"  {label:34s} subset up {np.mean(up):4.0%} / down {np.mean(down):4.0%} of genes, "
           f"{np.mean(r.subset_fraction):4.0%} of cases; significant {np.mean(r.subset_pvalue <= .05):4.0%}")
 

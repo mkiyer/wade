@@ -235,8 +235,8 @@ def run(cohort, indices, out, name, *, max_permutations=wade.DEFAULT_MAX_PERMUTA
         **settings), namespace="tcga")
     wade.write_results(result, out / "all-genes.tsv")
     (out / "timing.json").write_text(json.dumps(dict(seconds=time.perf_counter()-start,
-        shuffled_mean_genes=int(np.sum(result.mean_permutations > 0)),
-        mean_permutations=int(result.mean_permutations.sum()),
+        shuffled_area_genes=int(np.sum(result.area_permutations > 0)),
+        area_permutations=int(result.area_permutations.sum()),
         subset_permutations=int(result.subset_permutations.sum())), indent=2)+"\n")
     print(f"Finished {name} in {time.perf_counter() - start:.1f}s", flush=True)
     return result
@@ -261,9 +261,8 @@ def annotation_expression(cohort, result, panel):
 
 
 def log2_expression(result, gene):
-    """log2(count / size factor + 1) for display, whatever scale was tested."""
-    x = result.expression[result.gene_index(gene)]
-    return x if result.params["scale"] == "log2" else np.log2(x + 1)
+    """log2(count / size factor + 1) for display."""
+    return np.log2(result.expression[result.gene_index(gene)] + 1)
 
 
 def annotated_subsets(cohort, result, labels):

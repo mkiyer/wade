@@ -20,12 +20,13 @@ def test_export_manifest_and_table_roundtrip(result,tmp_path,extension):
         frame=pl.read_parquet(path)
     else:
         frame=pl.read_ipc(path)
-    for column in ("mean_log2fc","mean_padj","subset_log2fc","subset_padj"):
+    for column in ("case_mean","area","area_fraction","area_padj","subset_log2fc","subset_padj"):
         np.testing.assert_allclose(frame[column].to_numpy(),getattr(result,column),equal_nan=True)
     assert frame.columns==list(wade.RESULT_COLUMNS)
     record=json.loads((tmp_path/'report.manifest.json').read_text())
     assert record["design"]["n_tested"]==14
-    assert record["resampling"]["mean_permutations"]==result.mean_permutations.tolist()
+    assert record["resampling"]["area_permutations"]==result.area_permutations.tolist()
+    assert record["run"]["depth_equalized"]==result.params["depth_equalized"]
     assert record["results"]["hypotheses"]==14 and record["run"]["direction"]=="both"
     assert set(record["run"]["size_factor_median"])=={"case","control"}
     assert record["run"]["max_permutations"]==41

@@ -31,7 +31,6 @@ def gene(spec):
         fig.add_vline(x=b["expression"], line_dash=dash, line_color=t.ink, row=1, col=1,
                       annotation_text=b["label"], annotation_position="top left")
         fig.add_vline(x=b["quantile"], line_dash=dash, line_color=t.ink, row=1, col=2)
-    fig.add_hline(y=spec["shift"], line_dash="dash", line_color=t.case, row=1, col=2)
     fig.add_hline(y=spec["alignment"], line_dash="dot", line_color=t.case, row=1, col=2)
     fig.update_xaxes(title_text=EXPRESSION_LABEL,row=1,col=1)
     fig.update_yaxes(title_text="Cumulative fraction",row=1,col=1)

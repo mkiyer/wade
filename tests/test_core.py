@@ -2,12 +2,13 @@
 from fractions import Fraction
 from itertools import combinations
 import math
+import warnings
 import numpy as np
 import pytest
 from scipy.stats import false_discovery_control
 
 import wade
-from wade._means import jittered, mean_saddlepoint, mean_test
+from wade._means import area_values, equalized, jittered, mean_saddlepoint, mean_test
 from wade._subsets import split, subset_test
 from wade.pvalues import sequential_p
 
@@ -90,7 +91,7 @@ def test_the_computed_tail_matches_exact_enumeration_of_every_labelling():
     assert mean_saddlepoint(tied, cond, direction="up")[0][0] == pytest.approx(2 / len(totals[0]), rel=1e-9)
 
 
-def test_auto_computes_the_mean_test_and_shuffles_where_the_saddlepoint_is_less_precise():
+def test_auto_computes_the_area_test_and_shuffles_where_the_saddlepoint_is_less_precise():
     rng = np.random.default_rng(22)
     x = rng.poisson(40, (30, 24))
     x[:10, :12] *= 3
@@ -98,13 +99,14 @@ def test_auto_computes_the_mean_test_and_shuffles_where_the_saddlepoint_is_less_
     cond = np.r_[np.ones(12, int), np.zeros(12, int)]
     run = lambda **k: wade.wade(x, cond, max_permutations=199, seed=3, **k)
     auto, brute = run(), run(pvalues="permutation")
-    computed, error = mean_saddlepoint(auto.expression, cond, direction="both")
+    z = area_values(x, range(30), auto.normalization.size_factors, auto.params["seed"])
+    computed, error = mean_saddlepoint(z, cond, direction="both")
     shuffled = error > auto.params["relative_error"]
     assert shuffled.any() and (~shuffled).any()
-    np.testing.assert_array_equal(auto.mean_permutations > 0, shuffled)          # only there, from the same shuffles
-    np.testing.assert_array_equal(auto.mean_pvalue[~shuffled], computed[~shuffled])
-    np.testing.assert_array_equal(auto.mean_pvalue[shuffled], brute.mean_pvalue[shuffled])
-    assert np.all(brute.mean_permutations > 0)
+    np.testing.assert_array_equal(auto.area_permutations > 0, shuffled)          # only there, from the same shuffles
+    np.testing.assert_array_equal(auto.area_pvalue[~shuffled], computed[~shuffled])
+    np.testing.assert_array_equal(auto.area_pvalue[shuffled], brute.area_pvalue[shuffled])
+    assert np.all(brute.area_permutations > 0)
     with pytest.raises(ValueError, match="strata"):                               # independent samples only
         run(strata=np.arange(24) % 2)
 
@@ -151,19 +153,20 @@ def test_chunk_batch_and_filter_invariance(direction):
         kwargs = dict(direction=direction, max_permutations=97, seed=17, pvalues=pvalues)
         a = wade.wade(x, cond, gene_chunk=30, **kwargs)
         b = wade.wade(x, cond, gene_chunk=3, **kwargs)
-        for key in wade.RESULT_COLUMNS[2:] + ("mean_permutations", "mean_exceedances", "subset_permutations"):
+        for key in wade.RESULT_COLUMNS[2:] + ("area_permutations", "area_exceedances", "subset_permutations"):
             np.testing.assert_array_equal(getattr(a, key), getattr(b, key))
     kwargs = dict(direction=direction, max_permutations=97, seed=17, pvalues="permutation")
     a = wade.wade(x, cond, gene_chunk=30, **kwargs)
     mask = np.arange(30) % 2 == 0
     c = wade.wade(x, cond, test_genes=mask, **kwargs)
     np.testing.assert_array_equal(a.normalization.size_factors, c.normalization.size_factors)
-    np.testing.assert_array_equal(a.mean_pvalue[mask], c.mean_pvalue[mask])
+    np.testing.assert_array_equal(a.area_pvalue[mask], c.area_pvalue[mask])
+    z = area_values(x[1:3], range(1, 3), a.normalization.size_factors, a.params["seed"])   # per gene, not per chunk
     for batch in (1, 13, 97):
-        p, _, tried = mean_test(a.expression[1:3], cond, direction=direction, stop=a.params["stop_exceedances"],
+        p, _, tried = mean_test(z, cond, direction=direction, stop=a.params["stop_exceedances"],
                                 maximum=97, seed=17, batch=batch)
-        np.testing.assert_array_equal(p, a.mean_pvalue[1:3])
-        np.testing.assert_array_equal(tried, a.mean_permutations[1:3])
+        np.testing.assert_array_equal(p, a.area_pvalue[1:3])
+        np.testing.assert_array_equal(tried, a.area_permutations[1:3])
 
 
 def test_qvalues_cover_the_tested_genes_and_excluded_genes_have_no_test():
@@ -173,58 +176,72 @@ def test_qvalues_cover_the_tested_genes_and_excluded_genes_have_no_test():
                   test_genes=["gene0", "gene2", "gene3"])
     assert list(r.status[:4]) == ["all_zero", "filtered", "tested", "tested"]
     t = r.tested
-    for column in ("mean_pvalue", "mean_padj", "subset_pvalue", "subset_padj"):
+    for column in ("area_pvalue", "area_padj", "subset_pvalue", "subset_padj"):
         assert np.isnan(getattr(r, column)[~t]).all()
-    assert (r.mean_permutations[~t] == 0).all() and (r.subset_permutations[~t] == 0).all()
-    np.testing.assert_allclose(r.mean_padj[t], false_discovery_control(r.mean_pvalue[t]))
+    assert (r.area_permutations[~t] == 0).all() and (r.subset_permutations[~t] == 0).all()
+    np.testing.assert_allclose(r.area_padj[t], false_discovery_control(r.area_pvalue[t]))
     np.testing.assert_allclose(r.subset_padj[t], false_discovery_control(r.subset_pvalue[t]))
     assert r.params["hypotheses"] == t.sum() and list(r.columns()) == list(wade.RESULT_COLUMNS)
 
 
-@pytest.mark.parametrize("scale", ["linear", "log2"])
-def test_scale_sets_the_tested_expression_and_the_mean_fold(scale):
-    x = np.random.default_rng(11).poisson(40, (5, 14))
+def test_expression_the_effects_and_the_thinned_counts_of_the_area_test():
+    rng = np.random.default_rng(11)
+    x = rng.poisson(400, (200, 14))
     x[1, :3] *= 20
     cond = np.r_[np.ones(7, int), np.zeros(7, int)]
-    r = wade.wade(x, cond, scale=scale, max_permutations=19)
+    names = [f"s{i}" for i in range(14)]
+    data = wade.as_counts(x, sample_names=names)
+    norm = wade.Normalization.from_size_factors(data, dict(zip(names, np.linspace(0.5, 2, 14))), source="test")
+    r = wade.wade(data, cond, normalization=norm, max_permutations=19)
+    sf = r.normalization.size_factors                              # centred to geometric mean one
     jitter = jittered(x, range(len(x)), r.params["seed"]) - x
     assert np.all((jitter >= 0) & (jitter < 1))                  # each count moves within its unit
-    linear = (x + jitter) / r.normalization.size_factors
-    expected = linear if scale == "linear" else np.log2(linear + 1)
-    np.testing.assert_array_equal(r.expression, expected)
-    np.testing.assert_array_equal(wade.wade(x, cond, scale=scale, max_permutations=19, gene_chunk=2).expression,
+    np.testing.assert_array_equal(r.expression, (x + jitter) / sf)
+    np.testing.assert_array_equal(wade.wade(data, cond, normalization=norm, max_permutations=19, gene_chunk=2).expression,
                                   r.expression)                  # the jitter follows the gene, not the chunk
-    m1, m0 = expected[:, :7].mean(axis=1), expected[:, 7:].mean(axis=1)
-    np.testing.assert_allclose(r.mean_log2fc, np.log2((m1 + 1) / (m0 + 1)) if scale == "linear" else m1 - m0)
+    plain = x / sf                                               # the effects carry no jitter
+    m1, m0 = plain[:, :7].mean(axis=1), plain[:, 7:].mean(axis=1)
+    np.testing.assert_allclose(r.case_mean, m1)
+    np.testing.assert_allclose(r.control_mean, m0)
+    np.testing.assert_allclose(r.area, m1 - m0)
+    np.testing.assert_allclose(r.area_fraction, (m1 - m0) / (m1 + m0))
+    assert r.params["depth_equalized"] == pytest.approx(sf.min() / np.median(sf))
+    # The area test's counts: every sample thinned to the shallowest depth, which keeps all its reads.
+    thinned = equalized(x, range(len(x)), sf, r.params["seed"])
+    np.testing.assert_array_equal(thinned[:, np.argmin(sf)], x[:, np.argmin(sf)])
+    assert np.all(thinned <= x)
+    np.testing.assert_array_equal(equalized(x[2:4], range(2, 4), sf, r.params["seed"]), thinned[2:4])
+    keep, reads = sf.min() / sf, x.sum(axis=0)                     # each sample keeps min(s) / s of its reads
+    assert np.all(np.abs(thinned.sum(axis=0) / reads - keep) <= 4 * np.sqrt(keep * (1 - keep) / reads))
 
 
-def registration_oracle(case, control, scale):
-    """The Wasserstein-1 registration: the weighted median of the log quantile ratio over the exact
-    merged grid, the middle of the median interval when the weights below a value make exactly half."""
-    log = (lambda v: math.log1p(v)) if scale == "linear" else float
-    pieces = sorted((log(q1) - log(q0), w) for _, w, q1, q0 in cells(case, control))
+def registration_oracle(case, control):
+    """The Wasserstein-1 registration: the weighted median of the log quantile ratio of count + 1 over
+    the exact merged grid, the middle of the median interval when the weights below a value make
+    exactly half."""
+    pieces = sorted((math.log1p(q1) - math.log1p(q0), w) for _, w, q1, q0 in cells(case, control))
     below = Fraction(0)
     for k, (value, w) in enumerate(pieces):
         below += w
         if below >= Fraction(1, 2):
             if below == Fraction(1, 2) and k + 1 < len(pieces):
                 value = (value + pieces[k + 1][0]) / 2
-            return math.exp(value) if scale == "linear" else value
+            return math.exp(value)
 
 
-def split_oracle(x, cond, scale):
+def split_oracle(x, cond):
     """The split in exact rational arithmetic: the lowest running departure from the mean shift's
     prediction, the smaller side of its cut, that side's fold over what the registration predicts
-    for its quantiles, and the gap (the depth over the case mean + 1 on the linear scale)."""
+    for its quantiles, and the gap (the depth over the case mean + 1)."""
     a = sorted(Fraction(v) for v, c in zip(x, cond) if c)
     b = sorted(Fraction(v) for v, c in zip(x, cond) if not c)
     n1 = len(a)
     grid = cells(a, b)
     area = sum(w * (q1 - q0) for _, w, q1, q0 in grid)
-    share = [q0 + 1 if scale == "linear" else 1 for *_, q0 in grid]
+    share = [q0 + 1 for *_, q0 in grid]
     total = sum(s * w for s, (_, w, _, _) in zip(share, grid))
     predicted = [q0 + area * s / total for s, (*_, q0) in zip(share, grid)]
-    shift = registration_oracle(a, b, scale)
+    shift = registration_oracle(a, b)
     lowest, cut = None, None
     for i in range(1, n1):                                  # never the whole cohort
         if a[i - 1] == a[i]:                               # ties never straddle a boundary
@@ -239,11 +256,8 @@ def split_oracle(x, cond, scale):
     seen = sum(a[lo_i:hi_i]) / (hi_i - lo_i)
     other = sum(q0 * w for lo, w, _, q0 in grid if Fraction(lo_i, n1) <= lo and lo + w <= Fraction(hi_i, n1)) \
         * n1 / (hi_i - lo_i)
-    if scale == "linear":
-        fold = math.log2(float(seen + 1) / (shift * float(other + 1)))
-        gap = float(-lowest / (sum(a) / n1 + 1))
-    else:
-        fold, gap = float(seen - other) - shift, float(-lowest)
+    fold = math.log2(float(seen + 1) / (shift * float(other + 1)))
+    gap = float(-lowest / (sum(a) / n1 + 1))
     return hi_i - lo_i, 1 if up else -1, fold, gap, shift
 
 
@@ -255,52 +269,39 @@ def test_split_matches_an_exact_oracle_on_tied_data():
         x[:10, :rng.integers(1, n1)] *= 9                 # raised cases
         x[10:20, n1 - 1] = 0                              # a lowered case
         x[20:22] = 3                                      # no change at all
-        for scale in ("linear", "log2"):
-            size, side, group, fold, gap, shift = split(x, cond, scale)
-            assert (group == 1).all()
-            for g, row in enumerate(x):
-                k, s, f, h, r = split_oracle(row.tolist(), cond.tolist(), scale)
-                assert (size[g], side[g]) == (k, s)
-                assert np.isnan(fold[g]) if np.isnan(f) else fold[g] == pytest.approx(f, abs=1e-9)
-                assert gap[g] == pytest.approx(h, abs=1e-12) and shift[g] == pytest.approx(r, rel=1e-12)
+        size, side, fold, gap, shift = split(x, cond)
+        for g, row in enumerate(x):
+            k, s, f, h, r = split_oracle(row.tolist(), cond.tolist())
+            assert (size[g], side[g]) == (k, s)
+            assert np.isnan(fold[g]) if np.isnan(f) else fold[g] == pytest.approx(f, abs=1e-9)
+            assert gap[g] == pytest.approx(h, abs=1e-12) and shift[g] == pytest.approx(r, rel=1e-12)
 
 
-@pytest.mark.parametrize("scale", ["linear", "log2"])
-def test_the_gap_is_the_largest_fall_of_the_cases_lorenz_curve_below_the_controls(scale):
+def test_the_gap_is_the_largest_fall_of_the_cases_lorenz_curve_below_the_controls():
     rng = np.random.default_rng(5)
     n1, n0 = 13, 29
     x = rng.gamma(2, 30, (50, n1 + n0))
     x[:15, :3] *= 12
     cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
-    values = x if scale == "linear" else np.log2(x + 1)
-    _, _, _, _, gap, _ = split(values, cond, scale)
+    _, _, _, gap, _ = split(x, cond)
     t = np.arange(1, n1) / n1
-    for row, h in zip(values, gap):
-        z, w = np.sort(row[:n1]), np.sort(row[n1:])
-        if scale == "linear":
-            z, w = z + 1, w + 1
-        integral = lambda v, u: np.interp(u, np.arange(len(v) + 1) / len(v), np.r_[0, np.cumsum(v)] / len(v))
-        if scale == "linear":                               # Lorenz curves of count + 1
-            case, control = integral(z, t) / z.mean(), integral(w, t) / w.mean()
-        else:                                               # absolute Lorenz curves of log2 expression
-            case, control = integral(z, t) - t * z.mean(), integral(w, t) - t * w.mean()
+    integral = lambda v, u: np.interp(u, np.arange(len(v) + 1) / len(v), np.r_[0, np.cumsum(v)] / len(v))
+    for row, h in zip(x, gap):
+        z, w = np.sort(row[:n1]) + 1, np.sort(row[n1:]) + 1           # Lorenz curves of count + 1
+        case, control = integral(z, t) / z.mean(), integral(w, t) / w.mean()
         assert h == pytest.approx(max((control - case).max(), 0), abs=1e-12)
 
 
 def test_the_registration_is_the_middle_of_the_median_interval_and_swapping_inverts_it():
     rng = np.random.default_rng(3)
-    for scale in ("linear", "log2"):
-        for n1, n0 in ((2, 2), (4, 4), (5, 7), (30, 20)):
-            x = rng.integers(0, 40, (30, n1 + n0)).astype(float)
-            cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
-            *_, shift = split(x, cond, scale)
-            *_, back = split(x, 1 - cond, scale)
-            for g, row in enumerate(x):
-                assert shift[g] == pytest.approx(registration_oracle(row[:n1], row[n1:], scale), rel=1e-12, abs=1e-12)
-            if scale == "linear":
-                np.testing.assert_allclose(shift * back, 1, rtol=1e-12)
-            else:
-                np.testing.assert_allclose(shift + back, 0, atol=1e-12)
+    for n1, n0 in ((2, 2), (4, 4), (5, 7), (30, 20)):
+        x = rng.integers(0, 40, (30, n1 + n0)).astype(float)
+        cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
+        *_, shift = split(x, cond)
+        *_, back = split(x, 1 - cond)
+        for g, row in enumerate(x):
+            assert shift[g] == pytest.approx(registration_oracle(row[:n1], row[n1:]), rel=1e-12, abs=1e-12)
+        np.testing.assert_allclose(shift * back, 1, rtol=1e-12)
 
 
 def unit(counts):
@@ -309,8 +310,7 @@ def unit(counts):
     return data, wade.Normalization.from_size_factors(data, dict.fromkeys(names, 1.0), source="test")
 
 
-@pytest.mark.parametrize("scale", ["linear", "log2"])
-def test_a_shared_fold_has_no_subset_and_departures_either_way_are_found(scale):
+def test_a_shared_fold_has_no_subset_and_departures_either_way_are_found():
     control = 100 + 10 * np.arange(40)                     # margins far beyond the unit jitter
     shared = 3 * (control + 1) - 1                          # the same fold on count + 1 for every case
     raised, lowered = shared.copy(), shared.copy()
@@ -319,23 +319,22 @@ def test_a_shared_fold_has_no_subset_and_departures_either_way_are_found(scale):
     cond = np.r_[np.ones(40, int), np.zeros(40, int)]
     for case, direction in ((shared, "none"), (raised, "up"), (lowered, "down")):
         values = np.r_[case, control][None].astype(float)
-        size, *_ = split(values if scale == "linear" else np.log2(values + 1), cond, scale)
+        size, *_ = split(values, cond)
         assert size[0] == (0 if direction == "none" else 8)      # the walk itself, on exact values
         data, norm = unit(np.c_[np.r_[case, control], np.full(80, 100)].T)   # a steady gene keeps no sample empty
-        r = wade.wade(data, cond, normalization=norm, scale=scale, max_permutations=99)
+        r = wade.wade(data, cond, normalization=norm, max_permutations=99)
         s = r.subset(0)
         if direction == "none":
             assert s.pvalue > .05                                  # after jitter, only a chance departure
         else:
-            assert s.side == direction, (scale, direction)
+            assert s.side == direction, direction
             extreme = np.argsort(case)[::-1][:8] if direction == "up" else np.argsort(case)[:8]
             assert set(s.samples) == {f"s{i}" for i in extreme}
             assert s.fraction == .2 and (s.log2fc > 0) == (direction == "up")
             # A random split puts all eight among the cases with chance C(40, 8) / C(80, 8) =
             # 0.003, so the test can reach significance; four could not (0.058). Eight raised
-            # cases are significant on either scale, eight lowered ones only on log2, where a
-            # halving weighs as much as a doubling.
-            if direction == "up" or scale == "log2":
+            # cases are significant; eight lowered to zero weigh less on count + 1.
+            if direction == "up":
                 assert s.pvalue <= .05
 
 
@@ -344,9 +343,8 @@ def test_ties_never_split_a_subset_and_no_change_has_none():
     r = wade.wade(data, [1] * 20 + [0] * 20, normalization="library", max_permutations=19)
     # A lone gene under library normalization gives every sample the same value, up to rounding.
     assert (r.subset_fraction[0], r.subset_pvalue[0]) == (0, 1) and np.isnan(r.subset_log2fc[0])
-    for scale in ("linear", "log2"):
-        size, side, _, fold, gap, _ = split(np.zeros((1, 8)), np.r_[[1] * 4, [0] * 4], scale)
-        assert (size[0], side[0], gap[0]) == (0, 0, 0) and np.isnan(fold[0])
+    size, side, fold, gap, _ = split(np.zeros((1, 8)), np.r_[[1] * 4, [0] * 4])
+    assert (size[0], side[0], gap[0]) == (0, 0, 0) and np.isnan(fold[0])
 
 
 def test_the_subset_test_and_its_records():
@@ -372,16 +370,15 @@ def test_the_subset_test_and_its_records():
     np.testing.assert_array_equal(run().subset_pvalue, r.subset_pvalue)          # the subset test always shuffles
 
 
-@pytest.mark.parametrize("scale", ["linear", "log2"])
-def test_one_sided_subset_tests_split_the_shuffles_of_the_two_sided_test(scale):
+def test_one_sided_subset_tests_split_the_shuffles_of_the_two_sided_test():
     rng = np.random.default_rng(14)
     x = rng.poisson(40, (30, 40)).astype(float)
     x[:10, :4] *= 8                                          # raised subsets
     x[10:20, :5] //= 8                                       # lowered subsets
     cond = np.r_[np.ones(20, int), np.zeros(20, int)]
-    run = lambda d: subset_test(x, cond, scale, direction=d, stop=STOP, maximum=19, seed=6)    # 19 shuffles for every gene
+    run = lambda d: subset_test(x, cond, direction=d, stop=STOP, maximum=19, seed=6)    # 19 shuffles for every gene
     (_, both, tried), (_, up, _), (_, down, _) = run("both"), run("up"), run("down")
-    _, side, *_ = split(x, cond, scale)
+    _, side, *_ = split(x, cond)
     ran = tried > 0
     assert ran.any() and np.all(tried[ran] == 19)
     # A deeper subset on the observed side counts for that side; every other shuffle counts
@@ -390,16 +387,15 @@ def test_one_sided_subset_tests_split_the_shuffles_of_the_two_sided_test(scale):
     assert np.all(same[ran] <= both[ran]) and np.all(same[ran] + other[ran] >= 19)
 
 
-@pytest.mark.parametrize("scale", ["linear", "log2"])
-def test_table_and_subset_agree_for_every_gene(scale):
+def test_table_and_subset_agree_for_every_gene():
     x = np.random.default_rng(31).poisson(30, (40, 30))
     x[:6, :4] *= 20
     x[6:9, 4:15] //= 4
     cond = np.r_[np.ones(15, int), np.zeros(15, int)]
-    r = wade.wade(x, cond, scale=scale, max_permutations=19)
+    r = wade.wade(x, cond, max_permutations=19)
     for g in range(40):
         s = r.subset(g)
-        assert (s.fraction, s.side, s.group) == (r.subset_fraction[g], r.subset_side[g], r.subset_group[g])
+        assert (s.fraction, s.side) == (r.subset_fraction[g], r.subset_side[g])
         np.testing.assert_equal(s.log2fc, r.subset_log2fc[g])
         assert set(s.samples) <= set(r.sample_names[:15])
         inside = np.isin(r.sample_names[:15], s.samples)
@@ -411,12 +407,16 @@ def test_table_and_subset_agree_for_every_gene(scale):
 
 
 @pytest.mark.parametrize("kwargs", [{"max_permutations": 0}, {"max_permutations": 2.5}, {"gene_chunk": 0},
-                                    {"direction": "sideways"}, {"scale": "sqrt"}, {"subsets": "controls"},
-                                    {"relative_error": 0},
-                                    {"relative_error": 1.5},
+                                    {"direction": "sideways"}, {"relative_error": 0}, {"relative_error": 1.5},
                                     {"pvalues": "exact"}])
 def test_invalid_settings_are_errors(kwargs):
     with pytest.raises(ValueError):
+        wade.wade(np.ones((3, 4)), [1, 1, 0, 0], **kwargs)
+
+
+@pytest.mark.parametrize("kwargs", [{"scale": "log2"}, {"subsets": "either"}])
+def test_removed_settings_are_rejected(kwargs):
+    with pytest.raises(TypeError):
         wade.wade(np.ones((3, 4)), [1, 1, 0, 0], **kwargs)
 
 
@@ -459,62 +459,31 @@ def subset_genes(rng, n1, n0, genes=24):
     return x, np.r_[np.ones(n1, int), np.zeros(n0, int)]
 
 
-@pytest.mark.parametrize("scale", ["linear", "log2"])
-@pytest.mark.parametrize("both_groups", [False, True])
-def test_a_fold_on_the_cases_leaves_every_subset_pvalue_unchanged(scale, both_groups):
+def test_a_fold_on_the_cases_leaves_every_subset_pvalue_unchanged():
     # The gap ignores a fold on the cases and the registration carries it, so the registered
     # pool, the observed gap and every shuffled gap are the same: the whole p-value is unchanged.
     x, cond = subset_genes(np.random.default_rng(21), 18, 30)
-    values = x if scale == "linear" else np.log2(x + 1)
-    moved = values.copy()
-    moved[:, cond == 1] = (values[:, cond == 1] + 1) * 7.3 - 1 if scale == "linear" else values[:, cond == 1] + 2.9
+    moved = x.copy()
+    moved[:, cond == 1] = (x[:, cond == 1] + 1) * 7.3 - 1
     for direction in ("both", "up", "down"):
-        run = lambda v: subset_test(v, cond, scale, direction=direction, both_groups=both_groups, stop=STOP,
-                                    maximum=199, seed=4)
-        (p, hits, tried), (q, hits2, tried2) = run(values), run(moved)
+        run = lambda v: subset_test(v, cond, direction=direction, stop=STOP, maximum=199, seed=4)
+        (p, hits, tried), (q, hits2, tried2) = run(x), run(moved)
         np.testing.assert_array_equal(p, q)
         np.testing.assert_array_equal(hits, hits2)
         np.testing.assert_array_equal(tried, tried2)
 
 
-@pytest.mark.parametrize("scale", ["linear", "log2"])
-def test_testing_both_groups_is_symmetric_in_cases_and_controls(scale):
-    # Swapping the labels swaps the walked groups and inverts the registration, which the gap
-    # ignores; the shuffles are the complements of the same draws. A subset that makes the cases
-    # higher makes the swapped cases lower.
-    x, cond = subset_genes(np.random.default_rng(22), 16, 25)
-    values = x if scale == "linear" else np.log2(x + 1)
-    run = lambda c, d: subset_test(values, c, scale, direction=d, both_groups=True, stop=STOP, maximum=199, seed=9)[0]
-    np.testing.assert_array_equal(run(cond, "both"), run(1 - cond, "both"))
-    np.testing.assert_array_equal(run(cond, "up"), run(1 - cond, "down"))
-    size, side, group, fold, *_ = split(values, cond, scale, both_groups=True)
-    size2, side2, group2, fold2, *_ = split(values, 1 - cond, scale, both_groups=True)
-    np.testing.assert_array_equal(size, size2)
-    np.testing.assert_array_equal(side, side2)
-    np.testing.assert_array_equal(group[size > 0], 1 - group2[size > 0])
-    np.testing.assert_allclose(fold, fold2, atol=1e-12)
-
-
-def test_a_subset_of_controls_is_found_only_when_both_groups_are_tested():
-    # Cases more even than controls (a mean-preserving contraction, the review's example): the
-    # cases' Lorenz curve never falls below the controls', so the cases hold no subset; the
-    # controls do, and a test of both groups finds them.
+def test_cases_more_even_than_the_controls_hold_no_subset():
+    # Cases more even than controls (a mean-preserving contraction): the cases' Lorenz curve never
+    # falls below the controls', so the cases hold no subset.
     rng = np.random.default_rng(23)
     case = 1000 + rng.normal(0, 20, (6, 40))
     control = np.c_[500 + rng.normal(0, 20, (6, 32)), 3000 + rng.normal(0, 60, (6, 8))]
     x, cond = np.c_[case, control], np.r_[np.ones(40, int), np.zeros(40, int)]
-    size, _, _, _, gap, _ = split(x, cond, "linear")
+    size, _, _, gap, _ = split(x, cond)
     assert (size == 0).all() and (gap == 0).all()
-    p = subset_test(x, cond, "linear", direction="both", stop=STOP, maximum=999, seed=1)[0]
+    p = subset_test(x, cond, direction="both", stop=STOP, maximum=999, seed=1)[0]
     assert (p == 1).all()
-    size, side, group, fold, gap, _ = split(x, cond, "linear", both_groups=True)
-    assert (size == 8).all() and (side == 1).all() and (group == 0).all() and (fold > 0).all()
-    p = subset_test(x, cond, "linear", direction="both", both_groups=True, stop=STOP, maximum=999, seed=1)[0]
-    assert (p <= 0.01).all()
-    # Controls with a raised subset make the cases lower: "down", not "up".
-    down = subset_test(x, cond, "linear", direction="down", both_groups=True, stop=STOP, maximum=999, seed=1)[0]
-    up = subset_test(x, cond, "linear", direction="up", both_groups=True, stop=STOP, maximum=999, seed=1)[0]
-    assert (down <= 0.01).all() and (up > 0.5).all()
 
 
 def test_the_subset_fold_is_measured_against_the_registered_controls():
@@ -525,66 +494,64 @@ def test_the_subset_fold_is_measured_against_the_registered_controls():
     for m in (1e3, 1e5, 1e7):
         x = np.r_[np.full(36, b), np.full(4, m), np.full(40, b)][None]
         cond = np.r_[np.ones(40, int), np.zeros(40, int)]
-        size, side, group, fold, gap, shift = split(x, cond, "linear")
-        assert (size[0], side[0], group[0], shift[0]) == (4, 1, 1, 1.0)
+        size, side, fold, gap, shift = split(x, cond)
+        assert (size[0], side[0], shift[0]) == (4, 1, 1.0)
         assert fold[0] == pytest.approx(np.log2((m + 1) / (b + 1)), rel=1e-12)
 
 
-@pytest.mark.parametrize("scale", ["linear", "log2"])
-def test_a_gene_with_one_extreme_sample_is_calibrated_under_random_labels(scale):
+def test_a_gene_with_one_extreme_sample_is_calibrated_under_random_labels():
     # One sample fifty times the rest, under 400 random 40 v 40 labellings of the same values:
     # the extreme lands among the cases in half of them, and the registered pool keeps it
     # exchangeable, so the rejection rate stays within binomial error of the level. The released
     # construction, registering by the mean fold, called such genes at p <= 0.001.
     rng = np.random.default_rng(24)
     gene = np.r_[rng.gamma(3, 30, 79), 4500.0]
-    values = gene if scale == "linear" else np.log2(gene + 1)
-    rows = np.stack([values[rng.permutation(80)] for _ in range(400)])
+    rows = np.stack([gene[rng.permutation(80)] for _ in range(400)])
     cond = np.r_[np.ones(40, int), np.zeros(40, int)]
-    p = subset_test(rows, cond, scale, direction="both", stop=STOP, maximum=999, seed=2)[0]
+    p = subset_test(rows, cond, direction="both", stop=STOP, maximum=999, seed=2)[0]
     assert np.mean(p <= 0.05) <= 0.05 + 3 * np.sqrt(0.05 * 0.95 / 400)
 
 
-@pytest.mark.parametrize("scale", ["linear", "log2"])
-def test_a_bimodal_gene_is_calibrated_under_random_labels(scale):
+def test_a_bimodal_gene_is_calibrated_under_random_labels():
     # One gene with two separated modes (as in a common germline deletion), under 400 random
     # 50 v 50 labellings of the same 100 values: the rejection rate stays within binomial error
     # of the level.
     rng = np.random.default_rng(25)
     gene = np.exp(rng.normal(3, 0.3, 100) + 2 * (rng.random(100) < .5))
-    values = gene if scale == "linear" else np.log2(gene + 1)
-    rows = np.stack([values[rng.permutation(100)] for _ in range(400)])
+    rows = np.stack([gene[rng.permutation(100)] for _ in range(400)])
     cond = np.r_[np.ones(50, int), np.zeros(50, int)]
-    p = subset_test(rows, cond, scale, direction="both", stop=STOP, maximum=999, seed=3)[0]
+    p = subset_test(rows, cond, direction="both", stop=STOP, maximum=999, seed=3)[0]
     assert np.mean(p <= 0.05) <= 0.05 + 3 * np.sqrt(0.05 * 0.95 / 400)
 
 
-def test_subsets_either_reports_a_subset_of_controls_with_its_group_share_and_fold():
+def test_a_depth_difference_between_the_groups_is_not_called():
+    # Nothing differs between the groups but depth: the cases have twice the controls' reads. At low
+    # counts the normalized values then differ in their Poisson noise and in their jitter, which a
+    # test of the normalized values calls; thinned to one depth, the area test holds its level.
+    rng = np.random.default_rng(30)
+    n1 = n0 = 30
+    depth = np.r_[np.full(n1, 2.0), np.full(n0, 1.0)]
+    counts = rng.poisson(rng.gamma(2, 1, (400, 1)) * rng.gamma(10, 0.1, (400, n1 + n0)) * depth)
+    names = [f"s{i}" for i in range(n1 + n0)]
+    data = wade.as_counts(counts, sample_names=names)
+    norm = wade.Normalization.from_size_factors(data, dict(zip(names, depth)), source="test")
+    cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
+    r = wade.wade(data, cond, normalization=norm, max_permutations=999, seed=5)
+    t = r.tested
+    bound = 0.05 + 3 * np.sqrt(0.05 * 0.95 / t.sum())                # the level, within binomial error
+    assert np.mean(r.area_pvalue[t] <= 0.05) <= bound
+    unthinned = mean_test(r.expression[t], cond, direction="both", stop=STOP, maximum=999, seed=5)[0]
+    assert np.mean(unthinned <= 0.05) > bound                         # the same test without thinning fails
+
+
+def test_genes_below_the_subset_tests_validated_range_are_counted_in_a_warning():
     rng = np.random.default_rng(26)
-    counts = rng.poisson(rng.gamma(40, 25, (30, 80))).astype(float)
-    counts[:10, 40:48] *= 30                                # eight controls far above the rest
-    counts[10:20, :6] *= 30                                 # six cases far above the rest
-    cond = np.r_[np.ones(40, int), np.zeros(40, int)]
-    one = wade.wade(counts, cond, max_permutations=199)
-    both = wade.wade(counts, cond, subsets="either", max_permutations=199)
-    assert one.params["subsets"] == "cases" and both.params["subsets"] == "either"
-    assert set(one.subset_group) <= {"case", "none"} and (both.subset_group[:10] == "control").all()
-    assert (both.subset_group[10:20] == "case").all()
-    for g in range(10):
-        s = both.subset(g)
-        assert (s.group, s.side, len(s.samples), s.fraction) == ("control", "up", 8, 8 / 40)
-        assert set(s.samples) == set(both.sample_names[40:48])
-        assert s.log2fc == both.subset_log2fc[g] > 0 and both.subset_fraction[g] == 8 / 40
-        assert both.subset_padj[g] <= .05
-    # The typical fold is the registration the subset test used, the same in either run.
-    np.testing.assert_array_equal(one.alignment_log2fc, both.alignment_log2fc)
-    size, side, group, fold, gap, shift = split(both.expression, cond, "linear", both_groups=True)
-    np.testing.assert_allclose(both.alignment_log2fc, np.log2(shift))
-    np.testing.assert_array_equal(both.lorenz_gap, gap)
-    np.testing.assert_array_equal(both.subset_side, np.where(size == 0, "none", np.where(side > 0, "up", "down")))
-    np.testing.assert_array_equal(both.subset_group, np.where(size == 0, "none", np.where(group == 1, "case", "control")))
-    counts_by_side = wade.manifest(both)["results"]["n_subsets"]
-    assert counts_by_side["control up"] >= 10 and counts_by_side["case up"] >= 10
-    # With direction "up" (are the cases higher?), controls above the rest point the other way.
-    up = wade.wade(counts, cond, subsets="either", direction="up", max_permutations=199)
-    assert (up.subset_pvalue[:10] > .5).all() and (up.subset_padj[10:20] <= .05).all()
+    counts = rng.poisson(np.r_[np.full(10, 20.0), np.full(10, 400.0)][:, None] * np.ones((1, 30)))
+    cond = np.r_[np.ones(15, int), np.zeros(15, int)]
+    with pytest.warns(UserWarning, match="10 of 20 tested genes average fewer than 128"):
+        r = wade.wade(counts, cond, max_permutations=99)
+    assert r.params["subset_validated_genes"] == 10
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        wade.wade(counts[10:], cond, max_permutations=99)        # every gene well expressed: no warning
+    assert set(wade.manifest(r)["results"]["n_subsets"]) == {"up", "down"}

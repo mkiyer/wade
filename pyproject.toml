@@ -52,3 +52,7 @@ norecursedirs = ["archive", ".release", "target", ".git"]
 markers = [
     "validation: method-validation simulations, not parity",
 ]
+# Small synthetic data sit below the subset test's validated range; one test checks the warning itself.
+filterwarnings = [
+    "ignore:.*below the range where the subset test is validated:UserWarning",
+]

@@ -1,25 +1,19 @@
 //! The subset walk, its registration, and the shuffles of its permutation test.
 //!
 //! For sorted cases and controls, the mean shift predicts case quantile u at
-//! fold * (Q_control(u) + 1) - 1 on the linear scale, where fold = (case mean + 1) / (control
-//! mean + 1), and at Q_control(u) + (case mean - control mean) on the log2 scale. The running
+//! fold * (Q_control(u) + 1) - 1, where fold = (case mean + 1) / (control mean + 1). The running
 //! departure R(k), the integral of Q_case minus that prediction from 0 to k/n1, is a prefix sum
 //! at each boundary between the k-th and (k+1)-th case, so one walk costs O(n).
 //!
-//! On the linear scale, with z = case + 1 and w = control + 1, R(k) = mean(z) (L_z(k/n1) -
-//! L_w(k/n1)), L being a group's Lorenz curve of count + 1. The walk's depth divided by the
-//! case mean plus one is therefore the largest amount by which the cases' Lorenz curve falls
-//! below the controls': how much more concentrated expression is among the cases. On the log2
-//! scale R is the difference of the two absolute Lorenz curves, A(t) = the integral from 0 to t
-//! of (Q - mean), and the depth is that gap itself. Either gap is unchanged by a fold on
-//! count + 1 applied to every case (a shift on log2), so a shuffle walks registered values as
-//! they are.
+//! With z = case + 1 and w = control + 1, R(k) = mean(z) (L_z(k/n1) - L_w(k/n1)), L being a
+//! group's Lorenz curve of count + 1. The walk's depth divided by the case mean plus one is
+//! therefore the largest amount by which the cases' Lorenz curve falls below the controls': how
+//! much more concentrated expression is among the cases. The gap is unchanged by a fold on
+//! count + 1 applied to every case, so a shuffle walks registered values as they are.
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
-
-mod study;
 
 /// Values within 100 ulps are equal: no boundary falls between them, and a shuffle this close ties.
 const TIE_RTOL: f64 = 100.0 * f64::EPSILON;
@@ -42,11 +36,11 @@ impl Grid {
 
     /// Fill `running` with R(k) for k = 1..n1-1, infinite where equal cases forbid a boundary,
     /// and return its lowest value, the rounding scale of those sums, and the case mean.
-    fn walk(&self, case: &[f64], control: &[f64], linear: bool, running: &mut [f64]) -> (f64, f64, f64) {
+    fn walk(&self, case: &[f64], control: &[f64], running: &mut [f64]) -> (f64, f64, f64) {
         let (by1, by0) = (1.0 / self.n1 as f64, 1.0 / self.n0 as f64);
         let ((sum1, size1), (sum0, size0)) = (totals(case), totals(control));
         let (mean1, size1, mean0, size0) = (sum1 * by1, size1 * by1, sum0 * by0, size0 * by0);
-        let (fold, difference) = ((mean1 + 1.0) / (mean0 + 1.0), mean1 - mean0);
+        let fold = (mean1 + 1.0) / (mean0 + 1.0);
         let (mut cases, mut controls, mut j, mut low) = (0.0, 0.0, 0, f64::INFINITY);
         for k in 1..self.n1 {
             cases += case[k - 1];
@@ -56,12 +50,12 @@ impl Grid {
             }
             let t = k as f64 * by1;
             let below = (controls + self.part[k] * control[j]) * by0; // Q_control integrated to t
-            let due = if linear { fold * (below + t) - t } else { below + t * difference };
+            let due = fold * (below + t) - t;
             let r = if case[k] - case[k - 1] > TIE_RTOL * case[k].abs() { cases * by1 - due } else { f64::INFINITY };
             running[k - 1] = r;
             low = low.min(r);
         }
-        let predicted = if linear { fold.abs() * (size0 + 1.0) + 1.0 } else { size0 + difference.abs() };
+        let predicted = fold.abs() * (size0 + 1.0) + 1.0;
         (low, TIE_RTOL * (self.n1 + self.n0) as f64 * (size1 + predicted), mean1)
     }
 
@@ -100,10 +94,9 @@ fn cut(running: &[f64], low: f64, rounding: f64) -> usize {
     running.iter().rposition(|&r| r <= low + rounding).map_or(0, |k| k + 1)
 }
 
-/// The walk's gap: its depth over the walked group's mean + 1 on the linear scale (the Lorenz
-/// gap), the depth itself on the log2 scale (the absolute Lorenz gap).
-fn gap(low: f64, mean: f64, linear: bool) -> f64 {
-    if linear { -low / (mean + 1.0) } else { -low }
+/// The walk's gap: its depth over the case mean + 1, the Lorenz gap.
+fn gap(low: f64, mean: f64) -> f64 {
+    -low / (mean + 1.0)
 }
 
 /// Scratch for registering one gene.
@@ -118,18 +111,17 @@ impl Registration {
         Registration { case_log: Vec::new(), control_log: Vec::new(), segments: Vec::new() }
     }
 
-    /// The fold on count + 1 (linear) or the log2 difference that minimizes the area between the
-    /// groups' quantile functions of log(count + 1) (on log2, of the values as they are): the
-    /// weighted median of their difference over the merged breakpoints, weights in units of
-    /// 1/(n1 n0). Where the weights below a value make exactly half, every point up to the next
-    /// value is a median; the midpoint is taken, so that swapping the groups inverts the fold.
-    fn fit(&mut self, case: &[f64], control: &[f64], linear: bool) -> f64 {
+    /// The fold on count + 1 that minimizes the area between the groups' quantile functions of
+    /// log(count + 1): the weighted median of their difference over the merged breakpoints,
+    /// weights in units of 1/(n1 n0). Where the weights below a value make exactly half, every
+    /// point up to the next value is a median; the midpoint is taken, so that swapping the groups
+    /// inverts the fold.
+    fn fit(&mut self, case: &[f64], control: &[f64]) -> f64 {
         let (n1, n0) = (case.len(), control.len());
-        let log = |v: f64| if linear { v.ln_1p() } else { v };
         self.case_log.clear();
-        self.case_log.extend(case.iter().map(|&v| log(v)));
+        self.case_log.extend(case.iter().map(|&v| v.ln_1p()));
         self.control_log.clear();
-        self.control_log.extend(control.iter().map(|&v| log(v)));
+        self.control_log.extend(control.iter().map(|&v| v.ln_1p()));
         self.segments.clear();
         let (mut i, mut j, mut at) = (0usize, 0usize, 0u64);
         while i < n1 && j < n0 {
@@ -157,11 +149,11 @@ impl Registration {
                 break;
             }
         }
-        if linear { shift.exp() } else { shift }
+        shift.exp()
     }
 }
 
-/// A walk's subset: its size, whether it lies above the rest of its group, its log2 fold over
+/// A walk's subset: its size, whether it lies above the rest of the cases, its log2 fold over
 /// what the registration predicts for its quantiles, and the walk's gap.
 struct Found {
     size: usize,
@@ -170,11 +162,11 @@ struct Found {
     gap: f64,
 }
 
-/// Walk `case` against `control` and describe the subset. `shift` carries the other group onto
-/// the walked one: a fold on count + 1, or a log2 difference.
-fn describe(grid: &Grid, case: &[f64], control: &[f64], linear: bool, shift: f64, running: &mut [f64]) -> Option<Found> {
+/// Walk the cases against the controls and describe the subset. `shift` carries the controls onto
+/// the cases: a fold on count + 1.
+fn describe(grid: &Grid, case: &[f64], control: &[f64], shift: f64, running: &mut [f64]) -> Option<Found> {
     let n1 = grid.n1;
-    let (low, rounding, mean1) = grid.walk(case, control, linear, running);
+    let (low, rounding, mean1) = grid.walk(case, control, running);
     if -low <= rounding {
         return None;
     }
@@ -185,13 +177,12 @@ fn describe(grid: &Grid, case: &[f64], control: &[f64], linear: bool, shift: f64
     let size = to - from;
     let seen = case[from..to].iter().sum::<f64>() / size as f64;
     let other = (grid.below(control, to) - grid.below(control, from)) * n1 as f64 / size as f64;
-    let fold = if linear { ((seen + 1.0) / (shift * (other + 1.0))).log2() } else { seen - (other + shift) };
-    Some(Found { size, up, fold, gap: gap(low, mean1, linear) })
+    let fold = ((seen + 1.0) / (shift * (other + 1.0))).log2();
+    Some(Found { size, up, fold, gap: gap(low, mean1) })
 }
 
-/// Which way a test looks. Up asks whether the cases are higher: a mean shift up, and a subset
-/// of cases above the rest of the cases or, when both groups are walked, a subset of controls
-/// below the rest of the controls. Down asks the reverse, Both either.
+/// Which way a test looks. Up asks whether the cases are higher: a subset of cases above the rest
+/// of the cases. Down asks the reverse, Both either.
 #[derive(Clone, Copy)]
 enum Side {
     Both,
@@ -210,29 +201,24 @@ impl Side {
     }
 
     /// A walk's score for this test: its gap, negative when the subset lies the other way.
-    fn score(self, up: bool, cases: bool, gap: f64) -> f64 {
-        let higher = up == cases;
+    fn score(self, up: bool, gap: f64) -> f64 {
         match self {
             Side::Both => gap,
-            Side::Up => if higher { gap } else { -gap },
-            Side::Down => if higher { -gap } else { gap },
+            Side::Up => if up { gap } else { -gap },
+            Side::Down => if up { -gap } else { gap },
         }
     }
 }
 
 /// Each gene's subset from rows of sorted cases and controls: its size (0 for none), its side
-/// of its group (1 above, -1 below, 0 none), its group (1 cases, 0 controls), its log2 fold over
-/// what the registration predicts for it (NaN for none), the walk's gap (0 for none), and the
-/// gene's registration. With `both_groups` the controls are walked against the cases too, and
-/// the subset with the higher score for `direction` is kept (the cases' on a tie).
+/// of the cases (1 above, -1 below, 0 none), its log2 fold over what the registration predicts
+/// for it (NaN for none), the walk's gap (0 for none), and the gene's registration.
 #[pyfunction]
 #[allow(clippy::type_complexity)]
 fn split<'py>(
-    py: Python<'py>, case: PyReadonlyArray2<'py, f64>, control: PyReadonlyArray2<'py, f64>, linear: bool,
-    both_groups: bool, direction: &str,
-) -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i8>>, Bound<'py, PyArray1<u8>>,
-               Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
-    let side = Side::parse(direction)?;
+    py: Python<'py>, case: PyReadonlyArray2<'py, f64>, control: PyReadonlyArray2<'py, f64>,
+) -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i8>>, Bound<'py, PyArray1<f64>>,
+               Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
     let (genes, n1) = case.as_array().dim();
     let n0 = control.as_array().ncols();
     if n1 == 0 || n0 == 0 || control.as_array().nrows() != genes
@@ -241,53 +227,39 @@ fn split<'py>(
         return Err(PyValueError::new_err("cases and controls need one nonempty C-ordered row per gene"));
     }
     let (c, d) = (case.as_slice()?, control.as_slice()?);
-    let (grid, swapped) = (Grid::new(n1, n0), Grid::new(n0, n1));
-    let found: Vec<(i64, i8, u8, f64, f64, f64)> = py.detach(|| {
+    let grid = Grid::new(n1, n0);
+    let found: Vec<(i64, i8, f64, f64, f64)> = py.detach(|| {
         (0..genes).into_par_iter().map_init(
-            || (Registration::new(), vec![0.0; n1], vec![0.0; n0]),
-            |(registration, running1, running0), g| {
+            || (Registration::new(), vec![0.0; n1]),
+            |(registration, running), g| {
                 let (case, control) = (&c[g * n1..(g + 1) * n1], &d[g * n0..(g + 1) * n0]);
-                let shift = registration.fit(case, control, linear);
-                let inverse = if linear { 1.0 / shift } else { -shift };
-                let mut best = describe(&grid, case, control, linear, shift, &mut running1[..n1 - 1])
-                    .map(|f| (side.score(f.up, true, f.gap), true, f));
-                if both_groups {
-                    if let Some(f) = describe(&swapped, control, case, linear, inverse, &mut running0[..n0 - 1]) {
-                        let score = side.score(f.up, false, f.gap);
-                        if best.as_ref().is_none_or(|(b, _, _)| score > *b) {
-                            best = Some((score, false, f));
-                        }
-                    }
-                }
-                match best {
-                    None => (0, 0, 1, f64::NAN, 0.0, shift),
-                    Some((_, cases, f)) => (f.size as i64, if f.up { 1 } else { -1 }, cases as u8, f.fold, f.gap, shift),
+                let shift = registration.fit(case, control);
+                match describe(&grid, case, control, shift, &mut running[..n1 - 1]) {
+                    None => (0, 0, f64::NAN, 0.0, shift),
+                    Some(f) => (f.size as i64, if f.up { 1 } else { -1 }, f.fold, f.gap, shift),
                 }
             },
         ).collect()
     });
     let mut out = (Vec::with_capacity(genes), Vec::with_capacity(genes), Vec::with_capacity(genes),
-                   Vec::with_capacity(genes), Vec::with_capacity(genes), Vec::with_capacity(genes));
-    for (size, above, group, fold, gap, shift) in found {
+                   Vec::with_capacity(genes), Vec::with_capacity(genes));
+    for (size, above, fold, gap, shift) in found {
         out.0.push(size);
         out.1.push(above);
-        out.2.push(group);
-        out.3.push(fold);
-        out.4.push(gap);
-        out.5.push(shift);
+        out.2.push(fold);
+        out.3.push(gap);
+        out.4.push(shift);
     }
     Ok((out.0.into_pyarray(py), out.1.into_pyarray(py), out.2.into_pyarray(py), out.3.into_pyarray(py),
-        out.4.into_pyarray(py), out.5.into_pyarray(py)))
+        out.4.into_pyarray(py)))
 }
 
 /// One gene, ready to be walked under any labelling: `values` are its registered values, sorted,
 /// and `at` gives each value's sample, so both groups stay sorted as the values are read in order.
 struct Walker<'a> {
     grid: &'a Grid,
-    swapped: Option<&'a Grid>,
     values: &'a [f64],
     at: &'a [i64],
-    linear: bool,
     side: Side,
     case: Vec<f64>,
     control: Vec<f64>,
@@ -295,23 +267,12 @@ struct Walker<'a> {
 }
 
 impl<'a> Walker<'a> {
-    fn new(grid: &'a Grid, swapped: Option<&'a Grid>, values: &'a [f64], at: &'a [i64], linear: bool, side: Side) -> Self {
+    fn new(grid: &'a Grid, values: &'a [f64], at: &'a [i64], side: Side) -> Self {
         let (n1, n0) = (grid.n1, grid.n0);
-        Walker { grid, swapped, values, at, linear, side,
-                 case: vec![0.0; n1 + 1], control: vec![0.0; n0 + 1], running: vec![0.0; n1.max(n0)] }
+        Walker { grid, values, at, side, case: vec![0.0; n1 + 1], control: vec![0.0; n0 + 1], running: vec![0.0; n1] }
     }
 
-    /// One group's walk against the other, scored for the test (0 without a subset).
-    fn walked(grid: &Grid, walked: &[f64], other: &[f64], linear: bool, side: Side, cases: bool, running: &mut [f64]) -> f64 {
-        let n = grid.n1;
-        let (low, rounding, mean) = grid.walk(walked, other, linear, &mut running[..n - 1]);
-        if -low <= rounding {
-            return 0.0;
-        }
-        let k = cut(&running[..n - 1], low, rounding);
-        side.score(n - k <= k, cases, gap(low, mean, linear))
-    }
-
+    /// The walk of this labelling's cases against its controls, scored for the test (0 without a subset).
     fn score(&mut self, labels: &[u8]) -> f64 {
         let (n1, n0) = (self.grid.n1, self.grid.n0);
         let (mut a, mut b) = (0, 0);
@@ -323,12 +284,13 @@ impl<'a> Walker<'a> {
             a += is_case;
             b += 1 - is_case;
         }
-        let (case, control) = (&self.case[..n1], &self.control[..n0]);
-        let mut score = Self::walked(self.grid, case, control, self.linear, self.side, true, &mut self.running);
-        if let Some(swapped) = self.swapped {
-            score = score.max(Self::walked(swapped, control, case, self.linear, self.side, false, &mut self.running));
+        let running = &mut self.running[..n1 - 1];
+        let (low, rounding, mean) = self.grid.walk(&self.case[..n1], &self.control[..n0], running);
+        if -low <= rounding {
+            return 0.0;
         }
-        score
+        let k = cut(running, low, rounding);
+        self.side.score(n1 - k <= k, gap(low, mean))
     }
 }
 
@@ -353,9 +315,9 @@ impl<'a> Pool<'a> {
         Ok(Pool { genes, n, values, at })
     }
 
-    fn walker<'g>(&'g self, grid: &'g Grid, swapped: Option<&'g Grid>, g: usize, linear: bool, side: Side) -> Walker<'g> {
+    fn walker<'g>(&'g self, grid: &'g Grid, g: usize, side: Side) -> Walker<'g> {
         let row = g * self.n..(g + 1) * self.n;
-        Walker::new(grid, swapped, &self.values[row.clone()], &self.at[row], linear, side)
+        Walker::new(grid, &self.values[row.clone()], &self.at[row], side)
     }
 }
 
@@ -374,8 +336,8 @@ fn cases_in(labels: &[u8], n: usize) -> PyResult<usize> {
 /// Each gene's score under one labelling, by the walk the shuffles use: the observed statistic.
 #[pyfunction]
 fn score<'py>(
-    py: Python<'py>, pooled: PyReadonlyArray2<'py, f64>, order: PyReadonlyArray2<'py, i64>, linear: bool,
-    direction: &str, both_groups: bool, labels: PyReadonlyArray1<'py, u8>,
+    py: Python<'py>, pooled: PyReadonlyArray2<'py, f64>, order: PyReadonlyArray2<'py, i64>, direction: &str,
+    labels: PyReadonlyArray1<'py, u8>,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let side = Side::parse(direction)?;
     let pool = Pool::new(&pooled, &order)?;
@@ -384,11 +346,9 @@ fn score<'py>(
         return Err(PyValueError::new_err("one label per sample"));
     }
     let n1 = cases_in(lab, pool.n)?;
-    let (grid, swapped) = (Grid::new(n1, pool.n - n1), Grid::new(pool.n - n1, n1));
+    let grid = Grid::new(n1, pool.n - n1);
     let scores: Vec<f64> = py.detach(|| {
-        (0..pool.genes).into_par_iter()
-            .map(|g| pool.walker(&grid, both_groups.then_some(&swapped), g, linear, side).score(lab))
-            .collect()
+        (0..pool.genes).into_par_iter().map(|g| pool.walker(&grid, g, side).score(lab)).collect()
     });
     Ok(scores.into_pyarray(py))
 }
@@ -398,9 +358,9 @@ fn score<'py>(
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn tally<'py>(
-    py: Python<'py>, pooled: PyReadonlyArray2<'py, f64>, order: PyReadonlyArray2<'py, i64>, linear: bool,
-    direction: &str, both_groups: bool, labels: PyReadonlyArray2<'py, u8>, observed: PyReadonlyArray1<'py, f64>,
-    exceed: PyReadonlyArray1<'py, u64>, tried: PyReadonlyArray1<'py, u64>, stop: u64, maximum: u64,
+    py: Python<'py>, pooled: PyReadonlyArray2<'py, f64>, order: PyReadonlyArray2<'py, i64>, direction: &str,
+    labels: PyReadonlyArray2<'py, u8>, observed: PyReadonlyArray1<'py, f64>, exceed: PyReadonlyArray1<'py, u64>,
+    tried: PyReadonlyArray1<'py, u64>, stop: u64, maximum: u64,
 ) -> PyResult<(Bound<'py, PyArray1<u64>>, Bound<'py, PyArray1<u64>>)> {
     let side = Side::parse(direction)?;
     let pool = Pool::new(&pooled, &order)?;
@@ -413,14 +373,14 @@ fn tally<'py>(
         return Err(PyValueError::new_err("invalid shuffles or records"));
     }
     let n1 = cases_in(lab, n)?;
-    let (grid, swapped) = (Grid::new(n1, n - n1), Grid::new(n - n1, n1));
+    let grid = Grid::new(n1, n - n1);
     let mut records: Vec<(u64, u64)> = hits.iter().copied().zip(draws.iter().copied()).collect();
     py.detach(|| {
         records.par_iter_mut().enumerate().for_each(|(g, record)| {
             if record.0 >= stop || record.1 >= maximum {
                 return;
             }
-            let mut walker = pool.walker(&grid, both_groups.then_some(&swapped), g, linear, side);
+            let mut walker = pool.walker(&grid, g, side);
             let bar = observed[g] - TIE_RTOL * observed[g].abs();       // this close ties with it
             for row in lab.chunks_exact(n) {
                 record.1 += 1;
@@ -442,9 +402,5 @@ fn _kernel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split, m)?)?;
     m.add_function(wrap_pyfunction!(score, m)?)?;
     m.add_function(wrap_pyfunction!(tally, m)?)?;
-    m.add_function(wrap_pyfunction!(study::split_study, m)?)?;
-    m.add_function(wrap_pyfunction!(study::tally_study, m)?)?;
-    m.add_function(wrap_pyfunction!(study::rank_score_study, m)?)?;
-    m.add_function(wrap_pyfunction!(study::rank_tally_study, m)?)?;
     Ok(())
 }
