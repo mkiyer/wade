@@ -7,19 +7,19 @@ scripts were pruned to what supports them. This ledger keeps every idea from
 that research that is worth remembering: what it is, why it looked
 promising, what was measured, and why it stopped where it did.
 
-**Where the code is.** Everything named here is in git at tag
-`analysis-2026-09-30` (commit `e4fd67f`). That tree's
+**Where the code is.** Everything named here is in git at commit `e4fd67f`,
+the analysis freeze of 30 September 2026, on `main`. That tree's
 `docs/subset-null-plan.md` holds the full record (sections 3 to 5). The
 outputs cited are in `.release/0.2.0/`. To get a script back:
 
 ```bash
-git show analysis-2026-09-30:research/count_model.py > count_model_frozen.py
+git show e4fd67f:research/count_model.py > count_model_frozen.py
 ```
 
 or check out the whole frozen tree beside this one:
 
 ```bash
-git worktree add ../wade-analysis analysis-2026-09-30
+git worktree add ../wade-analysis e4fd67f
 ```
 
 **Status.**

@@ -5,7 +5,7 @@ tests, the claims withdrawn along the way, and what comes next.
 
 - **The full record** of the research behind the decisions, with every
   measurement, the three external reviews and the prototypes, is the previous
-  version of this page at tag `analysis-2026-09-30` (sections 3 to 5).
+  version of this page at commit `e4fd67f` (sections 3 to 5).
 - **The ideas** from that research worth resuming are in
   [research ideas](research-ideas.md).
 - **The method as built** is in [method](method.md).
@@ -161,7 +161,7 @@ Scripts in `research/` today, with outputs in `.release/0.2.0/`:
 | `subset_recovery.py` | `subset-recovery-20260930.txt` | Planted subsets recovered on the confirmation's matrices |
 | `subset_significance.py` | `subset-significance-20260930.txt` | Calibration and significance as a subset grows |
 
-The research since retired ran from the scripts at tag `analysis-2026-09-30`:
+The research since retired ran from the scripts at commit `e4fd67f`:
 
 | Script, section | Output | Content |
 | --- | --- | --- |

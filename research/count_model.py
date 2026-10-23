@@ -38,7 +38,7 @@ Sections (default: all):
 
 The subset test is unchanged by the 30 September 2026 build, so its count-model measurements stand;
 they, and the constructions tried and set aside (thinning registrations, the Laplace fold, rank and
-count-exact score tests, depth choices), are in git at tag analysis-2026-09-30 and recorded in
+count-exact score tests, depth choices), are in git at commit e4fd67f and recorded in
 docs/research-ideas.md.
 
     WADE_TCGA_CONFIG=.release/0.2.0/tcga-config.json RAYON_NUM_THREADS=6 PYTHONPATH=src:research \\

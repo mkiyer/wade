@@ -13,8 +13,8 @@
 | `docs/` | Manual, method, validation, changes and the TCGA data contract |
 
 The research behind this version, including the ideas not adopted, is
-recorded in [research ideas](docs/research-ideas.md); its code is at tag
-`analysis-2026-09-30`. Earlier research (the two-stage method, measurement
+recorded in [research ideas](docs/research-ideas.md); its code is at commit
+`e4fd67f`, the analysis freeze of 30 September 2026. Earlier research (the two-stage method, measurement
 kernels, the direction and scale comparison) is at commit `f07d5f9`.
 
 ## Build and test

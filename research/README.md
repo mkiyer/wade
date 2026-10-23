@@ -23,8 +23,8 @@ PYTHONPATH=src:research python research/confirm.py --output .release/0.2.0/confi
 
 Results and their interpretation are in [validation](../docs/validation.md).
 
-The research retired on 30 September 2026 is in git at tag
-`analysis-2026-09-30`. That covers the subset null study, the location tests,
+The research retired on 30 September 2026 is in git at commit `e4fd67f`.
+That covers the subset null study, the location tests,
 the Welch saddlepoint, the subset calibration, and the count model's other
 sections. Its ideas are recorded in
 [research ideas](../docs/research-ideas.md). Earlier research is at commit

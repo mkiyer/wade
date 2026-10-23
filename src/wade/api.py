@@ -16,7 +16,7 @@ from .pvalues import bh_adjust
 DEFAULT_MAX_PERMUTATIONS = 999_999
 PVALUES = ("auto", "permutation")
 # The subset test is calibrated where the lower group averages at least this many reads per sample
-# (docs/validation.md; measured by research/count_model.py at tag analysis-2026-09-30): a measured
+# (docs/validation.md; measured by research/count_model.py at commit e4fd67f): a measured
 # bound on where the test is valid, not a setting of the method.
 SUBSET_VALIDATED_READS = 128
 

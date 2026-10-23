@@ -2,7 +2,7 @@
 
 What the procedure was measured to do, on what, and where it stops working.
 Every number here comes from a script in `research/`, or, for research since
-retired, from the scripts at tag `analysis-2026-09-30`. Their outputs are kept
+retired, from the scripts at commit `e4fd67f`. Their outputs are kept
 in `.release/0.2.0/`, which is not distributed.
 
 ## The count-model reference
@@ -164,8 +164,8 @@ because a global fold does not move the Lorenz gap.
 ## The subset test under the count model
 
 The subset test is unchanged by the 30 September 2026 build except for the
-removed options. Its count-model measurements ran from the scripts at tag
-`analysis-2026-09-30`: sections `reference`, `laplace`, `realistic` and
+removed options. Its count-model measurements ran from the scripts at commit
+`e4fd67f`: sections `reference`, `laplace`, `realistic` and
 `summary` of `research/count_model.py`, in `count-model-20260929.txt`,
 `count-model-laplace-20260929.txt`, `count-model-realistic-20260929.txt` and
 `count-model-summary-20260929.txt`.
