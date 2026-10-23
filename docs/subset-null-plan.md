@@ -157,6 +157,7 @@ Scripts in `research/` today, with outputs in `.release/0.2.0/`:
 | `count_model.py` `shipped` | `count-model-shipped-20260930.txt` | The area test, and the same test unthinned, under the count model |
 | `count_model.py` `composition` | `count-model-composition-area-20260930.txt` | The area test when a share of genes changes, with RLE refitted |
 | `count_model.py` `real` | `count-model-real-20260930.txt` | The area test on TCGA prostate with its own labels: depth kept, calls by level, the thinning seed |
+| `stopping.py` | `stopping-20261023.txt`, `stopping-whole-prostate-20261023.txt` | Decision-based stopping: exactness against finished runs, shuffles and time |
 | `pvalue_accuracy.py` | `pvalue-accuracy-20260930.txt` | The computed area-test p-value against exact enumeration or 20 million shuffles |
 | `subset_recovery.py` | `subset-recovery-20260930.txt` | Planted subsets recovered on the confirmation's matrices |
 | `subset_significance.py` | `subset-significance-20260930.txt` | Calibration and significance as a subset grows |

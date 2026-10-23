@@ -137,6 +137,48 @@ the computed p-value where it is accurate and shuffles where it is not.
 - It kept 65–92% in the smallest designs. There the estimate, which includes
   the exact distribution's granularity, sends more of the tail to shuffling.
 
+## Decision-based stopping
+
+`research/stopping.py` (`stopping-20261023.txt`) runs the TCGA examples'
+independent designs (prostate, 445 tumours v 52 normals; breast, 971 v 112)
+two ways:
+- with `fdr=0.05`, where each gene's shuffles stop once its BH decision is
+  settled;
+- with `fdr=None`, where every run finishes.
+
+**Exactness on a random 3,000-gene family.** In both cohorts and both tests:
+- the decisions were identical at BH levels 0.05, 0.1 and 0.2;
+- every gene not called had exactly its finished p-value and q-value;
+- every called gene reported a p-value at least its finished one, and a
+  q-value of at most 0.05;
+- no gene used more shuffles than its finished run.
+
+| Cohort | Called (area / subset) | Subset-test shuffles, finished | With `fdr=0.05` | Wall time, finished → `fdr=0.05` |
+| --- | ---: | ---: | ---: | ---: |
+| Prostate | 1,746 / 728 | 149 million | 2.1 million (71× fewer) | 42 s → 2 s |
+| Breast | 1,975 / 2,432 | 1.57 billion | 1.53 million (1,024× fewer) | 718 s → 3 s |
+
+The area test is mostly computed by its saddlepoint, so its few shuffled
+genes cost little either way.
+
+**The whole transcriptome with `fdr=0.05`:**
+- **Prostate** (24,246 genes): 12 s. The subset test used 17 million
+  shuffles, at most 2,092 for any gene.
+- **Breast** (25,328 genes): 27 s. The subset test used 13 million shuffles,
+  at most 624 for any gene: 25 exceedances over BH's threshold of about 0.040.
+- **The earlier finished runs** took 391 s for prostate (1.2 billion subset
+  shuffles) and 5,316 s for breast (13.6 billion), as recorded by the TCGA
+  notebooks.
+
+**The whole prostate transcriptome, both ways** (`stopping-whole-prostate-20261023.txt`):
+- the decisions were identical in both tests at 0.05, 0.1 and 0.2, over all
+  24,246 genes;
+- every gene not called kept its finished p- and q-value;
+- the subset test used 65× fewer shuffles;
+- it took 12 s against 294 s.
+
+Timings come from a 16-core laptop shared with other jobs.
+
 ## Normalization when many genes change
 
 Section `composition` (`count-model-composition-area-20260930.txt`):
@@ -256,7 +298,7 @@ counts, 200 genes per row, 999 shuffles).
 
 ## On TCGA tumours
 
-The prostate notebook (`notebooks/examples.qmd`, rendered 30 September 2026)
+The prostate notebook (`notebooks/examples.qmd`, rendered 23 October 2026)
 runs the defaults on 445 independent TCGA prostate tumours and 52 normals,
 with 24,246 tested genes. It compares each subset with fusion annotations
 WADE never sees. Only tumours annotated fusion-positive or negative enter
@@ -264,27 +306,42 @@ precision and recall.
 
 | Gene | log2fc | Area fraction | Area q | Subset | Subset q | Positives in subset | Negatives in subset | Precision | Recall |
 | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| ERG | 2.42 | 0.68 | 1.8 × 10⁻⁴ | 38% above | 0.073 | 122 of 130 | 0 | 1.00 | 0.94 |
-| ETV1 | 2.30 | 0.66 | 0.20 | 8% above | 0.032 | 16 of 17 | 0 | 1.00 | 0.94 |
-| ETV4 | 3.96 | 0.88 | 0.54 | 3% above | 0.044 | 8 of 9 | 0 | 1.00 | 0.89 |
-| FLI1 | −0.16 | −0.06 | 0.62 | 1% above | 0.67 | 2 of 2 | 0 | 1.00 | 1.00 |
+| ERG | 2.42 | 0.68 | 1.8 × 10⁻⁴ | 38% above | 0.070 | 122 of 130 | 0 | 1.00 | 0.94 |
+| ETV1 | 2.30 | 0.66 | 0.20 | 8% above | ≤ 0.05 (bound) | 16 of 17 | 0 | 1.00 | 0.94 |
+| ETV4 | 3.96 | 0.88 | 0.54 | 3% above | ≤ 0.05 (bound) | 8 of 9 | 0 | 1.00 | 0.89 |
+| FLI1 | −0.16 | −0.06 | 0.62 | 1% above | 0.81 | 2 of 2 | 0 | 1.00 | 1.00 |
 
 - **ETV1 and ETV4 are the case WADE is built for.** A few fusion-positive
   tumours carry large mean folds (log2fc 2.30 and 3.96) that the area test
   cannot call, because a few tumours carry the whole difference. Their
   subsets hold only fusion-positive tumours and are called at q ≤ 0.05.
-- **Few controls cost the subset test power.** With 52 controls these small
-  subsets are called near the threshold. Under the subset test's previous
-  construction, withdrawn on 29 September 2026, they reached q ≈ 10⁻⁴.
+- **Few controls cost the subset test power.** With `fdr=0.05` the called
+  subsets' q-values are bounds. With every run finished (research/stopping.py,
+  section `whole`), ETV1's and ETV4's subset q-values are 0.029 and 0.038.
+  With 52 controls these small subsets are called, but near the threshold.
+  Under the subset test's previous construction, withdrawn on 29 September
+  2026, they reached q ≈ 10⁻⁴.
 - **ERG** is fused in 130 of the 290 annotated tumours. Its area is called, and
   its subset holds 122 of the 130 fusion-positive tumours and none of the
-  negatives, at q = 0.073.
+  negatives, at q = 0.070.
 - **Across the transcriptome** the area test called 7,503 genes up and 6,765
-  down at q ≤ 0.05. The subset test found 5,528 subsets above the rest of
-  the tumours and 407 below.
+  down at q ≤ 0.05. The subset test found 5,398 subsets above the rest of
+  the tumours and 401 below. The notebook ran in 32 s for both of its output
+  formats, with decision-based stopping.
 - **These are broad call sets.** They need review of tissue mixture and
   technical effects, which marker recovery does not provide.
-- **The breast notebook** has not been rerun for this build.
+- **The breast notebook** (`notebooks/examples-breast.qmd`, 971 tumours v
+  112 normals, 25,328 tested genes) rendered in 208 s, including its four
+  subtype contrasts. Against high-level ERBB2 amplification (GISTIC), which
+  WADE never sees:
+  - ERBB2's subset, 10% above the rest, holds 86 of the 107 amplified tumours
+    and 9 negatives (precision 0.91, recall 0.80);
+  - GRB7's, on the same amplicon, holds 72 of 107 and 9 negatives (precision
+    0.89, recall 0.67).
+- **Breast across the transcriptome:** the subset test called 19,903 subsets
+  above the rest and 399 below. With 971 tumours, purity and subtype make
+  nearly every gene's tumours more unequal than its normals, so there the
+  subset's fold and share, not its q-value, rank the genes.
 
 ## Earlier confirmation (protocol version 6)
 

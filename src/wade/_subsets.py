@@ -15,8 +15,8 @@ registration only shapes the pool. Each walk is a prefix sum, O(n) per shuffle.
 import numpy as np
 
 from . import _kernel
-from .permutation import draw_perms
-from .pvalues import sequential_p
+from .permutation import STREAM_BLOCK, stream_block
+from .pvalues import sequential_p, settled
 
 
 def split(x, cond):
@@ -32,30 +32,53 @@ def split(x, cond):
     return _kernel.split(*_sorted(x, cond))
 
 
-def subset_test(x, cond, *, direction, stop, maximum, seed, batch=4096):
-    """Permutation p-values for each gene's subset, under the null that every case carries one common fold.
+def walks(x, cond, shift, *, direction):
+    """Each gene's registered pool, ready to be walked under any labelling, and the observed
+    labelling's score.
 
-    Each shuffle draws new labels over the registered pool and walks them. direction "both"
-    counts the shuffles whose gap is at least the observed one. "up", which asks whether the
-    cases are higher, counts those with a subset of cases above the rest of the cases at least
-    as far out; "down" is the reverse. A subset on the other side scores as a negative gap.
-    Shuffles stop at the stop-th exceedance or at maximum (Besag-Clifford), and a gene without
-    a subset has p = 1. Returns the p-values and the exceedance and shuffle counts behind them.
+    The cases are carried back by the gene's registration shift (a fold on count + 1) and pooled
+    with the controls; the pool is sorted, with each value's sample beside it, so the walk reads
+    both groups in order whatever the labels. Returns the pool, its sample order and the scores.
+    """
+    cond = np.ascontiguousarray(cond, dtype=np.uint8)
+    pooled = np.where(cond == 1, _carry(x, shift[:, None], undo=True), x)
+    order = np.ascontiguousarray(np.argsort(pooled, axis=1, kind="stable"), dtype=np.int64)
+    pooled = np.ascontiguousarray(np.take_along_axis(pooled, order, axis=1))
+    return pooled, order, _kernel.score(pooled, order, direction, cond)
+
+
+def advance(pooled, order, observed, cond, exceed, tried, *, direction, stop, maximum, threshold, seed):
+    """Walk the run's stream of shuffles for every gene not yet settled at threshold.
+
+    Each gene resumes at its own position, the number of shuffles it has tried, and stops at its
+    stop-th exceedance, at maximum shuffles, or once its Besag–Clifford bound reaches threshold
+    (pvalues.settled). direction "both" counts the shuffles whose gap is at least the observed one;
+    "up" counts those with a subset of cases above the rest at least as far out; "down" the
+    reverse, a subset on the other side scoring as a negative gap. The records exceed and tried are
+    updated in place.
+    """
+    cond = np.ascontiguousarray(cond, dtype=np.uint8)
+    while (live := ~settled(exceed, tried, stop=stop, maximum=maximum, threshold=threshold)).any():
+        block = int(tried[live].min()) // STREAM_BLOCK
+        exceed[:], tried[:] = _kernel.tally(pooled, order, direction, stream_block(cond, block, seed), observed,
+                                            exceed, tried, stop, maximum, block * STREAM_BLOCK, float(threshold))
+
+
+def subset_test(x, cond, *, direction, stop, maximum, seed):
+    """Permutation p-values for each gene's subset, under the null that every case carries one common
+    fold, every gene run to the end of its Besag–Clifford rule: its stop-th exceedance, or maximum
+    shuffles (see advance). Each shuffle draws new labels over the registered pool and walks them; a
+    gene without a subset has p = 1. Returns the p-values and the exceedance and shuffle counts
+    behind them.
     """
     cond = np.ascontiguousarray(cond, dtype=np.uint8)
     _, _, _, gap, shift = split(x, cond)
     ran = np.flatnonzero(gap > 0)
-    pooled = np.where(cond == 1, _carry(x[ran], shift[ran, None], undo=True), x[ran])
-    order = np.ascontiguousarray(np.argsort(pooled, axis=1, kind="stable"), dtype=np.int64)
-    pooled = np.ascontiguousarray(np.take_along_axis(pooled, order, axis=1))
-    observed = _kernel.score(pooled, order, direction, cond)
+    pooled, order, observed = walks(x[ran], cond, shift[ran], direction=direction)
     stop = min(stop, maximum)
     exceed, tried = np.zeros(len(ran), np.uint64), np.zeros(len(ran), np.uint64)
-    rng, size = np.random.default_rng(seed), 32
-    while (live := (exceed < stop) & (tried < maximum)).any():
-        labels = draw_perms(cond, int(min(size, maximum - tried[live].max())), rng=rng)
-        exceed, tried = _kernel.tally(pooled, order, direction, labels, observed, exceed, tried, stop, maximum)
-        size = min(2 * size, batch)
+    advance(pooled, order, observed, cond, exceed, tried, direction=direction, stop=stop, maximum=maximum,
+            threshold=-np.inf, seed=seed)
     pvalue, hits, draws = np.ones(len(x)), np.zeros(len(x), np.uint64), np.zeros(len(x), np.uint64)
     hits[ran], draws[ran] = exceed, tried
     pvalue[ran] = sequential_p(exceed, tried, stop=stop, maximum=maximum)

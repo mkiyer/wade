@@ -138,6 +138,13 @@ markdown_table(result.to_frame().filter(pl.col("gene").is_in(marker_names)).sele
     OUT, "marker-results")
 ```
 
+The subset discoveries' q-values read just under 0.05. That is not
+borderline significance. With `fdr=0.05` (the default), each gene's shuffles
+stop as soon as its decision is settled, so a discovery's p- and q-values are
+bounds. The decisions are exactly those of finished runs, and
+`result.bounded` marks the bounded values. Rank discoveries by their effects;
+`fdr=None` finishes every run when exact values matter.
+
 ## How each pattern reads
 
 `area` is the signed area between the quantile functions of normalized

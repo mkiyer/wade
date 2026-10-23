@@ -250,34 +250,55 @@ permutation p-value.
 
 ## P-values
 
-Every p-value is estimated to about `relative_error` (default 0.2).
-
-- **The subset test is shuffled.** Label shuffles preserve group sizes. Each
-  gene stops at its ⌈1/relative_error²⌉-th exceedance (25 at the default),
-  whose count estimates p to that relative standard error, or at
-  `max_permutations` shuffles.
-- **The area test is computed** with `pvalues="auto"` (default): the exact
-  permutation distribution of the cases' total has a double-saddlepoint tail,
-  with no shuffles and no floor above the chance of the single most extreme
-  labelling. Its error is estimated from the saddlepoint's own next term and
-  from how coarse the exact distribution is there. A gene whose estimate
-  exceeds `relative_error` is shuffled instead. In a small design this
-  shuffles the genes far enough in the tail that only a handful of labellings
-  reach them.
+- **The subset test is shuffled.** Label shuffles preserve group sizes, and
+  every gene, in both tests, sees one seeded stream of them. Each gene follows
+  Besag and Clifford's rule: it stops at its ⌈1/relative_error²⌉-th exceedance
+  (25 at the default `relative_error=0.2`), whose count estimates p to that
+  relative standard error, or at `max_permutations` shuffles.
+- **The area test is computed** with `pvalues="auto"` (default).
+  - The exact permutation distribution of the cases' total has a
+    double-saddlepoint tail, with no shuffles and no floor above the chance
+    of the single most extreme labelling.
+  - Its error is estimated from the saddlepoint's own next term and from how
+    coarse the exact distribution is there.
+  - A gene whose estimate exceeds `relative_error` is shuffled instead. In a
+    small design this shuffles the genes far enough in the tail that only a
+    handful of labellings reach them.
 - **`pvalues="permutation"`** shuffles every p-value, including the area
   test's.
 
-A smaller `relative_error` buys precision with shuffles: each shuffled gene
-that stops early needs about 1/(relative_error² · p) of them. The default
-budget, `max_permutations=999_999`, lets a shuffled p-value reach 10⁻⁶, so an
-isolated BH discovery at q ≤ 0.05 stays possible among up to 50,000 genes. The
-manifest's `minimum_discovery_rank` says how many genes must sit at the
-shuffled floor before any can pass. Genes with strong subsets use the whole
-budget, so they dominate runtime; a smaller budget is fine for exploration.
+**Shuffles stop at the decision.** `fdr` (default 0.05) is the false
+discovery rate at which BH decides; choose it before looking.
 
-Shuffled p-values near a threshold vary with the seed. Fix the seed, budget and
-precision before looking, and never rerun borderline genes until they pass.
-`gene_chunk` changes memory, never the answer.
+- **How it works.** Each gene's run has a bound on the p-value it will finish
+  with, one that holds whatever its remaining shuffles show. Once that bound
+  falls below BH's threshold, the gene stops.
+- **The guarantee.** BH then rejects exactly the genes it would reject had
+  every run finished, on every run, so the false discovery rate is the same
+  (Fischer, Barry and Ramdas, *Electronic Journal of Statistics*, 2026).
+- **The saving.** A gene BH rejects needs only about
+  25 / threshold shuffles, instead of running to `max_permutations`
+  ([validation](validation.md#decision-based-stopping)).
+- **What is reported.**
+  - The genes BH rejects report their bound as the p-value, at most the
+    threshold, and a q-value of at most `fdr`. `result.bounded` marks them.
+  - Every other gene's p-value and q-value is exactly the finished one.
+  - Deciding at `fdr` or any higher level gives the same decisions. A
+    stricter level needs a new run.
+  - Rank discoveries by their effects, not by their p-values.
+- **`fdr=None`** finishes every run, for when exact small p-values matter.
+
+**The budget.** `max_permutations=999_999` lets a shuffled p-value reach
+10⁻⁶, so an isolated BH discovery at q ≤ 0.05 stays possible among up to
+50,000 genes. The manifest's `minimum_discovery_rank` says how many genes
+must sit at the shuffled floor before any can pass. Only genes near BH's
+threshold, or a lone discovery, need the budget's depth. A smaller
+`relative_error` buys precision with shuffles: a gene that stops at its
+exceedance needs about 1/(relative_error² · p) of them.
+
+Shuffled p-values near a threshold vary with the seed. Fix the seed, budget,
+precision and `fdr` before looking, and never rerun borderline genes until
+they pass. `gene_chunk` changes memory, never the answer.
 
 ## The subset test's validated range
 

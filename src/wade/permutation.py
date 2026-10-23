@@ -2,6 +2,26 @@
 from math import comb, log10
 import numpy as np
 
+# The run's shuffles come in blocks of this many, each from its own generator, so that any
+# shuffle can be regenerated from its position in the stream alone.
+STREAM_BLOCK = 1024
+
+
+def stream_block(cond, block, seed):
+    """Block `block` of the run's one stream of label shuffles: shuffles block * STREAM_BLOCK
+    onward, as rows of labels.
+
+    Each block is drawn by its own generator, seeded by the run's seed and the block's index
+    (spawn key (block, 2); the jitter uses (gene,) and the thinning (gene, 1)). Any shuffle can
+    therefore be regenerated from its position alone, so a gene can pause and later resume exactly
+    where it stopped, whatever the chunking or the order in which genes are run. Every gene, in
+    both tests, sees the same stream.
+    """
+    cond = np.asarray(cond, dtype=np.uint8)
+    rng = np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(block, 2)))
+    rows = np.tile(cond, (STREAM_BLOCK, 1))
+    return rng.permuted(rows, axis=1, out=rows)
+
 
 def validate_labels(cond, samples):
     labels = np.asarray(cond)

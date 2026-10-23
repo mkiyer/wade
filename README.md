@@ -50,6 +50,7 @@ workflow, and the [demo](notebooks/demo.qmd) runs it.
 | `direction` | `"both"` | Both tests two-sided. `"up"` asks whether cases are higher: a larger area, and a subset above the rest of the cases. `"down"` asks the reverse |
 | `relative_error` | `0.2` | The precision of every p-value |
 | `pvalues` | `"auto"` | Computes the area test exactly by a saddlepoint, and shuffles where its error estimate exceeds `relative_error`. `"permutation"` shuffles every p-value |
+| `fdr` | `0.05` | The false discovery rate at which BH decides. Shuffles stop once each gene's decision is settled; the decisions are exactly those of finished runs. Rejected genes report a p-value bound. `None` finishes every run |
 | `max_permutations` | `999_999` | The shuffle budget: a shuffled p-value can reach 10⁻⁶, so an isolated discovery stays possible among 50,000 genes |
 | `seed` | `1` | Seeds the jitter, the thinning and the shuffles |
 
@@ -114,6 +115,10 @@ binomially to known depths and folds.
 - **On TCGA prostate with its own labels** it called 14,266 genes at
   q ≤ 0.05, against 14,770 without equalization. Two thinning seeds agreed on
   97% of the calls at 128 or more reads per sample.
+- **Speed.** Each gene's shuffles stop once its BH decision is settled. The
+  decisions are exactly those of finished runs, and the TCGA breast
+  transcriptome (25,328 genes × 1,083 samples) runs in 27 seconds instead of
+  89 minutes.
 - **The subset test** held its level at or above 128 reads per sample across
   folds from 0.5 to 4 and every depth arm measured (worst 1.4% at p ≤ 0.01).
   In simulation it recovered a tenth of the cases raised 8× or more, on the
@@ -121,7 +126,7 @@ binomially to known depths and folds.
 - **On TCGA prostate** the subsets found for ERG, ETV1, ETV4 and FLI1 held no
   fusion-negative tumour and 89–100% of the fusion-positive ones, annotations
   WADE never saw. With 52 controls, the small ETV1 and ETV4 subsets are called
-  near the threshold (q = 0.032 and 0.044).
+  near the threshold (q = 0.029 and 0.038 with every run finished).
 
 Details, the measured limits and how to reproduce them are in
 [validation](docs/validation.md).

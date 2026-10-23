@@ -5,15 +5,17 @@ import numpy as np
 
 from math import ceil, isfinite
 
-from ._means import DIRECTIONS, area_values, expression, jittered, mean_saddlepoint, mean_test
-from ._subsets import split, subset_test
+from ._means import DIRECTIONS, advance_means, area_values, expression, jittered, mean_saddlepoint
+from ._subsets import advance, split, walks
 from .io import Condition, Counts, as_counts, result_columns
 from .normalize import Normalization, _fingerprint, _indices, _named, fit_normalization
 from .permutation import permutation_space, validate_labels
-from .pvalues import bh_adjust
+from .permutation import STREAM_BLOCK
+from .pvalues import TIE_RTOL, bh_adjust, settle
 
 # Floor 1e-6: an isolated BH discovery at q <= 0.05 stays possible among up to 50,000 genes.
 DEFAULT_MAX_PERMUTATIONS = 999_999
+DEFAULT_FDR = 0.05
 PVALUES = ("auto", "permutation")
 # The subset test is calibrated where the lower group averages at least this many reads per sample
 # (docs/validation.md; measured by research/count_model.py at commit e4fd67f): a measured
@@ -91,6 +93,19 @@ class WadeResult:
     def tested(self):
         return self.status == "tested"
 
+    @property
+    def bounded(self):
+        """Which shuffled p-values are bounds rather than finished Besag–Clifford values, per test.
+
+        With fdr set, a gene's shuffles stop once BH at that level must reject it; its p-value is
+        then an upper bound, at most the BH threshold, and its q-value at most fdr. Every other
+        gene's p-value is the one its finished run gives. Returns {"area": mask, "subset": mask}.
+        """
+        stop, maximum = self.params["stop_exceedances"], self.params["max_permutations"]
+        cut = lambda hits, draws: (draws > 0) & (hits < stop) & (draws < maximum)
+        return dict(area=cut(self.area_exceedances, self.area_permutations),
+                    subset=cut(self.subset_exceedances, self.subset_permutations))
+
     def __repr__(self):
         return (f"WadeResult(genes={len(self.gene)}, tested={int(self.tested.sum())}, "
                 f"case={int(self.cond.sum())}, control={int((self.cond == 0).sum())}, "
@@ -166,7 +181,7 @@ def _positive_int(value, name):
 
 
 def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None, pvalues="auto",
-         relative_error=0.2, max_permutations=DEFAULT_MAX_PERMUTATIONS, seed=1, strata=None,
+         fdr=DEFAULT_FDR, relative_error=0.2, max_permutations=DEFAULT_MAX_PERMUTATIONS, seed=1, strata=None,
          gene_names=None, sample_names=None, gene_chunk=None):
     """Test each gene's area between cases and controls, and whether a subset of cases departs from a common fold (raw counts, genes x samples).
 
@@ -211,17 +226,29 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
     fitted Normalization supports validated reference genes, external factors, and reuse across
     contrasts.
 
-    Every p-value is estimated to about relative_error. A shuffled p-value draws independent
-    label shuffles that preserve group sizes, and stops at its ceil(1/relative_error^2)-th
-    exceedance (the 25th at the default 0.2), whose count estimates p to that relative standard
-    error, or at max_permutations shuffles, below which it cannot go. The subset test is always
-    shuffled. With pvalues="auto" the area test is computed instead: the exact permutation
-    distribution of the cases' total has a double-saddlepoint tail with no floor above one
-    labelling in C(n, n1). Its error is estimated as the larger of the saddlepoint's second-order
-    term and one labelling among the L = p C(n, n1) in the tail. A gene whose estimate exceeds
-    relative_error is shuffled. pvalues="permutation" shuffles every p-value. BH covers the
-    tested genes. Normalization does not remove batch confounding; the run record reports median
-    size factors per group. gene_chunk affects computation, not the statistical procedure.
+    A shuffled p-value draws label shuffles that preserve group sizes, from one seeded stream that
+    every gene sees, and follows Besag and Clifford's rule: it stops at its
+    ceil(1/relative_error^2)-th exceedance (the 25th at the default 0.2), whose count estimates p
+    to that relative standard error, or at max_permutations shuffles, below which it cannot go.
+    The subset test is always shuffled. With pvalues="auto" the area test is computed instead: the
+    exact permutation distribution of the cases' total has a double-saddlepoint tail with no floor
+    above one labelling in C(n, n1). Its error is estimated as the larger of the saddlepoint's
+    second-order term and one labelling among the L = p C(n, n1) in the tail. A gene whose
+    estimate exceeds relative_error is shuffled. pvalues="permutation" shuffles every p-value.
+    Each test has one BH family over the tested genes.
+
+    fdr is the false discovery rate at which BH decides, chosen before looking: shuffles run only
+    as far as each gene's decision needs. A gene's Besag–Clifford run has a bound that holds
+    whatever its remaining shuffles would show; once that bound is below BH's threshold, the gene
+    stops. BH then rejects exactly the genes it would reject had every run finished, on every run,
+    and the false discovery rate is the same; the shuffles fall from up to max_permutations per
+    gene to about stop / threshold (Fischer, Barry and Ramdas, Electron. J. Statist. 2026). The
+    genes BH rejects report their bound as the p-value (at most the threshold; result.bounded marks
+    them) and a q-value of at most fdr; every other gene's p- and q-value is exactly the finished
+    one. BH at any level of fdr or above gives the same decisions; a stricter level needs a new
+    run. fdr=None finishes every run. Normalization does not remove batch confounding; the run
+    record reports median size factors per group. gene_chunk affects computation, not the
+    statistical procedure.
     """
     if direction not in DIRECTIONS:
         raise ValueError("direction must be 'both', 'up' or 'down'")
@@ -230,8 +257,11 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
     if isinstance(relative_error, bool) or not isinstance(relative_error, (int, float, np.number)) \
             or not isfinite(relative_error) or not 0 < relative_error < 1:
         raise ValueError("relative_error must be a number between 0 and 1")
-    stop = ceil(1 / relative_error ** 2)
+    if fdr is not None and (isinstance(fdr, bool) or not isinstance(fdr, (int, float, np.number))
+                            or not isfinite(fdr) or not 0 < fdr < 1):
+        raise ValueError("fdr must be a number between 0 and 1, or None")
     maximum = _positive_int(max_permutations, "max_permutations")
+    stop = min(ceil(1 / relative_error ** 2), maximum)
     data = as_counts(counts, gene_names=gene_names, sample_names=sample_names)
     labels = cond.vector(data.sample_names) if isinstance(cond, Condition) else cond
     labels = validate_labels(labels, data.shape[1])
@@ -260,7 +290,6 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
     status = np.where(~nonzero, "all_zero", np.where(selected, "tested", "filtered"))
     # Bounded scratch per chunk and per shuffle block; no genes x permutations bank.
     chunk = max(1, (128 * 2**20) // max(n * 8 * 8, 1)) if gene_chunk is None else _positive_int(gene_chunk, "gene_chunk")
-    batch = max(1, min(4096, (32 * 2**20) // max(n, 1)))
     # Store a concrete seed even when the caller requests a fresh random run.
     if seed is None:
         seed = np.random.SeedSequence().entropy
@@ -277,6 +306,24 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
     fold, alignment, gap = np.full(g, np.nan), np.full(g, np.nan), np.zeros(g)
     exceed, tried = np.zeros(g, np.uint64), np.zeros(g, np.uint64)
     subset_exceed, subset_tried = np.zeros(g, np.uint64), np.zeros(g, np.uint64)
+    shift, observed = np.ones(g), np.zeros(g)                     # each gene's registration and observed gap score
+    area_live, subset_live = np.zeros(g, bool), np.zeros(g, bool)  # the genes each test shuffles
+
+    def area_step(z, genes, threshold):
+        hits, draws = exceed[genes], tried[genes]
+        advance_means(z, labels, hits, draws, direction=direction, stop=stop, maximum=maximum,
+                      threshold=threshold, seed=seed)
+        exceed[genes], tried[genes] = hits, draws
+
+    def subset_step(pooled, order, genes, threshold):
+        hits, draws = subset_exceed[genes], subset_tried[genes]
+        advance(pooled, order, observed[genes], labels, hits, draws, direction=direction, stop=stop,
+                maximum=maximum, threshold=threshold, seed=seed)
+        subset_exceed[genes], subset_tried[genes] = hits, draws
+
+    # The first pass runs every shuffled gene until BH at its top threshold, fdr itself, is settled
+    # (pvalues.settle): certified below it, or finished. fdr=None finishes every run here.
+    first = -np.inf if fdr is None else fdr * (1 - TIE_RTOL)
     for start in range(0, g, chunk):
         rows = slice(start, min(start + chunk, g))
         block = data.values[rows]
@@ -284,8 +331,8 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
         values[rows] = x
         plain = expression(block, factors)                       # the effects need no jitter
         case_mean[rows], control_mean[rows] = plain[:, labels == 1].mean(axis=1), plain[:, labels == 0].mean(axis=1)
-        size[rows], side[rows], fold[rows], gap[rows], registered = split(x, labels)
-        alignment[rows] = np.log2(registered)
+        size[rows], side[rows], fold[rows], gap[rows], shift[rows] = split(x, labels)
+        alignment[rows] = np.log2(shift[rows])
         local = np.flatnonzero(tested[rows])
         if len(local):
             idx = start + local
@@ -294,11 +341,29 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
             if computed:
                 pvalue[idx], error = mean_saddlepoint(z, labels, direction=direction)
                 shuffled = error > relative_error                    # less precise than shuffling
-            if shuffled.any():
-                pvalue[idx[shuffled]], exceed[idx[shuffled]], tried[idx[shuffled]] = mean_test(
-                    z[shuffled], labels, direction=direction, stop=stop, maximum=maximum, seed=seed, batch=batch)
-            subset_p[idx], subset_exceed[idx], subset_tried[idx] = subset_test(
-                x[local], labels, direction=direction, stop=stop, maximum=maximum, seed=seed, batch=batch)
+            area_live[idx[shuffled]] = True
+            area_step(z[shuffled], idx[shuffled], first)
+            walked = idx[gap[idx] > 0]                               # genes without a subset have p = 1
+            subset_live[walked] = True
+            pooled, order, observed[walked] = walks(x[walked - start], labels, shift[walked], direction=direction)
+            subset_step(pooled, order, walked, first)
+
+    # Later passes lower BH's threshold, revisiting only genes not yet settled at it.
+    def area_more(genes, threshold):
+        for at in range(0, len(genes), chunk):
+            part = genes[at:at + chunk]
+            area_step(area_values(data.values[part], part, factors, seed), part, threshold)
+
+    def subset_more(genes, threshold):
+        for at in range(0, len(genes), chunk):
+            part = genes[at:at + chunk]
+            pooled, order, _ = walks(values[part], labels, shift[part], direction=direction)
+            subset_step(pooled, order, part, threshold)
+
+    pvalue, area_passes = settle(np.where(area_live, np.nan, pvalue), area_live, exceed, tried, area_more,
+                                 fdr=fdr, stop=stop, maximum=maximum)
+    subset_p, subset_passes = settle(np.where(tested & ~subset_live, 1.0, np.nan), subset_live, subset_exceed,
+                                     subset_tried, subset_more, fdr=fdr, stop=stop, maximum=maximum)
     area = case_mean - control_mean
     total = case_mean + control_mean
     fraction = np.divide(area, total, out=np.full(g, np.nan), where=total > 0)
@@ -324,9 +389,12 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
                   family="tested genes", hypotheses=int(tested.sum()), pvalues=pvalues,
                   area_pvalue="saddlepoint unless its error estimate exceeds relative_error"
                   if computed else "shuffled", relative_error=relative_error, max_permutations=maximum,
-                  stop_exceedances=min(stop, maximum), minimum_shuffled_pvalue=1 / (maximum + 1),
-                  seed=seed,
-                  gene_chunk=chunk, permutation_batch=batch,
+                  stop_exceedances=stop, minimum_shuffled_pvalue=1 / (maximum + 1),
+                  fdr=fdr, stopping="each shuffled gene until its BH decision at fdr is settled (its "
+                  "Besag-Clifford bound below BH's threshold, or its run finished)" if fdr is not None
+                  else "every shuffled gene to the end of its Besag-Clifford run",
+                  passes=dict(area=area_passes, subset=subset_passes), seed=seed,
+                  gene_chunk=chunk, stream_block=STREAM_BLOCK,
                   counts_sha256=_fingerprint(data), permutation_space=space,
                   size_factor_median=dict(case=float(np.median(factors[labels == 1])),
                                           control=float(np.median(factors[labels == 0]))),

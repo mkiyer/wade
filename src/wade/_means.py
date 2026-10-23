@@ -18,8 +18,8 @@ from math import erfc, exp, lgamma, log, pi, sqrt
 
 import numpy as np
 
-from .permutation import draw_perms
-from .pvalues import sequential_p
+from .permutation import STREAM_BLOCK, stream_block
+from .pvalues import sequential_p, settled
 
 DIRECTIONS = ("both", "up", "down")
 EPS, TINY = np.finfo(float).eps, np.finfo(float).tiny
@@ -73,28 +73,27 @@ def area_values(counts, rows, factors, seed):
                       factors.min(axis=-1, keepdims=True))
 
 
-def mean_test(x, cond, *, direction, stop, maximum, seed, batch=4096):
-    """Permutation p-values for each gene's signed area, the difference in means.
+def advance_means(x, cond, exceed, tried, *, direction, stop, maximum, threshold, seed):
+    """Shuffle each gene's area (rows of x) along the run's stream until it is settled at threshold.
 
-    Rows are genes. direction "both" counts the shuffles whose difference
-    lies at least as far from zero as the observed one, "up" those at least as high, and "down"
-    those at least as low. Every gene sees the same shuffles and stops at its stop-th
-    exceedance or at maximum (Besag-Clifford). Returns the p-values and the exceedance and
-    shuffle counts behind them.
+    Each gene resumes at its own position, the number of shuffles it has tried, and counts the
+    shuffles whose difference in means reaches the observed one: direction "both" counts those at
+    least as far from zero, "up" those at least as high, "down" those at least as low. It stops at
+    its stop-th exceedance, at maximum shuffles, or once its Besag–Clifford bound reaches threshold
+    (pvalues.settled). The records exceed and tried are updated in place.
     """
     cond = np.asarray(cond)
     n1, n0 = int(cond.sum()), int((cond == 0).sum())
     observed = x[:, cond == 1].mean(axis=1) - x[:, cond == 0].mean(axis=1)
     total = x.sum(axis=1)
     rounding = TIE_RTOL * np.abs(x).sum(axis=1) / min(n1, n0)     # a shuffle within it ties
-    stop = min(stop, maximum)
-    exceed, tried = np.zeros(len(x), np.int64), np.zeros(len(x), np.int64)
-    live, rng, drawn = np.ones(len(x), bool), np.random.default_rng(seed), 0
-    while live.any():
-        labels = draw_perms(cond, min(batch, maximum - drawn), rng=rng)
-        drawn += len(labels)
-        genes = np.flatnonzero(live)
-        sums = x[genes] @ labels.T.astype(float)                  # the cases' total in each shuffle
+    steps = np.arange(STREAM_BLOCK)
+    while (live := ~settled(exceed, tried, stop=stop, maximum=maximum, threshold=threshold)).any():
+        block = int(tried[live].min()) // STREAM_BLOCK
+        first = block * STREAM_BLOCK
+        genes = np.flatnonzero(live & (tried < first + STREAM_BLOCK))
+        labels = stream_block(cond, block, seed)
+        sums = x[genes] @ labels.T.astype(float)                   # the cases' total in each shuffle
         shuffled = sums / n1 - (total[genes, None] - sums) / n0
         mark, tie = observed[genes, None], rounding[genes, None]
         if direction == "up":
@@ -103,11 +102,26 @@ def mean_test(x, cond, *, direction, stop, maximum, seed, batch=4096):
             hits = shuffled <= mark + tie
         else:
             hits = np.abs(shuffled) >= np.abs(mark) - tie
-        count = exceed[genes, None] + np.cumsum(hits, axis=1)
-        reached = count >= stop
-        used = np.where(reached.any(axis=1), reached.argmax(axis=1) + 1, len(labels))
-        exceed[genes], tried[genes] = count[np.arange(len(genes)), used - 1], tried[genes] + used
-        live[genes] = (exceed[genes] < stop) & (tried[genes] < maximum)
+        start = tried[genes].astype(np.int64) - first               # each gene's next shuffle in this block
+        mine = steps >= start[:, None]
+        count = exceed[genes, None].astype(np.int64) + np.cumsum(hits & mine, axis=1)
+        position = tried[genes, None].astype(np.int64) + steps - start[:, None] + 1
+        done = mine & settled(count, np.maximum(position, count), stop=stop, maximum=maximum, threshold=threshold)
+        last = np.where(done.any(axis=1), done.argmax(axis=1), STREAM_BLOCK - 1)
+        rows = np.arange(len(genes))
+        exceed[genes], tried[genes] = count[rows, last], position[rows, last]
+
+
+def mean_test(x, cond, *, direction, stop, maximum, seed):
+    """Permutation p-values for each gene's area, every gene run to the end of its Besag–Clifford
+    rule: its stop-th exceedance, or maximum shuffles. Rows are genes; every gene sees the run's one
+    stream of shuffles (permutation.stream_block). Returns the p-values and the exceedance and
+    shuffle counts behind them.
+    """
+    stop = min(stop, maximum)
+    exceed, tried = np.zeros(len(x), np.uint64), np.zeros(len(x), np.uint64)
+    advance_means(x, cond, exceed, tried, direction=direction, stop=stop, maximum=maximum,
+                  threshold=-np.inf, seed=seed)
     return sequential_p(exceed, tried, stop=stop, maximum=maximum), exceed, tried
 
 

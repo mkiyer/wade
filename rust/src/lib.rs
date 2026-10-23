@@ -353,14 +353,36 @@ fn score<'py>(
     Ok(scores.into_pyarray(py))
 }
 
-/// Walk each shuffle for every gene still running, counting shuffles and those scoring at
-/// least the observed score; a gene stops at `stop` exceedances or `maximum` shuffles.
+/// The Besag–Clifford p-value under the most conservative future: an upper bound, on every path,
+/// on the p-value a gene with `exceed` exceedances in `tried` shuffles will finish with, and equal to
+/// it once the gene stops (at `stop` exceedances or `maximum` shuffles). It never rises as shuffles
+/// are added. Python's `pvalues.bound` computes the same value in the same arithmetic.
+fn bound(exceed: u64, tried: u64, stop: u64, maximum: u64) -> f64 {
+    if exceed >= stop {
+        stop as f64 / tried as f64
+    } else if tried + stop - exceed <= maximum {
+        stop as f64 / (tried + stop - exceed) as f64
+    } else {
+        (exceed + maximum - tried + 1) as f64 / (maximum + 1) as f64
+    }
+}
+
+/// Whether a gene needs no more shuffles: it has finished its Besag–Clifford run, or its bound has
+/// reached `threshold` (a BH threshold; -inf runs every gene to the end).
+fn settled(exceed: u64, tried: u64, stop: u64, maximum: u64, threshold: f64) -> bool {
+    exceed >= stop || tried >= maximum || bound(exceed, tried, stop, maximum) <= threshold
+}
+
+/// Walk the shuffles in `labels`, which hold positions `first`, `first` + 1, ... of the run's one
+/// shuffle stream, for every gene not yet settled. Each gene resumes at its own position (the
+/// shuffles it has tried), counts shuffles and those scoring at least the observed score, and
+/// stops once settled. A gene whose position lies beyond this block waits for its own.
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn tally<'py>(
     py: Python<'py>, pooled: PyReadonlyArray2<'py, f64>, order: PyReadonlyArray2<'py, i64>, direction: &str,
     labels: PyReadonlyArray2<'py, u8>, observed: PyReadonlyArray1<'py, f64>, exceed: PyReadonlyArray1<'py, u64>,
-    tried: PyReadonlyArray1<'py, u64>, stop: u64, maximum: u64,
+    tried: PyReadonlyArray1<'py, u64>, stop: u64, maximum: u64, first: u64, threshold: f64,
 ) -> PyResult<(Bound<'py, PyArray1<u64>>, Bound<'py, PyArray1<u64>>)> {
     let side = Side::parse(direction)?;
     let pool = Pool::new(&pooled, &order)?;
@@ -368,26 +390,31 @@ fn tally<'py>(
     let (lab, observed) = (labels.as_slice()?, observed.as_slice()?);
     let (hits, draws) = (exceed.as_slice()?, tried.as_slice()?);
     if !labels.is_c_contiguous() || labels.as_array().ncols() != n || observed.len() != pool.genes
-        || hits.len() != pool.genes || draws.len() != pool.genes
+        || hits.len() != pool.genes || draws.len() != pool.genes || stop == 0 || stop > maximum
+        || threshold.is_nan()
     {
         return Err(PyValueError::new_err("invalid shuffles or records"));
     }
+    if hits.iter().zip(draws).any(|(&k, &t)| k > t || t > maximum || (!settled(k, t, stop, maximum, threshold) && t < first)) {
+        return Err(PyValueError::new_err("a running gene's next shuffle precedes this block"));
+    }
     let n1 = cases_in(lab, n)?;
     let grid = Grid::new(n1, n - n1);
+    let end = first + (lab.len() / n) as u64;
     let mut records: Vec<(u64, u64)> = hits.iter().copied().zip(draws.iter().copied()).collect();
     py.detach(|| {
         records.par_iter_mut().enumerate().for_each(|(g, record)| {
-            if record.0 >= stop || record.1 >= maximum {
+            if settled(record.0, record.1, stop, maximum, threshold) || record.1 >= end {
                 return;
             }
             let mut walker = pool.walker(&grid, g, side);
             let bar = observed[g] - TIE_RTOL * observed[g].abs();       // this close ties with it
-            for row in lab.chunks_exact(n) {
+            for row in lab.chunks_exact(n).skip((record.1 - first) as usize) {
                 record.1 += 1;
                 if walker.score(row) >= bar {
                     record.0 += 1;
                 }
-                if record.0 >= stop || record.1 >= maximum {
+                if settled(record.0, record.1, stop, maximum, threshold) {
                     break;
                 }
             }

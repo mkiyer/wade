@@ -170,7 +170,7 @@ def matches_wade(genes=500, seed=1):
     cond = np.r_[np.ones(222, np.uint8), np.zeros(223, np.uint8)]
     sf = fit_normalization(raw).size_factors
     res = wade.wade(raw, cond, normalization=wade.Normalization.from_size_factors(raw, sf, source="check"),
-                    max_permutations=MAXIMUM, seed=seed)
+                    max_permutations=MAXIMUM, seed=seed, fdr=None)                  # every run finished
     rows = np.flatnonzero(res.tested)
     mine = tests(raw[rows], np.broadcast_to(res.normalization.size_factors, (len(rows), raw.shape[1])), cond, rows, seed)
     return np.array_equal(mine["area"], res.area_pvalue[rows]) and np.array_equal(mine["subset"], res.subset_pvalue[rows])

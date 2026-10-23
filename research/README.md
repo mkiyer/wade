@@ -6,6 +6,7 @@ imported by the package.
 | File | Purpose |
 | --- | --- |
 | `count_model.py` | The count model's exact reference: real tumours split at random (a split per gene) and thinned binomially by design, with known folds and depths. Measures the area test against the same test on unthinned counts, the normalization under composition change, and the area test on TCGA prostate with its own labels |
+| `stopping.py` | Decision-based stopping on the TCGA examples: whether `fdr` rejects exactly what finished runs reject (on 3,000 genes, or the whole prostate transcriptome), and its shuffles and wall time |
 | `pvalue_accuracy.py` | The computed area-test p-value against every labelling or 20 million shuffles, across small, unbalanced and balanced designs, and how well its own error estimate tracks its error |
 | `subset_recovery.py` | Whether the subsets recover the planted cases, on the side they were planted, and the subset test, on the confirmation's matrices |
 | `subset_significance.py` | Calibration of the subset test, and its significance as a subset grows toward the whole cohort |
@@ -15,6 +16,8 @@ imported by the package.
 ```sh
 WADE_TCGA_CONFIG=.release/0.2.0/tcga-config.json RAYON_NUM_THREADS=6 PYTHONPATH=src:research \
     python research/count_model.py [shipped composition real]
+WADE_TCGA_CONFIG=.release/0.2.0/tcga-config.json RAYON_NUM_THREADS=6 PYTHONPATH=src:research \
+    python research/stopping.py [prostate breast] [exact full whole]
 PYTHONPATH=src:research python research/pvalue_accuracy.py
 PYTHONPATH=src:research python research/subset_recovery.py
 PYTHONPATH=src:research python research/subset_significance.py

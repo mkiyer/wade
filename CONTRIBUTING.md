@@ -29,6 +29,20 @@ python tools/smoke_install.py
 python tools/check_workspace.py
 ```
 
+**macOS 27 (Xcode 27.1) linker defect.** The new linker can leave the native
+module's string table off the 8-byte alignment that macOS 27 requires, and
+`import wade` then fails with "mis-aligned LINKEDIT string pool". Linking
+with chained fixups avoids it:
+
+```sh
+CONDA_PREFIX=~/sw/miniforge3/envs/wade maturin develop --release -- -C link-arg=-Wl,-fixup_chains
+```
+
+Pass the flag through maturin as above, so that it reaches only the final
+link. Setting it in `RUSTFLAGS` breaks the build: the flag also reaches the
+proc-macro crates that rustc loads. This is a local workaround: CI's build
+configuration is unchanged, so revisit it if CI moves to Xcode 27.
+
 ## Rules
 
 - The native walk is the only implementation of the subset statistic. Tests hold

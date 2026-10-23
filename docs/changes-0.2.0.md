@@ -50,6 +50,17 @@ This is an intentional breaking release with no compatibility aliases.
   floor above one labelling. It shuffles only the genes whose saddlepoint
   error estimate exceeds `relative_error`. `pvalues="permutation"` shuffles
   every p-value. The subset test is always shuffled.
+- `fdr=0.05` (default) is the level at which BH decides. Shuffles stop once
+  each gene's decision is settled: once a bound on its finished p-value falls
+  below BH's threshold.
+  - BH rejects exactly the genes it would reject had every run finished, so
+    the false discovery rate is unchanged.
+  - Strongly significant genes need hundreds of shuffles instead of the full
+    budget.
+  - Rejected genes report the bound as their p-value; `result.bounded` marks
+    them. `fdr=None` finishes every run.
+- Every gene, in both tests, sees one seeded stream of shuffles that can be
+  regenerated from any position, so a gene can stop and resume exactly.
 - The subset walk and its registration are native code, one implementation for
   the observed split and every shuffle.
 

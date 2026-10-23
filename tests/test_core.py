@@ -10,7 +10,8 @@ from scipy.stats import false_discovery_control
 import wade
 from wade._means import area_values, equalized, jittered, mean_saddlepoint, mean_test
 from wade._subsets import split, subset_test
-from wade.pvalues import sequential_p
+from wade.permutation import STREAM_BLOCK, stream_block
+from wade.pvalues import bound, sequential_p, settle, settled
 
 STOP = 20                                                  # a stopping exceedance for direct test calls
 
@@ -45,7 +46,7 @@ def test_mean_test_and_stopping_records_against_exact_mean_differences(direction
     x[1, 0] = 40                                           # a raised case above a lowered mean
     cond = np.r_[np.ones(n1, int), np.zeros(n0, int)]
     p, exceed, tried = mean_test(x.astype(float), cond, direction=direction, stop=STOP, maximum=79, seed=88)
-    labels = wade.draw_perms(cond, 79, rng=np.random.default_rng(88))
+    labels = stream_block(cond, 0, 88)[:79]                  # the run's stream: its first 79 shuffles
     difference = lambda row, lab: (Fraction(int(row[lab == 1].sum()), n1) - Fraction(int(row[lab == 0].sum()), n0))
     for j, row in enumerate(x):
         seen = difference(row, cond)
@@ -97,7 +98,7 @@ def test_auto_computes_the_area_test_and_shuffles_where_the_saddlepoint_is_less_
     x[:10, :12] *= 3
     x[10:20, 0] *= 60                                        # one towering case: a lumpy total
     cond = np.r_[np.ones(12, int), np.zeros(12, int)]
-    run = lambda **k: wade.wade(x, cond, max_permutations=199, seed=3, **k)
+    run = lambda **k: wade.wade(x, cond, max_permutations=199, seed=3, fdr=None, **k)    # every run finished
     auto, brute = run(), run(pvalues="permutation")
     z = area_values(x, range(30), auto.normalization.size_factors, auto.params["seed"])
     computed, error = mean_saddlepoint(z, cond, direction="both")
@@ -143,30 +144,124 @@ def test_one_sided_tests_mirror_and_are_nested_in_the_two_sided_test():
 
 
 @pytest.mark.parametrize("direction", ["both", "up"])
-def test_chunk_batch_and_filter_invariance(direction):
+def test_chunk_and_filter_invariance(direction):
     rng = np.random.default_rng(85)
     x = rng.poisson(30, (30, 20))
     x[0] = 0
     x[1, :10] *= 8
     cond = np.tile([1, 0], 10)
-    for pvalues in ("permutation", "auto"):                  # shuffled throughout, and computed where it can be
-        kwargs = dict(direction=direction, max_permutations=97, seed=17, pvalues=pvalues)
-        a = wade.wade(x, cond, gene_chunk=30, **kwargs)
-        b = wade.wade(x, cond, gene_chunk=3, **kwargs)
-        for key in wade.RESULT_COLUMNS[2:] + ("area_permutations", "area_exceedances", "subset_permutations"):
-            np.testing.assert_array_equal(getattr(a, key), getattr(b, key))
-    kwargs = dict(direction=direction, max_permutations=97, seed=17, pvalues="permutation")
+    for fdr in (0.05, None):                                 # decisions settled early, and every run finished
+        for pvalues in ("permutation", "auto"):              # shuffled throughout, and computed where it can be
+            kwargs = dict(direction=direction, max_permutations=97, seed=17, pvalues=pvalues, fdr=fdr)
+            a = wade.wade(x, cond, gene_chunk=30, **kwargs)
+            b = wade.wade(x, cond, gene_chunk=3, **kwargs)
+            for key in wade.RESULT_COLUMNS[2:] + ("area_permutations", "area_exceedances", "subset_permutations"):
+                np.testing.assert_array_equal(getattr(a, key), getattr(b, key))
+    kwargs = dict(direction=direction, max_permutations=97, seed=17, pvalues="permutation", fdr=None)
     a = wade.wade(x, cond, gene_chunk=30, **kwargs)
     mask = np.arange(30) % 2 == 0
     c = wade.wade(x, cond, test_genes=mask, **kwargs)
     np.testing.assert_array_equal(a.normalization.size_factors, c.normalization.size_factors)
     np.testing.assert_array_equal(a.area_pvalue[mask], c.area_pvalue[mask])
     z = area_values(x[1:3], range(1, 3), a.normalization.size_factors, a.params["seed"])   # per gene, not per chunk
-    for batch in (1, 13, 97):
-        p, _, tried = mean_test(z, cond, direction=direction, stop=a.params["stop_exceedances"],
-                                maximum=97, seed=17, batch=batch)
-        np.testing.assert_array_equal(p, a.area_pvalue[1:3])
-        np.testing.assert_array_equal(tried, a.area_permutations[1:3])
+    for rows in ([0], [1], [0, 1]):                           # a gene's shuffles do not depend on its company
+        p, _, tried = mean_test(z[rows], cond, direction=direction, stop=a.params["stop_exceedances"],
+                                maximum=97, seed=17)
+        np.testing.assert_array_equal(p, a.area_pvalue[1:3][rows])
+        np.testing.assert_array_equal(tried, a.area_permutations[1:3][rows])
+
+
+def test_the_bound_never_rises_and_ends_at_the_finished_p_value():
+    rng = np.random.default_rng(12)
+    for stop, cap in ((1, 9), (5, 40), (20, 199), (25, 2000)):
+        for chance in (0.0, 0.01, 0.2, 0.9):
+            path = rng.random(cap) < chance                   # one gene's exceedances, shuffle by shuffle
+            k = np.cumsum(path)
+            t = np.arange(1, cap + 1)
+            end = int(np.argmax(k >= stop)) if (k >= stop).any() else cap - 1
+            final = sequential_p(k[end:end + 1], t[end:end + 1], stop=stop, maximum=cap)[0]
+            u = np.r_[bound(0, 0, stop=stop, maximum=cap), bound(k[:end + 1], t[:end + 1], stop=stop, maximum=cap)]
+            assert np.all(np.diff(u) <= 0) and np.all(u >= final) and u[-1] == final
+            assert settled(k[end], t[end], stop=stop, maximum=cap, threshold=-np.inf)
+            assert not settled(k[:end], t[:end], stop=stop, maximum=cap, threshold=-np.inf).any()
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_settling_each_decision_rejects_what_finished_runs_reject(seed):
+    """Fischer, Barry and Ramdas's lemma 4.1 on correlated exceedance streams: shuffles shared by
+    every gene (one latent effect per shuffle), mixed with p-values fixed in advance (genes the
+    saddlepoint computes), at every level, budget and stopping exceedance."""
+    rng = np.random.default_rng(seed)
+    m, stop = int(rng.integers(30, 200)), int(rng.choice([1, 5, 25]))
+    cap, alpha = int(rng.choice([199, 999, 4999])), float(rng.choice([0.01, 0.05, 0.2]))
+    alt = rng.random(m) < rng.choice([0.0, 0.1, 0.5, 1.0])
+    truth = np.where(alt, 10 ** rng.uniform(-6, -1, m), rng.random(m))
+    rho = rng.choice([0.0, 0.9])
+    latent = np.sqrt(1 - rho ** 2) * rng.standard_normal((m, cap)) + rho * rng.standard_normal(cap)
+    streams = norm_cdf(latent) <= truth[:, None]               # exceedances, shuffle by shuffle
+    live = rng.random(m) < 0.7
+    fixed = np.where(live, np.nan, truth)
+    exceed, tried = np.zeros(m, np.int64), np.zeros(m, np.int64)
+
+    def advance(genes, threshold):
+        for i in genes:
+            k = exceed[i] + np.cumsum(streams[i, tried[i]:])
+            t = tried[i] + np.arange(1, cap - tried[i] + 1)
+            j = int(np.argmax(settled(k, t, stop=stop, maximum=cap, threshold=threshold)))
+            exceed[i], tried[i] = k[j], t[j]
+
+    full_k, full_t = exceed.copy(), tried.copy()
+    for i in range(m):                                         # every run finished
+        k = np.cumsum(streams[i])
+        j = int(np.argmax(k >= stop)) if k[-1] >= stop else cap - 1
+        full_k[i], full_t[i] = k[j], j + 1
+    full = np.where(live, sequential_p(full_k, full_t, stop=stop, maximum=cap), truth)
+    advance(np.flatnonzero(live), alpha * (1 - 100 * np.finfo(float).eps))
+    reported, _ = settle(fixed, live, exceed, tried, advance, fdr=alpha, stop=stop, maximum=cap)
+    q, q_full = wade.bh_adjust(reported), wade.bh_adjust(full)
+    called = q_full <= alpha
+    for level in (alpha, 1.5 * alpha, 3 * alpha):              # the same decisions at fdr and above
+        np.testing.assert_array_equal(q <= level, q_full <= level)
+    np.testing.assert_array_equal(reported[~called], full[~called])
+    np.testing.assert_allclose(q[~called], q_full[~called], rtol=0, atol=1e-12)
+    assert np.all(reported >= full) and np.all(q[called] <= alpha)
+    assert np.all(tried[live] <= full_t[live])                 # never more shuffles than a finished run
+    unfinished = live & (exceed < stop) & (tried < cap)
+    assert np.all(called[unfinished])                          # only rejected genes stop early
+
+
+def norm_cdf(z):
+    return 0.5 * (1 + np.vectorize(math.erf)(z / math.sqrt(2)))
+
+
+@pytest.mark.parametrize("maximum", [199, 19_999])
+@pytest.mark.parametrize("pvalues", ["auto", "permutation"])
+@pytest.mark.parametrize("planted", [True, False])
+def test_wade_with_fdr_rejects_exactly_what_finished_runs_reject(maximum, pvalues, planted):
+    rng = np.random.default_rng(31)
+    x = rng.poisson(rng.gamma(4, 50, (80, 1)) * rng.gamma(10, 0.1, (80, 60)))
+    if planted:
+        x[:20, :30] *= 3                                       # every case tripled
+        x[20:35, :6] *= 30                                     # a fifth of the cases raised
+    cond = np.r_[np.ones(30, int), np.zeros(30, int)]
+    unit = wade.Normalization.from_size_factors(x, np.ones(60), source="unit")
+    kwargs = dict(max_permutations=maximum, seed=5, pvalues=pvalues, normalization=unit)
+    fast, full = wade.wade(x, cond, fdr=0.05, **kwargs), wade.wade(x, cond, fdr=None, **kwargs)
+    for test in ("area", "subset"):
+        p, q = getattr(fast, test + "_pvalue"), getattr(fast, test + "_padj")
+        p_full, q_full = getattr(full, test + "_pvalue"), getattr(full, test + "_padj")
+        called = q_full <= 0.05
+        assert called.any() == planted
+        for level in (0.05, 0.1, 0.2):
+            np.testing.assert_array_equal(q <= level, q_full <= level)
+        np.testing.assert_array_equal(p[~called], p_full[~called])
+        np.testing.assert_array_equal(q[~called], q_full[~called])
+        assert np.all(p[called] >= p_full[called]) and np.all(q[called] <= 0.05)
+        assert np.all(getattr(fast, test + "_permutations") <= getattr(full, test + "_permutations"))
+        assert not np.any(fast.bounded[test] & ~called) and not full.bounded[test].any()
+    if planted and maximum == 19_999:                          # strong genes stop long before the budget
+        assert fast.bounded["subset"].any() and fast.subset_permutations.sum() < full.subset_permutations.sum() / 2
+    assert fast.params["fdr"] == 0.05 and full.params["fdr"] is None
 
 
 def test_qvalues_cover_the_tested_genes_and_excluded_genes_have_no_test():
@@ -387,7 +482,7 @@ def test_the_subset_test_and_its_records():
     shared = 3 * (control + 1) - 1                          # every case tripled: the mean shift itself
     data, norm = unit(np.c_[np.r_[raised, control], np.r_[shared, control]].T)
     run = lambda **k: wade.wade(data, np.r_[np.ones(60, int), np.zeros(60, int)], normalization=norm, seed=1,
-                                max_permutations=199, **k)
+                                max_permutations=199, fdr=None, **k)             # every run finished
     r = run(pvalues="permutation")
     assert r.subset_pvalue[0] == 1 / 200 and r.subset_padj[0] <= .05             # carried by twelve cases
     assert r.subset_pvalue[1] > .05                                               # shared by every case

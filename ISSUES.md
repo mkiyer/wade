@@ -22,9 +22,8 @@
      `research/confirm.py` runs the build. Bump the protocol file's version
      and seed root before running it.
 2. **Review.** The author approves:
-   - the rendered demo, prostate and breast notebooks. The demo and prostate
-     notebooks were re-rendered for the build on 30 September 2026; the breast
-     notebook still needs rerunning (it took 89 minutes before);
+   - the rendered demo, prostate and breast notebooks, all re-rendered on
+     23 October 2026 (breast in 208 s, where it took 89 minutes before);
    - the documents' figures, tables and claims.
 
    Record the TCGA count-pipeline provenance: workflow, genome and
@@ -68,13 +67,16 @@ The ideas and their evidence are in
   distribution depends on its mean (mean–variance and shape, fitted across
   genes). It would give rarity a principled reference, and supply tails that
   a few controls cannot show.
-- **Performance at 20,000–80,000 samples.**
-  - The area test is computed by saddlepoint for nearly every gene, and the
-    thinning is one binomial draw per count.
-  - At saturation the subset test runs the full shuffle budget for every
-    strong gene. Stop each gene when its BH decision is settled (Gandy and
-    Hahn) rather than when its p-value is precise, vectorize the walk, and
-    stream gene chunks from Arrow.
+- **Performance at thousands of samples.**
+  - **Done 2026-10-23:** decision-based stopping. Each gene's shuffles stop
+    once its BH decision at `fdr` is settled, with exactly the decisions of
+    finished runs (Fischer, Barry and Ramdas 2026). TCGA breast (25,328 genes
+    × 1,083 samples) went from 89 minutes to 27 seconds ([validation](docs/validation.md#decision-based-stopping)).
+  - **Remaining.** Measure 5,000–80,000 samples. A lone discovery, or genes
+    right at BH's threshold, still need the full budget. Then:
+    - vectorize the walk;
+    - stream gene chunks from Arrow;
+    - mind the memory: the result keeps genes × samples of expression.
 - **Covariates, strata and pairing.** Passing `strata` is an error until a
   construction is validated. `notebooks/rna100k.qmd`, which blocks the
   RNA100K compendium by study, waits for it.

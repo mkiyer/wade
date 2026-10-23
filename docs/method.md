@@ -121,16 +121,54 @@ approximation can be off by about one of them, 1/L. A gene whose estimate
 exceeds `relative_error` is shuffled instead, so a small design shuffles the
 genes whose tail holds fewer than 1/`relative_error` labellings.
 
-**Shuffled.** Label shuffles preserve the group sizes; every gene sees the same
-stream, so results do not depend on chunking. A shuffle counts as an exceedance
-when its statistic reaches the observed one within a floating-point tolerance.
-Each gene stops at its h-th exceedance, h = ⌈1/relative_error²⌉, drawn at
-shuffle T, with p = h/T, whose relative standard error is about 1/√h; or it
-finishes the budget B = `max_permutations` with K exceedances and
-p = (K + 1)/(B + 1). Under exchangeability this sequential rule is valid:
-P(p ≤ α) ≤ α at every attainable α
-([Besag, §2.2.2](https://imsarchives.nus.edu.sg/oldwww/Programs/mcmc/files/besag_tl.pdf)).
-`pvalues="permutation"` shuffles every gene.
+**Shuffled.** Label shuffles preserve the group sizes, and every gene, in both
+tests, sees one stream of them.
+
+- **The stream.** It comes in blocks of 1,024 shuffles, each drawn by its own
+  generator seeded by the run's seed and the block's index. Any shuffle can be
+  regenerated from its position alone, so results depend on neither chunking
+  nor the order in which genes run.
+- **An exceedance** is a shuffle whose statistic reaches the observed one,
+  within a floating-point tolerance.
+- **The stopping rule.** Each gene stops at its h-th exceedance,
+  h = ⌈1/relative_error²⌉, drawn at shuffle T, with p = h/T, whose relative
+  standard error is about 1/√h. Otherwise it finishes the budget
+  B = `max_permutations` with K exceedances, and p = (K + 1)/(B + 1).
+- **Validity.** Under exchangeability this sequential rule is valid:
+  P(p ≤ α) ≤ α at every attainable α
+  ([Besag, §2.2.2](https://imsarchives.nus.edu.sg/oldwww/Programs/mcmc/files/besag_tl.pdf)).
+- `pvalues="permutation"` shuffles every gene.
+
+**Stopping at the decision.** After T shuffles with K < h exceedances, the run
+cannot finish with a p-value above
+
+\[U=\frac{h}{T+h-K}\ \text{ if } T+h-K\le B,\qquad
+U=\frac{K+B-T+1}{B+1}\ \text{ otherwise}:\]
+
+its p-value if every remaining shuffle were an exceedance. U never rises as
+shuffles are added, and it equals p once the run stops.
+
+With `fdr` = α, BH's threshold is found top-down:
+
+1. Start with r = m, the number of tested genes in the family.
+2. Run every shuffled gene until U ≤ t = rα/m, or until its run finishes.
+3. Count the genes with U ≤ t, or with a computed p ≤ t. If the count is r,
+   t is BH's threshold. Otherwise set r to the count and repeat.
+
+Every gene then either has U ≤ t, so its finished p is at most t, or has
+finished. Each count is therefore what the finished p-values give, and the
+iteration converges to BH's own threshold. BH on the reported values rejects
+exactly the genes BH on finished runs rejects, on every run
+([Fischer, Barry and Ramdas, 2026](https://doi.org/10.1214/26-EJS2514),
+lemma 4.1).
+
+- The rejected genes report U, at most the threshold, as their p-value.
+- Every other gene's p-value is its finished one.
+- A rejected gene needs at most about h/t shuffles, against up to B.
+- The false discovery rate is that of BH on finished runs. Like that, it
+  rests on positive dependence among the genes' p-values, here computed on
+  shared shuffles.
+- `fdr=None` finishes every run.
 
 ## The subset
 
