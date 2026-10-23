@@ -6,7 +6,7 @@ import wade
 
 @pytest.fixture
 def result():
-    x=np.random.default_rng(22).poisson(20,(15,12)); x[0]=0; x[2,:3]*=30
+    x=np.random.default_rng(22).poisson(20,(15,12)); x[0]=0; x[2,:3]*=30; x[3,6:]=0
     return wade.wade(x,[1]*6+[0]*6,max_permutations=41)
 
 
@@ -20,7 +20,7 @@ def test_export_manifest_and_table_roundtrip(result,tmp_path,extension):
         frame=pl.read_parquet(path)
     else:
         frame=pl.read_ipc(path)
-    for column in ("case_mean","area","area_fraction","area_padj","subset_log2fc","subset_padj"):
+    for column in ("case_mean","area","area_fraction","log2fc","area_padj","subset_log2fc","subset_padj"):
         np.testing.assert_allclose(frame[column].to_numpy(),getattr(result,column),equal_nan=True)
     assert frame.columns==list(wade.RESULT_COLUMNS)
     record=json.loads((tmp_path/'report.manifest.json').read_text())

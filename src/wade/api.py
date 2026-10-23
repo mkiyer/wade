@@ -40,9 +40,11 @@ class WadeResult:
     per sample at the cohort's typical depth). area is their difference, which is exactly the
     signed area between the case and control quantile functions. area_fraction is that area over
     the total area under both curves, (case_mean - control_mean) / (case_mean + control_mean):
-    between -1 and 1, and (f - 1) / (f + 1) for a fold f. area_pvalue tests the area against the
-    declared direction on counts thinned to the shallowest sample's depth (see wade()), and
-    area_padj adjusts it by BH over the tested genes.
+    between -1 and 1. log2fc is the fold of the group means, log2(case_mean / control_mean), with
+    no pseudocount: +inf where the controls have no reads, -inf where the cases have none. The
+    two carry the same information, area_fraction = (fc - 1) / (fc + 1). area_pvalue tests the
+    area against the declared direction on counts thinned until every sample's size factor
+    equals the smallest (see wade()), and area_padj adjusts it by BH over the tested genes.
 
     alignment_log2fc is the fold that best aligns the cases' quantile function of log(count + 1)
     with the controls' (their Wasserstein-1 registration): the common fold the subset test holds
@@ -64,6 +66,7 @@ class WadeResult:
     control_mean: np.ndarray
     area: np.ndarray
     area_fraction: np.ndarray
+    log2fc: np.ndarray
     area_pvalue: np.ndarray
     area_padj: np.ndarray
     alignment_log2fc: np.ndarray
@@ -167,16 +170,23 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
          gene_names=None, sample_names=None, gene_chunk=None):
     """Test each gene's area between cases and controls, and whether a subset of cases departs from a common fold (raw counts, genes x samples).
 
+    Every normalization reduces to one size factor per sample: its depth as the normalizer
+    measures it, from RLE on all genes (the default), RLE on internal control genes
+    (fit_normalization(..., reference_genes=...)), or factors fitted elsewhere
+    (Normalization.from_size_factors). Raw library totals are used only with
+    normalization="library".
+
     The area is the signed area between the case and control quantile functions of normalized
     counts (count / size factor): where cases are higher it adds, where they are lower it
     subtracts. It is exactly the difference in the group means; over the total area under both
-    curves it is the area fraction. Its test runs on counts thinned binomially to the shallowest
-    sample's depth. Read counts carry Poisson noise that shrinks with depth, so samples sequenced
-    to different depths are not exchangeable at low counts even when nothing differs between the
-    groups; after thinning they are. Genes with too few reads to trust are washed out rather than
-    called, and well-expressed genes barely change. Every sample is brought down to the shallowest
-    one, so remove failed or unusually shallow libraries first; params["depth_equalized"] records
-    the share of its reads the median sample kept.
+    curves it is the area fraction, and their ratio is the fold, log2fc. Its test runs on counts
+    thinned binomially until every sample's size factor equals the smallest: sample j keeps each
+    read with chance min(s) / s_j. Read counts carry Poisson noise that shrinks with depth, so
+    samples at different size factors are not exchangeable at low counts even when nothing
+    differs between the groups; after thinning they are. Genes with too few reads to trust are
+    washed out rather than called, and well-expressed genes barely change. Every sample is
+    brought down to the smallest size factor, so remove failed or unusually shallow libraries
+    first; params["depth_equalized"] records the share of its reads the median sample kept.
 
     The subset is the cases that depart from the one fold every case would share, above the rest
     of the cases or below them (see WadeResult.subset()). Its test asks whether every case could
@@ -292,6 +302,8 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
     area = case_mean - control_mean
     total = case_mean + control_mean
     fraction = np.divide(area, total, out=np.full(g, np.nan), where=total > 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log2fc = np.log2(case_mean / control_mean)                # +-inf where one group has no reads
     below = tested & (np.minimum(case_mean, control_mean) < SUBSET_VALIDATED_READS)
     if below.any():
         warnings.warn(f"{int(below.sum()):,} of {int(tested.sum()):,} tested genes average fewer than "
@@ -299,7 +311,7 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
                       f"subset test is validated: their subset p-values can be anti-conservative. The area test "
                       f"holds at every expression level.", UserWarning, stacklevel=2)
     params = dict(algorithm="area-and-subset-v4", direction=direction,
-                  area_test="difference in means of counts thinned binomially to the shallowest sample's depth",
+                  area_test="difference in means of counts thinned binomially until every size factor equals the smallest",
                   depth_equalized=float(factors.min() / np.median(factors)),
                   subset_statistic="largest gap between the case and control Lorenz curves of count + 1",
                   subset_registration="Wasserstein-1 fold on log(count + 1), the middle of any median interval",
@@ -307,8 +319,8 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
                   subset_validated_genes=int((tested & ~below).sum()),
                   expression="(count + jitter) / size_factor", effects="count / size_factor",
                   jitter="Uniform(0, 1) per count, seeded by seed and gene row",
-                  thinning="Binomial per count to the shallowest sample's depth, seeded by seed and gene row, "
-                           "counts rounded to whole reads",
+                  thinning="Binomial per count, sample j keeping min(s) / s_j of its reads (s: the normalization's "
+                           "size factors), seeded by seed and gene row, counts rounded to whole reads",
                   family="tested genes", hypotheses=int(tested.sum()), pvalues=pvalues,
                   area_pvalue="saddlepoint unless its error estimate exceeds relative_error"
                   if computed else "shuffled", relative_error=relative_error, max_permutations=maximum,
@@ -322,7 +334,8 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
     if isinstance(cond, Condition):
         params.update(case_label=cond.case, control_label=cond.control, condition_column=cond.column)
     part = np.where(size == 0, "none", np.where(side > 0, "up", "down"))
-    return WadeResult(data.gene_names.copy(), status, case_mean, control_mean, area, fraction, pvalue, bh_adjust(pvalue),
+    return WadeResult(data.gene_names.copy(), status, case_mean, control_mean, area, fraction, log2fc, pvalue,
+                      bh_adjust(pvalue),
                       alignment, gap, part, size / int(labels.sum()), fold, subset_p, bh_adjust(subset_p),
                       tried, exceed, subset_tried, subset_exceed, values, labels.copy(),
                       data.sample_names.copy(), fitted, params, dict(data.meta))

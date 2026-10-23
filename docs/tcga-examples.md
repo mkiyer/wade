@@ -79,8 +79,9 @@ its testing filter**, after sample eligibility and patient separation. The
 primary comparison has its own fitted object; the four breast subtype
 comparisons share one fit on their eligible tumour-only cohort. Subsetting a
 fitted object never re-centers its factors. The count denominator is that
-relative size factor. The area test runs on counts thinned binomially to the
-shallowest library's depth, and the subset test on `count / size_factor` with
+relative size factor. The area test runs on counts thinned binomially until
+every sample's size factor equals the smallest, and the subset test on
+`count / size_factor` with
 seeded jitter; figures and descriptions use log2. Raw full-input totals
 accompany library QC, independently of the RLE factors. No genomic span is used
 as a transcript length.

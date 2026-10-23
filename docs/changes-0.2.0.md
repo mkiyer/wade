@@ -12,10 +12,16 @@ This is an intentional breaking release with no compatibility aliases.
   the difference in means, in reads per sample. It also reports the **area
   fraction**, the area over the total area under both curves, between −1 and
   1.
-- The area test thins every sample binomially to the shallowest sample's depth
-  before testing. Samples sequenced to different depths are then exchangeable
-  under the null at every expression level, and genes with too few reads to
-  trust are washed out rather than called. The effects use every read.
+- The **fold**, `log2fc`, is log2(case mean / control mean), with no
+  pseudocount (±inf where a group has no reads).
+- Every normalization ends as one size factor per sample: RLE on all genes,
+  RLE on internal control genes, or factors fitted elsewhere. Before testing,
+  the area test thins every sample binomially until all size factors equal
+  the smallest.
+  - Samples sequenced to different depths are then exchangeable under the
+    null at every expression level.
+  - Genes with too few reads to trust are washed out rather than called.
+  - The effects use every read.
 - WADE finds each gene's **subset**: the cases above or below the point where
   the cases' Lorenz curve of count + 1 falls furthest below the controls'.
   Nothing about the subset's size is chosen in advance. The subset test asks
@@ -50,7 +56,7 @@ This is an intentional breaking release with no compatibility aliases.
 ## Results
 
 One row per input gene, with these columns: `gene`, `status`, `case_mean`,
-`control_mean`, `area`, `area_fraction`, `area_pvalue`, `area_padj`,
+`control_mean`, `area`, `area_fraction`, `log2fc`, `area_pvalue`, `area_padj`,
 `alignment_log2fc`, `lorenz_gap`, `subset_side`, `subset_fraction`,
 `subset_log2fc`, `subset_pvalue` and `subset_padj`. Each test has its own BH
 family over the tested genes.

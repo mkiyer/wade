@@ -20,11 +20,16 @@ execute:
 
 For each gene WADE measures the area between cases and controls, the signed
 area between their quantile functions, and finds the subset of cases that
-departs from one fold shared by every case. It tests both. This notebook plants known
-patterns in simulated counts and shows how each one reads. It demonstrates
-behavior; the [validation](../docs/validation.md) page measures performance.
+departs from one fold shared by every case. It tests both. This notebook shows
+the recommended way to run WADE on a dataset, then plants known patterns in
+simulated counts and shows how each one reads. It demonstrates behavior; the
+[validation](../docs/validation.md) page measures performance.
 
-## A complete workflow
+## Running WADE on a dataset
+
+The simulation has 200 cases and 200 controls. Each sample has its own
+sequencing depth, drawn within a factor of √2 of the median. There are 800
+unchanged background genes and six genes with planted patterns.
 
 ```{python}
 #| label: setup
@@ -61,25 +66,75 @@ data = wade.as_counts(counts,gene_names=names)
 np.savez_compressed(OUT / "simulation.npz", counts=counts, cond=cond, genes=np.asarray(names), known_factors=sf)
 ```
 
-Normalization is fitted once, and the filter chooses the tested genes without
-refitting. The defaults test both questions two-sided on normalized counts,
-each with its own false discovery family over the tested genes.
+The workflow has four steps.
+
+1. **Check the libraries.** Fix technical exclusions from depth and
+   detection before testing, never from results. `wade.library_qc(data)`
+   reports each library's raw depth, detected genes and the share of reads its
+   top genes hold.
+2. **Fit one size factor per sample.** Every normalization ends as one size
+   factor per sample: the sample's depth as the normalizer measures it.
+   - RLE on all genes is the default.
+   - With internal control genes (housekeeping genes, or spike-ins known not
+     to change), fit RLE on those genes alone.
+   - Factors fitted elsewhere enter through
+     `wade.Normalization.from_size_factors`.
+3. **Choose the tested genes** with a filter that ignores the labels. The
+   filter never refits the size factors.
+4. **Run both tests.** WADE divides each count by its sample's size factor for
+   the effects. Before the area test, it thins every sample so that all size
+   factors equal the smallest: sample j keeps each read with chance
+   min(s)/s_j. A difference in depth between the groups then cannot pass for a
+   difference in expression, and genes too sparse to trust wash out. Raw
+   library totals play no part unless you choose `normalization="library"`.
 
 ```{python}
-#| label: simple-workflow
+#| label: workflow
 #| echo: true
 #| output: false
-norm = wade.fit_normalization(data)
-keep = wade.filter_counts(data, min_count=3, min_samples=2)
-result = wade.wade(data, cond, normalization=norm, test_genes=keep, seed=1)
+qc = wade.library_qc(data)                                            # 1. depth and detection
+norm = wade.fit_normalization(data)                                   # 2. RLE on all genes
+controls = names[:50]                                                 #    or on internal control genes
+norm_controls = wade.fit_normalization(data, reference_genes=controls)
+keep = wade.filter_counts(data, min_count=3, min_samples=2)           # 3. the tested genes
+result = wade.wade(data, cond, normalization=norm, test_genes=keep, seed=1)   # 4. both tests
 _ = wade.write_results(result, OUT / "all-genes.tsv")
 ```
+
+Both normalizers recover the depths the simulation drew; fifty unchanged
+genes serve here as the internal controls. The median of fifty ratios is
+noisier than the median of all 800, so use as many validated controls as the
+assay has. The area test's thinning follows whichever size factors are
+fitted.
+
+```{python}
+#| label: size-factors
+#| output: asis
+by_controls = wade.wade(data, cond, normalization=norm_controls, test_genes=keep, seed=1)
+rows = []
+for label, fit, res in (("RLE, all genes", norm, result), ("RLE, 50 control genes", norm_controls, by_controls)):
+    rows.append({"Size factors": label,
+                 "Correlation with the simulated depths": round(float(np.corrcoef(np.log(fit.size_factors), np.log(sf))[0, 1]), 3),
+                 "Reads the median sample keeps": round(res.params["depth_equalized"], 2),
+                 "Area calls, q ≤ 0.05": int(np.sum(res.area_padj <= .05))})
+markdown_table(pl.DataFrame(rows), OUT, "size-factors")
+```
+
+The run reports each gene's group means, then three views of their
+difference:
+
+- the area, in reads per sample;
+- the area fraction, between −1 and 1;
+- the fold, `log2fc`.
+
+The three views share one test, the area test, with its q-value
+`area_padj`. The subset has its own test.
 
 ```{python}
 #| label: marker-results
 #| output: asis
 markdown_table(result.to_frame().filter(pl.col("gene").is_in(marker_names)).select(
-    "gene","case_mean","control_mean","area_fraction","area_padj","subset_fraction","subset_log2fc","subset_padj"),
+    "gene","case_mean","control_mean","log2fc","area_fraction","area_padj","subset_fraction","subset_log2fc","subset_padj"),
     OUT, "marker-results")
 ```
 
@@ -88,10 +143,12 @@ markdown_table(result.to_frame().filter(pl.col("gene").is_in(marker_names)).sele
 `area` is the signed area between the quantile functions of normalized
 counts: exactly the difference in group means, in reads per sample.
 `area_fraction` divides it by the total area under both curves, so it runs
-from −1 to 1 and reads like a fold: 1/3 for a doubling. Its test runs on counts
-thinned to the shallowest sample's depth, so a difference in sequencing depth
-cannot pass for a difference in expression, and genes with too few reads to
-trust wash out. The subset asks a different question: could every case carry
+from −1 to 1: 1/3 for a doubling. `log2fc` is the fold of the group means,
+log2(case_mean / control_mean), as in HITLIB: +1 for a doubling, and infinite
+where one group has no reads at all. The area test runs on counts thinned
+until every sample's size factor equals the smallest, so a difference in
+sequencing depth cannot pass for a difference in expression, and genes with
+too few reads to trust wash out. The subset asks a different question: could every case carry
 one common fold? If every case carried it alike, each case quantile would sit
 at a predicted level; walking up the cases, the running departure from those
 predictions falls through cases that carry less than their share and rises

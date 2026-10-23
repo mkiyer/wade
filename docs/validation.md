@@ -80,9 +80,9 @@ and by depth.
 **On TCGA prostate with its own labels** (`count-model-real-20260930.txt`,
 section `real`: 445 tumours v 52 normals, 24,246 tested genes).
 
-- **The depth kept.** The shallowest library holds 0.295 of the median
-  library's depth, so the median sample keeps 29.5% of its reads. Nine
-  tumours, and no normals, sit below half the median depth.
+- **The depth kept.** The smallest RLE size factor is 0.295 of the median,
+  so the median sample keeps 29.5% of its reads. Nine tumours, and no
+  normals, have size factors below half the median.
 - **The calls.** At BH q ≤ 0.05 the area test calls 14,266 genes, against
   14,770 for the unthinned test. The calls lost are concentrated at low
   expression:
@@ -262,15 +262,15 @@ with 24,246 tested genes. It compares each subset with fusion annotations
 WADE never sees. Only tumours annotated fusion-positive or negative enter
 precision and recall.
 
-| Gene | Area fraction | Area q | Subset | Subset q | Positives in subset | Negatives in subset | Precision | Recall |
-| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| ERG | 0.68 | 1.8 × 10⁻⁴ | 38% above | 0.073 | 122 of 130 | 0 | 1.00 | 0.94 |
-| ETV1 | 0.66 | 0.20 | 8% above | 0.032 | 16 of 17 | 0 | 1.00 | 0.94 |
-| ETV4 | 0.88 | 0.54 | 3% above | 0.044 | 8 of 9 | 0 | 1.00 | 0.89 |
-| FLI1 | −0.06 | 0.62 | 1% above | 0.67 | 2 of 2 | 0 | 1.00 | 1.00 |
+| Gene | log2fc | Area fraction | Area q | Subset | Subset q | Positives in subset | Negatives in subset | Precision | Recall |
+| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| ERG | 2.42 | 0.68 | 1.8 × 10⁻⁴ | 38% above | 0.073 | 122 of 130 | 0 | 1.00 | 0.94 |
+| ETV1 | 2.30 | 0.66 | 0.20 | 8% above | 0.032 | 16 of 17 | 0 | 1.00 | 0.94 |
+| ETV4 | 3.96 | 0.88 | 0.54 | 3% above | 0.044 | 8 of 9 | 0 | 1.00 | 0.89 |
+| FLI1 | −0.16 | −0.06 | 0.62 | 1% above | 0.67 | 2 of 2 | 0 | 1.00 | 1.00 |
 
 - **ETV1 and ETV4 are the case WADE is built for.** A few fusion-positive
-  tumours carry large area fractions (0.66 and 0.88) that the area test
+  tumours carry large mean folds (log2fc 2.30 and 3.96) that the area test
   cannot call, because a few tumours carry the whole difference. Their
   subsets hold only fusion-positive tumours and are called at q ≤ 0.05.
 - **Few controls cost the subset test power.** With 52 controls these small

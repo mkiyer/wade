@@ -38,7 +38,7 @@ label and f the gene's fold ([validation](validation.md)).
 ## 1. Adopted
 
 - **Depth equalization before the area test.** Every sample is thinned
-  binomially to the shallowest sample's depth, and then the difference in
+  binomially until its size factor equals the smallest, and then the difference in
   means is tested by permutation. Under the count model with no fold and
   known depths, the thinned samples are exchangeable whatever their depths,
   so the test is exact at every expression level. With estimated size

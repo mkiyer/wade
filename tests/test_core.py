@@ -205,14 +205,46 @@ def test_expression_the_effects_and_the_thinned_counts_of_the_area_test():
     np.testing.assert_allclose(r.control_mean, m0)
     np.testing.assert_allclose(r.area, m1 - m0)
     np.testing.assert_allclose(r.area_fraction, (m1 - m0) / (m1 + m0))
+    np.testing.assert_allclose(r.log2fc, np.log2(m1 / m0))
     assert r.params["depth_equalized"] == pytest.approx(sf.min() / np.median(sf))
-    # The area test's counts: every sample thinned to the shallowest depth, which keeps all its reads.
+    # The area test's counts: every sample thinned until its size factor equals the smallest; the
+    # sample with the smallest keeps all its reads.
     thinned = equalized(x, range(len(x)), sf, r.params["seed"])
     np.testing.assert_array_equal(thinned[:, np.argmin(sf)], x[:, np.argmin(sf)])
     assert np.all(thinned <= x)
     np.testing.assert_array_equal(equalized(x[2:4], range(2, 4), sf, r.params["seed"]), thinned[2:4])
     keep, reads = sf.min() / sf, x.sum(axis=0)                     # each sample keeps min(s) / s of its reads
     assert np.all(np.abs(thinned.sum(axis=0) / reads - keep) <= 4 * np.sqrt(keep * (1 - keep) / reads))
+
+
+def test_internal_control_genes_set_the_size_factors_that_the_thinning_equalizes():
+    """Whatever the normalizer, it becomes one size factor per sample, and the area test thins by
+    those factors, never by raw library totals."""
+    rng = np.random.default_rng(5)
+    depth = np.r_[1, 1, 2, 2, 1, 1, 2, 2]                          # half the samples sequenced twice as deep
+    x = rng.poisson(200, (40, 8)) * depth
+    x[0, 0] = 10**6                                                # one gene holds most of sample 0's reads
+    x[1, 4:] = 0                                                   # a gene with no reads in the controls
+    x[2, :4] = 0                                                   # and one with none in the cases
+    cond = np.r_[np.ones(4, int), np.zeros(4, int)]
+    names = [f"g{i}" for i in range(40)]
+    data = wade.as_counts(x, gene_names=names)
+    controls = names[10:30]
+    norm = wade.fit_normalization(data, reference_genes=controls)
+    assert norm.used_reference_genes == tuple(controls)
+    sf = norm.size_factors
+    np.testing.assert_allclose(sf / sf[0], depth, rtol=0.1)        # the controls' depths, not the totals
+    r = wade.wade(data, cond, normalization=norm, max_permutations=19)
+    np.testing.assert_array_equal(r.normalization.size_factors, sf)
+    thinned = equalized(x, range(len(x)), sf, r.params["seed"])
+    # Sample 0 holds the largest library, yet it keeps about min(s) / s_0 of its reads, nearly all.
+    by_totals = x.sum(axis=0).min() / x[:, 0].sum()
+    assert by_totals < 0.01 and thinned[0, 0] > 0.8 * x[0, 0] * sf.min() / sf[0]
+    # The fold of the group means, with no pseudocount: infinite where a group has no reads.
+    assert r.log2fc[1] == np.inf and r.area_fraction[1] == 1
+    assert r.log2fc[2] == -np.inf and r.area_fraction[2] == -1
+    fc = 2.0 ** r.log2fc[3:]
+    np.testing.assert_allclose(r.area_fraction[3:], (fc - 1) / (fc + 1))
 
 
 def registration_oracle(case, control):

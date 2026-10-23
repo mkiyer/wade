@@ -18,8 +18,8 @@ tests, the claims withdrawn along the way, and what comes next.
   Passing `strata` is an error. `notebooks/rna100k.qmd`, which blocks the
   RNA100K compendium by study, waits for that work.
 - **Two tests per gene:**
-  - the area test (DE): the difference in means, on counts thinned to the
-    shallowest sample's depth;
+  - the area test (DE): the difference in means, on counts thinned until
+    every sample's size factor equals the smallest;
   - the subset test: are the cases more unequal than the controls, after one
     common fold?
 
@@ -57,7 +57,7 @@ research; 15 to 18 on 30 September 2026, for the build the author uses.
     anti-conservative. 128 is the lowest bin edge of the reference at which
     every arm holds: a measured validity bound, not a parameter.
 15. **The DE test is the area test on depth-equalized counts.** Every sample
-    is thinned binomially to the shallowest sample's depth, then the
+    is thinned binomially until its size factor equals the smallest, then the
     difference in means is tested by permutation with the saddlepoint tail.
     - It is exact under the count model at every expression level, with no
       estimate inside the thinning.

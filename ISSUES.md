@@ -4,7 +4,8 @@
 
 1. **Confirm the 30 September 2026 build (protocol version 7).**
    - *The build:*
-     - the area test on counts thinned to the shallowest sample's depth;
+     - the area test on counts thinned until every sample's size factor
+       equals the smallest;
      - the area and the area fraction as effects;
      - the subset test with its validated range of 128 reads per sample
        and a warning below it;

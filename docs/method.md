@@ -8,11 +8,20 @@ them and [validation](validation.md) what they were measured to do.
 
 ## Expression
 
-Label-independent size factors s_j are fitted on a declared normalization
-universe (RLE by default: genes positive in every fit sample, their geometric
-means, column medians of log ratios, centered to geometric mean one). The test
-gene mask is fixed after fitting and never refits the factors. A normalized
-count c_gj/s_j is reads per sample at the cohort's typical depth.
+Every normalization ends as one label-independent size factor s_j per sample:
+the sample's depth as the normalizer measures it.
+
+- **RLE by default:** on the genes with reads in every fit sample, the column
+  medians of the log ratios to the genes' geometric means, centered to
+  geometric mean one.
+- **Internal control genes:** the same RLE restricted to the controls.
+- **Supplied factors:** from any other estimator.
+- **Library totals:** only when chosen.
+
+The test gene mask is fixed after fitting and never refits the factors. A
+normalized count c_gj/s_j is reads per sample at the cohort's typical depth.
+The size factors serve twice: as the denominators of the effects, and as the
+depths the area test's thinning equalizes.
 
 Counts are discrete, and many samples share a count, above all zero. Each count
 c_gj therefore receives independent jitter u_gj ~ Uniform(0, 1), drawn from a
@@ -37,10 +46,16 @@ counts c/s, with no jitter (`case_mean`, `control_mean`), their difference
 
 \[\frac{\bar m_1-\bar m_0}{\bar m_1+\bar m_0}\in[-1,1],\]
 
-the area over the total area under both curves. It needs no pseudocount, and
-for a fold f between the means it is (f − 1)/(f + 1): 1/3 for a doubling,
+the area over the total area under both curves. It needs no pseudocount.
+The **fold** is the ratio of the same two means,
+
+\[f=\bar m_1/\bar m_0,\qquad \texttt{log2fc}=\log_2 f,\]
+
+with no pseudocount either: +∞ when the controls have no reads, −∞ when the
+cases have none. The area fraction is (f − 1)/(f + 1): 1/3 for a doubling,
 −1/3 for a halving, and ±1 when one group has no reads. These are the
-difference and fraction of the author's HITLIB method.
+difference, fraction and fold of the author's HITLIB method (`diff.mean`,
+`diff.frac` and `fc`).
 
 ## The area test
 
@@ -54,7 +69,7 @@ factors: the shallower one's normalized count is noisier. Under the count model
 with Λ_j sample j's latent expression, keeping each read of sample j
 independently with chance π_j = min_k s_k / s_j gives
 C′_j | Λ_j ~ Poisson(min_k s_k · Λ_j), whatever Λ_j: every sample at the
-shallowest depth. When the cases' and the controls' latent levels are drawn
+smallest size factor. When the cases' and the controls' latent levels are drawn
 from one distribution, the null, the thinned counts are exchangeable and a
 permutation test of any statistic of them is exact, at every expression level.
 Genes whose counts are too low to trust are thinned to mostly zeros and washed
@@ -66,7 +81,9 @@ with the thinning drawn from a stream seeded by the run's seed and the gene's
 row (counts rounded to whole reads), and u_gj the gene's jitter.
 `params["depth_equalized"]` records min_k s_k over the median size factor: the
 share of its reads the median sample keeps. The effects above use every read;
-only the test runs on the thinned counts.
+only the test runs on the thinned counts. The exactness needs the size factors
+to be the true exposures up to one common constant: RLE on all genes, when
+most genes do not change, or on internal control genes that do not.
 
 **The statistic.** The difference in means of z is an increasing function of
 the cases' total A, the sum of n₁ of the gene's n values drawn without

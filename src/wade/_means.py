@@ -6,10 +6,13 @@ whatever the group sizes. Its permutation test is therefore a question about the
 sum of n1 values drawn without replacement: shuffling answers it by brute force, and the
 saddlepoint of that sum's distribution answers it without shuffles.
 
-The test runs on counts thinned to one sequencing depth (equalized): read counts carry Poisson
-noise that shrinks with depth, so samples sequenced to different depths are not exchangeable at
-low counts even when nothing differs between the groups. Thinning every sample to the shallowest
-depth makes them exchangeable again, and washes out genes whose counts are too low to trust.
+The test runs on counts thinned until every sample's size factor equals the smallest
+(equalized). A size factor is a sample's depth as the normalizer measures it: RLE on all genes,
+RLE on internal control genes, or factors supplied from elsewhere; raw totals only when the
+library normalization is chosen. Read counts carry Poisson noise that shrinks with depth, so
+samples at different size factors are not exchangeable at low counts even when nothing differs
+between the groups. Thinning makes them exchangeable again, and washes out genes whose counts
+are too low to trust.
 """
 from math import erfc, exp, lgamma, log, pi, sqrt
 
@@ -47,12 +50,12 @@ def expression(counts, factors):
 
 
 def equalized(counts, rows, factors, seed):
-    """Counts thinned binomially to the shallowest sample's depth, each gene from its own stream
-    (seed, row index, 1).
+    """Counts thinned binomially until every sample's size factor equals the smallest, each gene
+    from its own stream (seed, row index, 1).
 
-    Sample j keeps each read with chance min(s) / s_j, s its size factor. A thinned Poisson count
-    is Poisson at the lower depth, so every sample ends at one depth and a difference in depth
-    between the groups cannot pass for a difference in expression. Counts are rounded to whole
+    Sample j keeps each read with chance min(s) / s_j, s its size factor from the normalization.
+    A thinned Poisson count is Poisson at the lower rate, so every sample ends at one size factor
+    and a difference in depth between the groups cannot pass for a difference in expression. Counts are rounded to whole
     reads first. factors holds one size factor per sample, or one row of them per gene. The draws
     do not depend on the gene chunk.
     """
@@ -65,7 +68,7 @@ def equalized(counts, rows, factors, seed):
 
 
 def area_values(counts, rows, factors, seed):
-    """The values the area test shuffles: equalized counts plus jitter, over the common depth."""
+    """The values the area test shuffles: equalized counts plus jitter, over the common size factor."""
     return expression(jittered(equalized(counts, rows, factors, seed), rows, seed),
                       factors.min(axis=-1, keepdims=True))
 

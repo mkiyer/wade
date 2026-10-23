@@ -455,7 +455,7 @@ def condition(
 
 
 RESULT_COLUMNS = (
-    "gene", "status", "case_mean", "control_mean", "area", "area_fraction", "area_pvalue", "area_padj",
+    "gene", "status", "case_mean", "control_mean", "area", "area_fraction", "log2fc", "area_pvalue", "area_padj",
     "alignment_log2fc", "lorenz_gap", "subset_side", "subset_fraction", "subset_log2fc", "subset_pvalue",
     "subset_padj",
 )

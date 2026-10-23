@@ -7,30 +7,41 @@ match normal. For every gene it reports two things and tests each:
 
 - **The area**: the signed area between the case and control quantile
   functions of normalized counts. It is exactly the difference in group means,
-  in reads per sample, so it grows with expression. Its share of the total
-  area under both curves, the **area fraction**, lies between −1 and 1 and
-  reads the same at every expression level.
+  in reads per sample, so it grows with expression.
+  - Its share of the total area under both curves, the **area fraction**,
+    lies between −1 and 1 and reads the same at every expression level.
+  - The ratio of the same two means is the **fold**, `log2fc`.
 - **The subset**: the cases that depart from the one fold every case would
   share. WADE asks whether the cases are more unequal than the controls,
   finds where the cases' Lorenz curve falls furthest below the controls', and
   reports the smaller side of that split, above or below the rest of the
   cases.
 
-The area test runs on counts thinned to the shallowest sample's sequencing
-depth. A difference in depth between the groups therefore cannot pass for a
-difference in expression, and genes with too few reads to trust are washed
-out rather than called. Both tests use label permutation, so no count
-distribution is assumed.
+Every normalization ends as one size factor per sample. That holds for RLE
+on all genes, RLE on internal control genes, or factors fitted elsewhere. WADE
+divides counts by the size factors for the effects. Before the area test it
+thins every sample binomially until all size factors equal the smallest.
+
+- A difference in depth between the groups therefore cannot pass for a
+  difference in expression.
+- Genes with too few reads to trust are washed out rather than called.
+- Both tests use label permutation, so no count distribution is assumed.
 
 ```python
 import wade
 
 # Raw counts: genes × samples. 1 = case, 0 = control.
-result = wade.wade(counts, condition)
+norm = wade.fit_normalization(counts)                            # one size factor per sample (RLE)
+# norm = wade.fit_normalization(counts, reference_genes=controls)   # or RLE on internal control genes
+keep = wade.filter_counts(counts, min_count=3, min_samples=2)
+result = wade.wade(counts, condition, normalization=norm, test_genes=keep)
 table = result.to_frame().sort("area_padj")     # optional Polars dependency
 result.subset("ETV4")                            # the cases departing from a common fold
 result.plot_gene("ETV4")
 ```
+
+The [manual](docs/manual.md#running-wade-on-a-dataset) walks through the
+workflow, and the [demo](notebooks/demo.qmd) runs it.
 
 ## Choose before you look
 
@@ -49,6 +60,7 @@ result.plot_gene("ETV4")
 | `case_mean`, `control_mean` | Mean normalized count per group: reads per sample at the cohort's typical depth |
 | `area` | `case_mean − control_mean` |
 | `area_fraction` | `area / (case_mean + control_mean)`: 1/3 is a doubling, −1/3 a halving |
+| `log2fc` | `log2(case_mean / control_mean)`: the fold of the group means, ±inf where a group has no reads |
 | `area_pvalue`, `area_padj` | The area's permutation p-value, on depth-equalized counts, and its BH q-value |
 | `subset_side` | `"up"` (above the rest of the cases), `"down"` or `"none"` |
 | `subset_fraction` | The subset's share of the cases |
@@ -68,9 +80,10 @@ q-value. The [manual](docs/manual.md) explains every setting and column.
   sparser group averages at least 128 reads per sample. Below that its
   p-values can be anti-conservative, and `wade()` warns how many tested genes
   fall there. The area test holds at every expression level.
-- **Every sample is thinned to the shallowest one**, so remove failed or
-  unusually shallow libraries first. `result.params["depth_equalized"]` is the
-  share of its reads the median sample kept.
+- **Every sample is thinned until its size factor equals the smallest**, so
+  remove failed or unusually shallow libraries first.
+  `result.params["depth_equalized"]` is the share of its reads the median
+  sample kept.
 - **RLE size factors absorb part of any change shared by many genes.** When a
   tenth of the genes double in one group, unchanged genes look changed, in
   WADE as in any DE tool that relies on size factors. Balanced changes are
