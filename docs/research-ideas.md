@@ -51,9 +51,10 @@ label and f the gene's fold ([validation](validation.md)).
   - the area fraction is (case mean − control mean)/(case mean + control
     mean), in [−1, 1].
   - Neither needs a pseudocount. They replace the +1 fold `mean_log2fc`.
-- **The Lorenz subset statistic with the midpoint W1 registration.** Its
-  claim is limited to genes whose sparser group expects at least 128 reads
-  per sample, and `wade()` warns about genes below that.
+- **The Lorenz subset statistic with the midpoint W1 registration.** Since
+  25 October 2026 the fold is taken out by thinning rather than rescaling.
+  Its claim is limited to genes whose sparser group expects at least 32
+  reads per sample (128 before), and `wade()` warns about genes below that.
 - **The count-model reference** as the validation instrument. It thins real
   tumours by the design alone, with a random split per gene. It is kept in
   `research/count_model.py`.

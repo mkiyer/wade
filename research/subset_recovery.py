@@ -48,14 +48,14 @@ def main():
         background = np.flatnonzero((data["profile"] == "background_null") & steady)[:500]
         x = expression(jittered(counts[genes], genes, 1), factors)
         cases, sides, _, _, _ = split(x, cond)
-        p, _, _ = subset_test(x, cond, direction="both", stop=25, maximum=999, seed=1)
+        p, _, _ = subset_test(counts[genes], factors, cond, genes, direction="both", stop=25, maximum=999, seed=1)
         for j, g in enumerate(genes):
             truth = planted(data["profile"][g], data["enriched"][g], data["perturbed"][g])
             case = x[j, cond == 1]
             order = np.argsort(-case if sides[j] > 0 else case, kind="stable")
             chosen = np.zeros(len(case), bool)
             chosen[order[:cases[j]]] = True
-            row = dict(design=design, profile=data["profile"][g], share=chosen.mean(),
+            row = dict(design=design, profile=data["profile"][g], share=chosen.mean(), baseline=data["baseline_mean"][g],
                        side="none" if cases[j] == 0 else "up" if sides[j] > 0 else "down", significant=p[j] <= .05)
             if truth is not None:
                 members, side = truth
@@ -67,7 +67,8 @@ def main():
             rows.append(row)
         xb = expression(jittered(counts[background], background, 1), factors)
         nc = split(xb, cond)[0]
-        pn, _, _ = subset_test(xb, cond, direction="both", stop=25, maximum=999, seed=1)
+        pn, _, _ = subset_test(counts[background], factors, cond, background, direction="both", stop=25,
+                               maximum=999, seed=1)
         noise.append((design, nc / cond.sum(), pn))
     report(rows, noise)
 
@@ -82,7 +83,10 @@ def report(rows, noise):
                         f"{np.nanmean([r['precision'] for r in g]):.2f} {np.mean([r['recall'] for r in g]):.2f} "
                         f"{np.mean([r['significant'] for r in g]):4.0%}")
             else:
-                cell = f"shared by every case: {np.mean([r['significant'] for r in g]):4.0%}"
+                levels = sorted({r["baseline"] for r in g})
+                by_level = ", ".join(f"{level:g}: {np.mean([r['significant'] for r in g if r['baseline'] == level]):.0%}"
+                                     for level in levels)
+                cell = f"shared by every case: {np.mean([r['significant'] for r in g]):4.0%} (by baseline mean {by_level})"
             print(f"  {profile[:34]:34s} {cell}")
     for design in dict.fromkeys(d for d, _, _ in noise):
         share = np.concatenate([n for d, n, _ in noise if d == design])

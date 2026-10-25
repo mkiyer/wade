@@ -20,7 +20,7 @@ def test_export_manifest_and_table_roundtrip(result,tmp_path,extension):
         frame=pl.read_parquet(path)
     else:
         frame=pl.read_ipc(path)
-    for column in ("case_mean","area","area_fraction","log2fc","area_padj","subset_log2fc","subset_padj"):
+    for column in ("case_mean","area","area_fraction","log2fc","area_padj","subset_log2fc","subset_padj","subset_rarity"):
         np.testing.assert_allclose(frame[column].to_numpy(),getattr(result,column),equal_nan=True)
     assert frame.columns==list(wade.RESULT_COLUMNS)
     record=json.loads((tmp_path/'report.manifest.json').read_text())

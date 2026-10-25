@@ -34,7 +34,7 @@ from notebook_support import output_dir, markdown_table, export_table
 OUT = output_dir("prostate")
 cohort = TC.load_cohort("prostate", OUT)
 PANEL = TC.PROSTATE_PANEL
-SHOW = ["gene","case_mean","control_mean","log2fc","area_fraction","area_padj","subset_fraction","subset_log2fc","subset_padj"]
+SHOW = ["gene","case_mean","control_mean","log2fc","area_fraction","area_padj","subset_fraction","subset_log2fc","subset_padj","subset_rarity"]
 def table(frame,name):
     markdown_table(frame,OUT,name)
 ```
@@ -187,3 +187,36 @@ fig
 ```
 
 The plot is an annotation association, not a ground-truth FDR assessment.
+
+## Rarity
+
+Nearly every gene's tumours depart somewhat from a common fold: tumour purity
+alone does it. `subset_rarity` ranks the subsets instead. It is the share of
+genes whose subset is at least as rare, among genes with a subset of the same
+size and side, within the subset test's validated range. The rarest subsets,
+and the rare genes that share their members:
+
+```{python}
+#| label: rare-subsets
+#| output: asis
+rare = res.rare_subsets(n=20)
+table(pl.DataFrame(dict(gene=rare["gene"], rarity=rare["rarity"], side=rare["side"], tumours=rare["size"],
+    shared_with=["; ".join(f"{g} ({n})" for g, n in s[:4]) for s in rare["shared"]])), "rare-subsets")
+```
+
+Genes whose tumours coincide are one programme, often another tissue in the
+sample. A driver can share tumours with genes it regulates, so read how many
+are shared. The sample load shows which tumours carry the rarest subsets, and
+why; the loads average 1.
+
+```{python}
+#| label: sample-load
+#| output: asis
+load = res.sample_load(drivers=6)
+top = np.argsort(-load["load"])[:8]
+table(pl.DataFrame(dict(sample=load["sample"][top], load=load["load"][top], subsets=load["subsets"][top],
+    drivers=[", ".join(load["drivers"][j]) for j in top])), "sample-load")
+```
+
+Rarity describes and ranks; it is not a test. Genes are never selected by it
+before BH.

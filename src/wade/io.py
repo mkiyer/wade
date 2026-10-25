@@ -345,6 +345,8 @@ class Condition:
     control: object              # ... and control
     column: str | None = None
     dropped: tuple = ()          # samples at some other level, when drop_other
+    strata: dict | None = None   # sample name -> its levels of the strata columns, when strata are given
+    strata_columns: tuple = ()
 
     def vector(self, sample_names, *, allow_extra: bool = False) -> np.ndarray:
         """The 0/1 vector for ``sample_names``, in that order. Strict.
@@ -387,6 +389,7 @@ def condition(
     case,
     control,
     drop_other: bool = False,
+    strata=None,
 ) -> Condition:
     """Read a case/control assignment out of a sample metadata table.
 
@@ -399,18 +402,26 @@ def condition(
     A third level in ``column`` **raises**, naming it, unless
     ``drop_other=True``: quietly discarding a group is quietly running a
     different contrast. Duplicate sample ids always raise.
+
+    ``strata`` names one column or a list of columns (study, site, batch):
+    labels are then exchanged only within the strata their combinations
+    define, and :func:`wade.wade` reads them from the condition by sample
+    name. A missing value in a strata column raises.
     """
+    strata_columns = () if strata is None else ((strata,) if isinstance(strata, str) else tuple(strata))
     if _is_frame(sample_meta):
         cols = list(sample_meta.columns)
-        for name in (key, column):
+        for name in (key, column, *strata_columns):
             if name not in cols:
                 raise KeyError(f"no column {name!r} in the sample metadata; it has {cols}")
         ids = np.asarray(_column(sample_meta, key), dtype=object)
         values = np.asarray(_column(sample_meta, column), dtype=object)
+        factors = [np.asarray(_column(sample_meta, c), dtype=object) for c in strata_columns]
     else:
         try:
             ids = np.asarray(list(sample_meta[key]), dtype=object)
             values = np.asarray(list(sample_meta[column]), dtype=object)
+            factors = [np.asarray(list(sample_meta[c]), dtype=object) for c in strata_columns]
         except (KeyError, TypeError) as e:
             raise TypeError(
                 "sample_meta must be a DataFrame (polars/pandas) or a mapping of "
@@ -446,8 +457,19 @@ def condition(
 
     labels = {s: int(c) for s, c in zip(ids[is_case | is_ctrl].tolist(),
                                         is_case[is_case | is_ctrl].tolist())}
+    by_sample = None
+    if strata_columns:
+        chosen = is_case | is_ctrl
+        for name, f in zip(strata_columns, factors):
+            if len(f) != len(ids):
+                raise ValueError(f"columns {key!r} and {name!r} have different lengths")
+            missing = [s for s, v in zip(ids[chosen].tolist(), f[chosen].tolist())
+                       if v is None or (isinstance(v, float) and not np.isfinite(v))]
+            if missing:
+                raise ValueError(f"strata column {name!r} has no value for {len(missing)} sample(s): {missing[:8]}")
+        by_sample = {s: tuple(f[j] for f in factors) for j, s in enumerate(ids.tolist()) if chosen[j]}
     return Condition(labels=labels, case=case, control=control, column=column,
-                     dropped=tuple(ids[other].tolist()))
+                     dropped=tuple(ids[other].tolist()), strata=by_sample, strata_columns=strata_columns)
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +479,7 @@ def condition(
 RESULT_COLUMNS = (
     "gene", "status", "case_mean", "control_mean", "area", "area_fraction", "log2fc", "area_pvalue", "area_padj",
     "alignment_log2fc", "lorenz_gap", "subset_side", "subset_fraction", "subset_log2fc", "subset_pvalue",
-    "subset_padj",
+    "subset_padj", "subset_rarity",
 )
 
 

@@ -254,6 +254,34 @@ fn split<'py>(
         out.4.into_pyarray(py)))
 }
 
+/// Each gene's walk as a gap at every case boundary: how far the cases' Lorenz curve of count + 1
+/// falls below the controls' at k/n1, for k = 1..n1-1, or -inf where equal cases forbid a
+/// boundary. Its largest value is the gene's gap, at the gene's cut; at any one cut, the gaps of
+/// different genes compare subsets of the same size and side. Rows of sorted cases and controls;
+/// the curves are returned row after row (genes x (n1 - 1)).
+#[pyfunction]
+fn gaps<'py>(
+    py: Python<'py>, case: PyReadonlyArray2<'py, f64>, control: PyReadonlyArray2<'py, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let (genes, n1) = case.as_array().dim();
+    let n0 = control.as_array().ncols();
+    if n1 < 2 || n0 == 0 || control.as_array().nrows() != genes || !case.is_c_contiguous() || !control.is_c_contiguous() {
+        return Err(PyValueError::new_err("cases (at least two) and controls need one C-ordered row per gene"));
+    }
+    let (c, d) = (case.as_slice()?, control.as_slice()?);
+    let grid = Grid::new(n1, n0);
+    let mut curves = vec![0.0; genes * (n1 - 1)];
+    py.detach(|| {
+        curves.par_chunks_mut(n1 - 1).enumerate().for_each(|(g, row)| {
+            let (_, _, mean) = grid.walk(&c[g * n1..(g + 1) * n1], &d[g * n0..(g + 1) * n0], row);
+            for r in row.iter_mut() {
+                *r = if r.is_finite() { -*r / (mean + 1.0) } else { f64::NEG_INFINITY };
+            }
+        });
+    });
+    Ok(curves.into_pyarray(py))
+}
+
 /// One gene, ready to be walked under any labelling: `values` are its registered values, sorted,
 /// and `at` gives each value's sample, so both groups stay sorted as the values are read in order.
 struct Walker<'a> {
@@ -427,6 +455,7 @@ fn tally<'py>(
 #[pymodule]
 fn _kernel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split, m)?)?;
+    m.add_function(wrap_pyfunction!(gaps, m)?)?;
     m.add_function(wrap_pyfunction!(score, m)?)?;
     m.add_function(wrap_pyfunction!(tally, m)?)?;
     Ok(())

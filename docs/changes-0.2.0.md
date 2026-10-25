@@ -16,27 +16,45 @@ This is an intentional breaking release with no compatibility aliases.
   pseudocount (±inf where a group has no reads).
 - Every normalization ends as one size factor per sample: RLE on all genes,
   RLE on internal control genes, or factors fitted elsewhere. Before testing,
-  the area test thins every sample binomially until all size factors equal
-  the smallest.
+  both tests thin every sample binomially until all size factors equal the
+  smallest.
   - Samples sequenced to different depths are then exchangeable under the
     null at every expression level.
   - Genes with too few reads to trust are washed out rather than called.
   - The effects use every read.
 - WADE finds each gene's **subset**: the cases above or below the point where
   the cases' Lorenz curve of count + 1 falls furthest below the controls'.
-  Nothing about the subset's size is chosen in advance. The subset test asks
-  whether every case could carry one common fold of the controls'
-  distribution. It registers the cases by the Wasserstein-1 fold of
-  log(count + 1) and shuffles labels over the pooled values. Its validated
-  range is genes whose sparser group averages at least 128 reads per sample,
-  and `wade()` warns how many tested genes fall below it.
+  Nothing about the subset's size is chosen in advance.
+- **The subset test** asks whether every case could carry one common fold of
+  the controls' distribution.
+  - It thins the depth-equalized counts of the higher group by the
+    Wasserstein-1 fold of log(count + 1), rather than rescaling them: a
+    thinned count keeps the count model exact.
+  - It then shuffles labels over the thinned counts.
+  - Its validated range is genes whose sparser group averages at least 32
+    reads per sample, and `wade()` warns how many tested genes fall below it.
+  - Its calls near BH's threshold depend on the thinning draw, which the
+    seed sets.
 - `direction="both"` (default) tests both two-sided. `"up"` or `"down"`
   declares a side for both: an area in that direction, and a subset of cases
   beyond the rest on that side.
-- Each count receives seeded Uniform(0, 1) jitter, so that the subset test's
-  null cannot pull apart ties, above all zeros.
-- Samples must be independent. `strata` is not supported in this version, and
-  passing it is an error.
+- Each count receives seeded Uniform(0, 1) jitter, so that no two values tie,
+  above all zeros.
+- **Strata.** `strata=` takes one label per sample (study, site, batch), or a
+  list of factors whose combinations are the strata; `condition(...,
+  strata=...)` reads them from metadata columns.
+  - Labels are exchanged only within strata, and each stratum is thinned to
+    its own smallest size factor.
+  - The area test sums within-stratum differences with
+    Cochran–Mantel–Haenszel weights, its p-value from a stratified
+    saddlepoint or from shuffles within strata.
+  - The subset test takes one fold out of every case and a level per
+    stratum.
+  - case_mean and control_mean are Mantel–Haenszel standardized means.
+  - Strata holding only one group are left out of both tests, with a
+    warning.
+  - `params["strata"]` records the design.
+  - Pairing and repeated measures are not validated yet.
 
 ## P-values
 
@@ -69,11 +87,18 @@ This is an intentional breaking release with no compatibility aliases.
 One row per input gene, with these columns: `gene`, `status`, `case_mean`,
 `control_mean`, `area`, `area_fraction`, `log2fc`, `area_pvalue`, `area_padj`,
 `alignment_log2fc`, `lorenz_gap`, `subset_side`, `subset_fraction`,
-`subset_log2fc`, `subset_pvalue` and `subset_padj`. Each test has its own BH
+`subset_log2fc`, `subset_pvalue`, `subset_padj` and `subset_rarity`. Each test has its own BH
 family over the tested genes.
 
 - `result.subset(gene)` returns the subset's cases, its side, share, fold,
   p-value and q-value.
+- `subset_rarity` ranks each gene's subset among genes with a subset of the
+  same size and side: the share of genes whose subset is at least as rare,
+  within the subset test's validated range or below it.
+  - `result.rare_subsets(n)` lists the rarest subsets, with the genes that
+    share their members.
+  - `result.sample_load()` shows which cases carry the rarest subsets, and
+    their driving genes.
 - `gene_detail(gene)` returns exact quantile intervals and their signed area.
 - `plot_volcano` maps area fractions against area q-values, `plot_patterns`
   each gene's subset share against its fold, and `plot_gene` shows log2
@@ -99,7 +124,8 @@ family over the tested genes.
 [research ideas](research-ideas.md).
 
 **New names:** `DEFAULT_MAX_PERMUTATIONS`, `Normalization`, `Subset`,
-`fit_normalization`, `filter_counts`, `cpm`, `tpm` and `plot_patterns`.
+`fit_normalization`, `filter_counts`, `cpm`, `tpm` and `plot_patterns`. New
+arguments: `wade(..., strata=)` and `condition(..., strata=)`.
 
 ## Normalization and filtering
 
@@ -113,5 +139,7 @@ family over the tested genes.
 ## Evidence
 
 The area test was measured under an exact count-model reference built from
-real tumours, and the subset test's validated range under the same reference;
-see [validation](validation.md).
+real tumours, and the subset test's validated range under the same reference.
+Strata were measured against exact enumeration, on simulated studies with
+batch effects, and on real relabelling nulls from TCGA and GTEx; see
+[validation](validation.md).

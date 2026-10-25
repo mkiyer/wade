@@ -13,9 +13,10 @@
 > The plan that followed the reviews, with its section 8.3 of corrections, is
 > `docs/subset-null-plan.md` at commit `e4fd67f`. The present
 > [plan](subset-null-plan.md) records the decisions since, and
-> [method](method.md) the test as built on 30 September 2026. Its
-> registration is this page's W1 fold, and its claim is limited to genes whose
-> sparser group expects at least 128 reads per sample. Several statements
+> [method](method.md) the test as built. Its registration is this page's W1
+> fold, taken out by thinning since 25 October 2026, and its claim is limited
+> to genes whose sparser group expects at least 32 reads per sample (128 from
+> 30 September to 25 October). Several statements
 > below are too strong and will be rewritten with the redesign:
 >
 > - **The alternative.** The depth over the case mean + 1 equals the largest

@@ -8,8 +8,8 @@ import pytest
 from scipy.stats import false_discovery_control
 
 import wade
-from wade._means import area_values, equalized, jittered, mean_saddlepoint, mean_test
-from wade._subsets import split, subset_test
+from wade._means import area_values, equalized, expression, jittered, mean_saddlepoint, mean_test
+from wade._subsets import split, subset_test, thinned
 from wade.permutation import STREAM_BLOCK, stream_block
 from wade.pvalues import bound, sequential_p, settle, settled
 
@@ -108,8 +108,6 @@ def test_auto_computes_the_area_test_and_shuffles_where_the_saddlepoint_is_less_
     np.testing.assert_array_equal(auto.area_pvalue[~shuffled], computed[~shuffled])
     np.testing.assert_array_equal(auto.area_pvalue[shuffled], brute.area_pvalue[shuffled])
     assert np.all(brute.area_permutations > 0)
-    with pytest.raises(ValueError, match="strata"):                               # independent samples only
-        run(strata=np.arange(24) % 2)
 
 
 def test_sequential_rule_is_superuniform_at_every_attainable_pvalue():
@@ -262,6 +260,81 @@ def test_wade_with_fdr_rejects_exactly_what_finished_runs_reject(maximum, pvalue
     if planted and maximum == 19_999:                          # strong genes stop long before the budget
         assert fast.bounded["subset"].any() and fast.subset_permutations.sum() < full.subset_permutations.sum() / 2
     assert fast.params["fdr"] == 0.05 and full.params["fdr"] is None
+
+
+def lorenz_gaps(x, cond):
+    """Each row's gap L_w(k/n1) - L_z(k/n1) on count + 1 at every case boundary, from first principles."""
+    z = np.sort(x[:, cond == 1], axis=1) + 1
+    w = np.sort(x[:, cond == 0], axis=1) + 1
+    n1, n0 = z.shape[1], w.shape[1]
+    k = np.arange(1, n1)
+    case = np.cumsum(z, axis=1)[:, :-1] / z.sum(axis=1, keepdims=True)
+    whole, part = (k * n0) // n1, (k * n0 % n1) / n1
+    below = np.c_[np.zeros(len(w)), np.cumsum(w, axis=1)]
+    control = (below[:, whole] + part * w[:, np.minimum(whole, n0 - 1)]) / w.sum(axis=1, keepdims=True)
+    return control - case
+
+
+def test_rarity_ranks_each_subset_against_genes_with_a_subset_of_its_size():
+    from wade._rarity import cuts, gap_curves
+    rng = np.random.default_rng(23)
+    x = rng.poisson(rng.gamma(6, 40, (120, 1)) * rng.gamma(20, .05, (120, 50)))
+    x[:6, :2] *= 40                                            # two tumours far out: rare subsets
+    x[6:12, :12] *= 3                                          # common subsets of a dozen tumours
+    x[12:20] //= 50                                            # low counts: the group below the range
+    cond = np.r_[np.ones(25, int), np.zeros(25, int)]
+    r = wade.wade(x, cond, max_permutations=99)
+    values, labels = r.expression, r.cond
+    n1 = int(labels.sum())
+    curves = gap_curves(values, labels)
+    np.testing.assert_allclose(curves, lorenz_gaps(values, labels), atol=1e-12)    # the walk is the Lorenz gap
+    size, side, groups = r._subsets()
+    k = cuts(size, side, n1)
+    expected = np.full(len(x), np.nan)
+    for group in (0, 1):                                       # brute force, group by group
+        members = np.flatnonzero(groups == group)
+        share = {g: (np.sum(curves[members, k[g] - 1] >= curves[g, k[g] - 1]) / len(members) if size[g] else 1.0)
+                 for g in members}
+        for g in members:
+            expected[g] = sum(share[h] <= share[g] for h in members) / len(members)
+    np.testing.assert_array_equal(r.subset_rarity, expected)
+    assert set(groups[12:20]) == {1} and 0 in groups
+    assert np.all(r.subset_rarity[size == 0] == 1)             # no subset: not rare at all
+    for group in (0, 1):                                       # ranks: multiples of 1/m, the largest 1
+        m = np.sum(groups == group)
+        scaled = r.subset_rarity[groups == group] * m
+        np.testing.assert_allclose(scaled, np.round(scaled), atol=1e-9)
+        assert scaled.max() == pytest.approx(m)
+    assert np.nanargmin(np.where(groups == 0, r.subset_rarity, np.nan)) < 6         # a far-out pair is the rarest
+    # Each group is ranked only against itself: changing the low-count genes moves nothing else.
+    y = x.copy()
+    y[12:20] = rng.poisson(2, (8, 50))
+    other = wade.wade(y, cond, max_permutations=99, normalization=r.normalization)
+    keep = groups == 0
+    np.testing.assert_array_equal(other.subset_rarity[keep], r.subset_rarity[keep])
+    assert r.params["rarity_groups"] == dict(validated=int(np.sum(groups == 0)), below=int(np.sum(groups == 1)))
+
+
+def test_the_sample_load_and_the_rare_subsets_point_to_a_contaminated_library():
+    rng = np.random.default_rng(29)
+    x = rng.poisson(rng.gamma(6, 40, (200, 1)) * rng.gamma(20, .05, (200, 80)))
+    x[:12, 7] *= 30                                            # one library carries a foreign programme
+    x[50, :8] *= 10                                            # and a gene raised in eight tumours
+    cond = np.r_[np.ones(40, int), np.zeros(40, int)]
+    r = wade.wade(x, cond, max_permutations=99, gene_names=[f"g{i}" for i in range(200)],
+                  sample_names=[f"s{j}" for j in range(80)])
+    load = r.sample_load(drivers=3)
+    assert load["load"].mean() == pytest.approx(1.0)           # random membership would give every case 1
+    top = int(np.argmax(load["load"]))
+    assert load["sample"][top] == "s7" and load["load"][top] > 5
+    assert set(load["drivers"][top]) <= {f"g{i}" for i in range(12)} and len(load["drivers"][top]) == 3
+    assert load["subsets"][top] >= 12
+    rare = r.rare_subsets(n=15)
+    programme = [i for i, g in enumerate(rare["gene"]) if int(g[1:]) < 12]
+    assert len(programme) >= 10                                 # the programme's genes are among the rarest
+    for i in programme:                                         # and share their one member
+        assert "s7" in rare["members"][i] and any(int(g[1:]) < 12 for g, _ in rare["shared"][i])
+    assert list(rare["rarity"]) == sorted(rare["rarity"])
 
 
 def test_qvalues_cover_the_tested_genes_and_excluded_genes_have_no_test():
@@ -499,13 +572,14 @@ def test_the_subset_test_and_its_records():
 
 def test_one_sided_subset_tests_split_the_shuffles_of_the_two_sided_test():
     rng = np.random.default_rng(14)
-    x = rng.poisson(40, (30, 40)).astype(float)
+    x = rng.poisson(40, (30, 40))
     x[:10, :4] *= 8                                          # raised subsets
     x[10:20, :5] //= 8                                       # lowered subsets
     cond = np.r_[np.ones(20, int), np.zeros(20, int)]
-    run = lambda d: subset_test(x, cond, direction=d, stop=STOP, maximum=19, seed=6)    # 19 shuffles for every gene
+    ones, rows = np.ones(40), np.arange(30)
+    run = lambda d: subset_test(x, ones, cond, rows, direction=d, stop=STOP, maximum=19, seed=6)    # 19 shuffles each
     (_, both, tried), (_, up, _), (_, down, _) = run("both"), run("up"), run("down")
-    _, side, *_ = split(x, cond)
+    _, side, *_ = split(thinned(x, ones, cond, rows, 6)[0], cond)       # the side of the walk the test shuffles
     ran = tried > 0
     assert ran.any() and np.all(tried[ran] == 19)
     # A deeper subset on the observed side counts for that side; every other shuffle counts
@@ -547,12 +621,120 @@ def test_removed_settings_are_rejected(kwargs):
         wade.wade(np.ones((3, 4)), [1, 1, 0, 0], **kwargs)
 
 
-def test_strata_and_single_sample_designs_are_rejected():
+def test_designs_without_a_stratum_holding_both_groups_are_rejected():
     x = np.ones((3, 4))
-    with pytest.raises(ValueError, match="strata"):
-        wade.wade(x, [1, 1, 0, 0], strata=[1, 1, 0, 0])
+    with pytest.raises(ValueError, match="no stratum holds both"):
+        wade.wade(x, [1, 1, 0, 0], strata=[1, 1, 0, 0])         # every stratum holds one group
     with pytest.raises(ValueError, match="two independent"):
         wade.wade(x, [1, 0, 0, 0])
+    with pytest.raises(ValueError, match="one label per sample"):
+        wade.wade(np.ones((3, 6)), [1, 1, 1, 0, 0, 0], strata=[1, 2, 3])
+
+
+def strata_data(rng, sizes, genes=60, scale=60.0):
+    """Counts in strata with a study effect per gene and stratum, labels and codes, cases first in each."""
+    cond = np.concatenate([np.r_[np.ones(a, int), np.zeros(b, int)] for a, b in sizes])
+    code = np.concatenate([np.full(a + b, s) for s, (a, b) in enumerate(sizes)])
+    study = np.exp(rng.normal(0, 0.7, (genes, len(sizes))))[:, code]
+    return rng.poisson(rng.gamma(4, scale / 4, (genes, 1)) * study * rng.gamma(10, .1, (genes, len(cond)))), cond, code
+
+
+def test_one_stratum_is_the_unstratified_run():
+    x, cond, _ = strata_data(np.random.default_rng(31), [(14, 12)])
+    a = wade.wade(x, cond, max_permutations=499, seed=2)
+    b = wade.wade(x, cond, max_permutations=499, seed=2, strata=np.zeros(len(cond)))
+    for column in ("case_mean", "control_mean", "area_pvalue", "area_padj", "alignment_log2fc", "lorenz_gap",
+                   "subset_fraction", "subset_log2fc", "subset_pvalue", "subset_padj", "subset_rarity"):
+        np.testing.assert_array_equal(getattr(a, column), getattr(b, column))
+    assert b.params["strata"]["with_both_groups"] == 1 and a.params["strata"] is None
+
+
+def test_every_shuffle_exchanges_labels_only_within_strata():
+    cond = np.r_[1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 0]
+    code = np.r_[0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]
+    rows = stream_block(cond, 3, 7, code)
+    for s in range(3):
+        np.testing.assert_array_equal(rows[:, code == s].sum(axis=1), cond[code == s].sum())
+    assert len({r.tobytes() for r in rows}) == 3 * 4 * 4        # every within-stratum labelling appears
+    np.testing.assert_array_equal(stream_block(cond, 3, 7, np.zeros(11, int)), stream_block(cond, 3, 7))
+
+
+def test_the_stratified_area_test_against_every_within_stratum_labelling():
+    # Three strata, 109,760 labellings, every one enumerated: the computed p-value is within 0.67-1.5x of
+    # the exact one wherever its error estimate keeps it, and the shuffles agree with it within their error.
+    rng = np.random.default_rng(32)
+    sizes = [(5, 3), (4, 4), (2, 6)]
+    x, cond, code = strata_data(rng, sizes, genes=40)
+    x = x + rng.random(x.shape)
+    x[:, cond == 1] *= np.exp(rng.normal(0, 0.4, (40, 1)))
+    centred = x.copy()
+    for s in range(3):
+        centred[:, code == s] -= centred[:, code == s].mean(axis=1, keepdims=True)
+    totals = np.zeros((40, 1))
+    for s, (a, b) in enumerate(sizes):
+        idx = np.flatnonzero(code == s)
+        sub = np.stack([centred[:, list(pick)].sum(axis=1) for pick in combinations(idx, a)], axis=1)
+        totals = (totals[:, :, None] + sub[:, None, :]).reshape(40, -1)
+    observed = (centred * cond).sum(axis=1)
+    exact = np.mean(np.abs(totals) >= np.abs(observed)[:, None] - 1e-9, axis=1)
+    p, error = mean_saddlepoint(x, cond, direction="both", code=code)
+    kept = error <= 0.2
+    assert kept.mean() > 0.5 and np.all((p[kept] / exact[kept] > 2 / 3) & (p[kept] / exact[kept] < 1.5))
+    shuffled = mean_test(x, cond, direction="both", stop=400, maximum=99_999, seed=5, code=code)[0]
+    moderate = exact >= 0.01
+    assert np.all(np.abs(shuffled[moderate] / exact[moderate] - 1) < 0.2)
+
+
+def test_strata_report_mantel_haenszel_means_and_leave_single_group_strata_out():
+    rng = np.random.default_rng(33)
+    x, cond, code = strata_data(rng, [(12, 6), (5, 9), (6, 0)])            # the last stratum holds cases only
+    names = np.array([f"s{j}" for j in range(len(cond))])
+    with pytest.warns(UserWarning, match="1 of 3 strata hold only cases or only controls; their 6 samples"):
+        r = wade.wade(x, cond, max_permutations=499, seed=4, strata=code, sample_names=names)
+    norm = x / r.normalization.size_factors
+    w = np.array([12 * 6 / 18, 5 * 9 / 14])
+    case = sum(wi * norm[:, (code == s) & (cond == 1)].mean(axis=1) for s, wi in enumerate(w)) / w.sum()
+    control = sum(wi * norm[:, (code == s) & (cond == 0)].mean(axis=1) for s, wi in enumerate(w)) / w.sum()
+    np.testing.assert_allclose(r.case_mean, case, rtol=1e-12)
+    np.testing.assert_allclose(r.control_mean, control, rtol=1e-12)
+    np.testing.assert_allclose(r.area, case - control, rtol=1e-12)
+    assert r.params["strata"]["samples_left_out"] == 6 and r.params["strata"]["with_both_groups"] == 2
+    keep = code < 2                                                        # the same tests on the informative samples
+    s = wade.wade(x[:, keep], cond[keep], max_permutations=499, seed=4, strata=code[keep], sample_names=names[keep],
+                  normalization=r.normalization)
+    np.testing.assert_array_equal(r.area_pvalue, s.area_pvalue)
+    np.testing.assert_array_equal(r.subset_pvalue, s.subset_pvalue)
+    assert set(r.subset(0).samples) <= set(r.sample_names[keep & (cond == 1)])
+
+
+def test_a_conditions_strata_are_read_by_sample_name():
+    rng = np.random.default_rng(34)
+    x, cond, code = strata_data(rng, [(10, 8), (7, 9)], genes=30)
+    names = [f"s{j}" for j in range(len(cond))]
+    order = rng.permutation(len(cond))                                     # the sheet in another order
+    meta = dict(sample=[names[j] for j in order], group=["t" if cond[j] else "n" for j in order],
+                study=[f"study{code[j]}" for j in order])
+    by_name = wade.condition(meta, key="sample", column="group", case="t", control="n", strata="study")
+    a = wade.wade(x, by_name, sample_names=names, max_permutations=299, seed=1)
+    b = wade.wade(x, cond, sample_names=names, max_permutations=299, seed=1, strata=code)
+    np.testing.assert_array_equal(a.area_pvalue, b.area_pvalue)
+    np.testing.assert_array_equal(a.subset_pvalue, b.subset_pvalue)
+    with pytest.raises(ValueError, match="given twice"):
+        wade.wade(x, by_name, sample_names=names, strata=code)
+
+
+def test_strata_hold_the_level_where_a_study_effect_confounds_the_unstratified_tests():
+    # Two studies, case shares 80% and 20%, a gene-specific study effect, nothing else: the unstratified
+    # tests call the study effect, the stratified ones stay within binomial error of the level.
+    rng = np.random.default_rng(35)
+    x, cond, code = strata_data(rng, [(40, 10), (10, 40)], genes=300, scale=200.0)
+    plain = wade.wade(x, cond, max_permutations=999, seed=3, fdr=None)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        strat = wade.wade(x, cond, max_permutations=999, seed=3, fdr=None, strata=code)
+    bound = 0.05 + 3 * np.sqrt(0.05 * 0.95 / 300)
+    assert np.mean(plain.area_pvalue <= 0.05) > 0.3
+    assert np.mean(strat.area_pvalue <= 0.05) <= bound and np.mean(strat.subset_pvalue <= 0.05) <= bound
 
 
 def test_restricted_shuffle_preserves_each_group_and_missing_strata_rejected():
@@ -586,18 +768,37 @@ def subset_genes(rng, n1, n0, genes=24):
     return x, np.r_[np.ones(n1, int), np.zeros(n0, int)]
 
 
-def test_a_fold_on_the_cases_leaves_every_subset_pvalue_unchanged():
-    # The gap ignores a fold on the cases and the registration carries it, so the registered
-    # pool, the observed gap and every shuffled gap are the same: the whole p-value is unchanged.
-    x, cond = subset_genes(np.random.default_rng(21), 18, 30)
-    moved = x.copy()
-    moved[:, cond == 1] = (x[:, cond == 1] + 1) * 7.3 - 1
-    for direction in ("both", "up", "down"):
-        run = lambda v: subset_test(v, cond, direction=direction, stop=STOP, maximum=199, seed=4)
-        (p, hits, tried), (q, hits2, tried2) = run(x), run(moved)
-        np.testing.assert_array_equal(p, q)
-        np.testing.assert_array_equal(hits, hits2)
-        np.testing.assert_array_equal(tried, tried2)
+def test_the_subset_tests_pool_is_its_counts_thinned_exactly_as_the_count_model_asks():
+    # Every sample is thinned to the smallest size factor (the area test's own draw); the fold is the W1
+    # fold of those jittered counts; only the higher group is thinned further, so the lower group's
+    # values are exactly its jittered equalized counts; and a thinned Poisson count is Poisson at the
+    # lower rate, so with the cases at 4x the pool's cases come back to the controls' level.
+    rng = np.random.default_rng(21)
+    cond = np.r_[np.ones(15, int), np.zeros(15, int)]
+    x = rng.poisson(np.r_[np.full(15, 800.0), np.full(15, 200.0)] * np.ones((40, 1)))
+    factors, rows, ones = np.exp(rng.normal(0, .2, 30)), np.arange(40), np.ones(30)
+    pool, fold = thinned(x, factors, cond, rows, 4)
+    level = equalized(x, rows, factors, 4)
+    plain = expression(jittered(level, rows, 4), ones)
+    np.testing.assert_array_equal(fold, split(plain, cond)[4])
+    assert np.all(fold > 1)
+    np.testing.assert_array_equal(pool[:, cond == 0], plain[:, cond == 0])
+    assert np.median(fold) == pytest.approx(4, rel=0.1)
+    assert np.mean(pool[:, cond == 1]) == pytest.approx(np.mean(pool[:, cond == 0]), rel=0.05)
+    np.testing.assert_array_equal(equalized(x, rows, ones, 4), x)          # equal depths: nothing thinned
+
+
+def test_a_fold_every_case_carries_is_not_called_a_subset():
+    # Every case 3x every control, no subset, 400 genes at the subset test's validated depth and above:
+    # the rejection rate stays within binomial error of the level. Rescaling rather than thinning the
+    # cases left their Poisson noise unscaled, which reads as concentration at lower counts.
+    rng = np.random.default_rng(27)
+    level = rng.gamma(20, 3, (400, 1))
+    lam = level * rng.gamma(8, 1 / 8, (400, 60))
+    x = rng.poisson(lam * np.where(np.r_[np.ones(30, int), np.zeros(30, int)] == 1, 3.0, 1.0))
+    cond = np.r_[np.ones(30, int), np.zeros(30, int)]
+    p = subset_test(x, np.ones(60), cond, np.arange(400), direction="both", stop=STOP, maximum=999, seed=5)[0]
+    assert np.mean(p <= 0.05) <= 0.05 + 3 * np.sqrt(0.05 * 0.95 / 400)
 
 
 def test_cases_more_even_than_the_controls_hold_no_subset():
@@ -609,7 +810,8 @@ def test_cases_more_even_than_the_controls_hold_no_subset():
     x, cond = np.c_[case, control], np.r_[np.ones(40, int), np.zeros(40, int)]
     size, _, _, gap, _ = split(x, cond)
     assert (size == 0).all() and (gap == 0).all()
-    p = subset_test(x, cond, direction="both", stop=STOP, maximum=999, seed=1)[0]
+    p = subset_test(np.rint(x).astype(int), np.ones(80), cond, np.arange(6), direction="both", stop=STOP,
+                    maximum=999, seed=1)[0]
     assert (p == 1).all()
 
 
@@ -633,9 +835,9 @@ def test_a_gene_with_one_extreme_sample_is_calibrated_under_random_labels():
     # construction, registering by the mean fold, called such genes at p <= 0.001.
     rng = np.random.default_rng(24)
     gene = np.r_[rng.gamma(3, 30, 79), 4500.0]
-    rows = np.stack([gene[rng.permutation(80)] for _ in range(400)])
+    rows = np.rint(np.stack([gene[rng.permutation(80)] for _ in range(400)])).astype(int)
     cond = np.r_[np.ones(40, int), np.zeros(40, int)]
-    p = subset_test(rows, cond, direction="both", stop=STOP, maximum=999, seed=2)[0]
+    p = subset_test(rows, np.ones(80), cond, np.arange(400), direction="both", stop=STOP, maximum=999, seed=2)[0]
     assert np.mean(p <= 0.05) <= 0.05 + 3 * np.sqrt(0.05 * 0.95 / 400)
 
 
@@ -645,9 +847,9 @@ def test_a_bimodal_gene_is_calibrated_under_random_labels():
     # of the level.
     rng = np.random.default_rng(25)
     gene = np.exp(rng.normal(3, 0.3, 100) + 2 * (rng.random(100) < .5))
-    rows = np.stack([gene[rng.permutation(100)] for _ in range(400)])
+    rows = np.rint(np.stack([gene[rng.permutation(100)] for _ in range(400)])).astype(int)
     cond = np.r_[np.ones(50, int), np.zeros(50, int)]
-    p = subset_test(rows, cond, direction="both", stop=STOP, maximum=999, seed=3)[0]
+    p = subset_test(rows, np.ones(100), cond, np.arange(400), direction="both", stop=STOP, maximum=999, seed=3)[0]
     assert np.mean(p <= 0.05) <= 0.05 + 3 * np.sqrt(0.05 * 0.95 / 400)
 
 
@@ -675,7 +877,7 @@ def test_genes_below_the_subset_tests_validated_range_are_counted_in_a_warning()
     rng = np.random.default_rng(26)
     counts = rng.poisson(np.r_[np.full(10, 20.0), np.full(10, 400.0)][:, None] * np.ones((1, 30)))
     cond = np.r_[np.ones(15, int), np.zeros(15, int)]
-    with pytest.warns(UserWarning, match="10 of 20 tested genes average fewer than 128"):
+    with pytest.warns(UserWarning, match="10 of 20 tested genes average fewer than 32"):
         r = wade.wade(counts, cond, max_permutations=99)
     assert r.params["subset_validated_genes"] == 10
     with warnings.catch_warnings():

@@ -87,9 +87,54 @@ result = wade.wade(data, cond)
   are errors.
 - At least two samples per group are required. This is an input guard, not a
   claim of adequate power.
-- Samples must be independent. `strata`, pairing and repeated measures are
-  not supported yet, and passing `strata` is an error.
+- Samples must be independent, or exchangeable within strata
+  ([strata](#strata-study-site-or-batch)). Pairing and repeated measures are
+  not validated yet.
 - Sparse matrices are accepted through `toarray()` and materialized.
+
+## Strata: study, site or batch
+
+When samples come from several studies, sites or batches, pass them as
+strata. Labels are then exchanged only within each stratum, and both tests are
+exact under the null that labels are exchangeable within strata, whatever
+differs between them: depth, a gene-specific batch scale, composition.
+
+```python
+result = wade.wade(counts, cond, strata=meta["study"])                 # one factor
+result = wade.wade(counts, cond, strata=[meta["study"], meta["sex"]])  # combinations of factors
+cond = wade.condition(meta, key="library", column="group", case="tumor",
+                      control="normal", strata="study")                # read by sample name
+result = wade.wade(counts, cond)
+```
+
+- **Why.** When a study effect lines up with the condition (one study holds
+  most of the cases), unstratified tests call the study effect. TCGA and GTEx
+  prostate normals, relabelled at random with case shares that differ by
+  study, were called at p ≤ 0.01 in 42% of genes by the area test
+  unstratified, and in 0.78% stratified
+  ([validation](validation.md#strata)).
+- **What changes.**
+  - Each stratum is thinned to its own smallest size factor.
+  - The area test sums within-stratum differences with Cochran–Mantel–Haenszel
+    weights.
+  - The subset test takes one fold out of every case and moves each stratum
+    to the cohort's level.
+  - case_mean and control_mean become Mantel–Haenszel standardized means, so
+    the area is still their difference.
+- **Strata with one group.** A stratum holding only cases or only controls
+  cannot move a label. Its samples are left out of both tests, with a
+  warning. If no stratum holds both groups, `wade()` raises an error.
+- **The cost.** The effective size falls from n₁n₀/n to Σ n₁ₛn₀ₛ/nₛ.
+  `result.params["strata"]` records each stratum's cases and controls, the
+  samples left out and both effective sizes.
+- **What strata cannot do.**
+  - They cannot separate a study effect from a condition that coincides with
+    it.
+  - They cannot bring in external controls: GTEx normals, stratified by
+    study, form a stratum with no cases and drop out. Pooling them as
+    controls assumes the studies' normals are exchangeable. TCGA
+    normal-adjacent prostate and GTEx prostate differ in 78% of genes by the
+    area test.
 
 ## Size factors
 
@@ -204,6 +249,73 @@ No subset size is chosen in advance, and noise also has a largest gap, so read
 the subset with its q-value. One gene reports one subset; a raised and a
 lowered subset in the same gene share one split.
 
+## Rarity: ranking the subsets
+
+In a large, heterogeneous cohort nearly every gene's subset is significant:
+tumour purity and subtype alone make tumours more unequal than normals. Nor
+do the q-values rank the strongest subsets:
+- With `fdr` set, discoveries report a bound.
+- Every shuffle that puts none of a subset's members among the controls
+  repeats its split. With 52 controls, a quarter of all labellings do so for
+  12 tumours, so a subset that small can be among the rarest and still not
+  be called.
+
+`subset_rarity` ranks the subsets instead.
+
+- **What it is.** The share of genes whose subset is at least as rare.
+  - Among the genes of its group, take the share whose Lorenz gap at this
+    gene's cut is at least this gene's gap. At that cut, every gene's subset
+    has the same size and side.
+  - Rank that share across the group.
+  - In TCGA prostate, ETV4's subset ranks first and ETV1's third of the
+    16,574 genes in the validated range.
+- **Why size-matched.** A gap can be no larger than the share of the cases
+  below its cut: a lowered subset's own share, or a raised subset's
+  remainder. So gaps of subsets of different sizes and sides do not compare.
+- **Groups.** Genes in the subset test's validated range (lower group ≥ 32
+  reads) are ranked against each other, and genes below it against each
+  other. Low-count genes' gaps run larger and would otherwise crowd the top.
+- **Special values.** A gene without a subset has rarity 1; an untested
+  gene has none.
+- **What it is not.** Rarity describes and ranks, relative to this cohort's
+  genes; it is not a test. Never select genes by it before BH. Ordering BH's
+  discoveries by it is fine.
+
+```python
+rare = result.rare_subsets(n=25)    # the rarest subsets, their members, and the rare genes they share members with
+load = result.sample_load()         # which cases carry the rarest subsets, and their driving genes
+```
+
+**Rare subsets.** `rare_subsets()` lists the rarest subsets, each with its
+members and with the other listed genes that share members with it, and how
+many.
+- Genes whose members coincide are one programme: another tissue, a subtype
+  or an artefact. In TCGA prostate, the seminal-vesicle genes SEMG1 and
+  SEMG2 share 6 tumours.
+- A driver can share members too, so read how many are shared. ETV1's 36
+  tumours include 8 of ISG15's 58.
+
+`validated=False` lists the group below the range.
+
+**Sample load.** `sample_load()` asks which cases carry more than their share
+of the rare subsets.
+- **The weights.** Every gene with a subset spreads a weight, −log(rarity),
+  over its members. A singleton gives all of it to one case; a subset of 40%
+  of the cases gives a little to each.
+- **The scale.** A case's load is the weight it receives over what it would
+  receive if subset members were drawn at random, so the loads average
+  exactly 1.
+- **Reading it.**
+  - In TCGA prostate the heaviest libraries carry another tissue's or cell
+    type's programme: skeletal muscle, gut defensins, immunoglobulins.
+  - A light contamination may not stand out. A breast library mixed into a
+    prostate tumour as 5% of its reads raised that tumour's load, but not to
+    the top ([validation](validation.md#rarity)).
+  - A subtype carries many co-regulated genes too, so read the drivers
+    before acting.
+  - The load is a diagnostic, not a test: it flags nothing and removes
+    nothing.
+
 ## Direction
 
 ```python
@@ -241,12 +353,21 @@ min(s)/s_j, where s are the size factors of the normalization you fitted.
   rather than called. Well-expressed genes lose little.
 - The thinning follows the normalizer: with internal control genes, it
   equalizes the depth the controls measure.
-- The reported means, areas and folds use every read; only the test uses the
-  thinned counts.
+- The reported means, areas and folds use every read; only the tests use the
+  thinned counts. The subset test thins the same way, and then takes the
+  cases' common fold out of the higher group by thinning it further
+  ([the validated range](#the-subset-tests-validated-range)).
+- With strata, each stratum is thinned to its own smallest size factor.
 
 The thinning is random and seeded like the shuffles, so a run is reproducible.
-Genes near a threshold can move between runs with different seeds, as with any
-permutation p-value.
+Genes near a threshold can move between runs with different seeds. The subset
+test's calls move most, because which reads its thinning keeps decides calls
+near the threshold. On TCGA prostate two seeds agreed on 70% of the genes
+either called, and on 81% at 128 reads and above; the area test's calls
+agreed on 93% and 97%
+([validation](validation.md#the-subset-test-under-the-count-model)). A
+subset's side, share, fold and rarity do not move with the seed: rank subsets
+by them, and read a call near the threshold as one draw.
 
 ## P-values
 
@@ -303,16 +424,25 @@ they pass. `gene_chunk` changes memory, never the answer.
 ## The subset test's validated range
 
 Under the count model the subset test is calibrated where the gene's sparser
-group averages at least 128 reads per sample. Below that its p-values can be
-anti-conservative, most of all when the cases are the lower or the shallower
-group ([validation](validation.md#the-subset-test-under-the-count-model)).
-`wade()` warns how many tested genes fall below, and
-`result.params["subset_validated_genes"]` counts those at or above. To keep
-subset calls only where the test is validated, select those genes and
+group averages at least 32 reads per sample
+([validation](validation.md#the-subset-test-under-the-count-model)).
+- **What fails below 32.** A fold that every case carries, at low counts. The
+  fold is estimated from the data, and its error reads as a subset. Zero-rich
+  genes are not the problem: genes that read zero in half the tumours stay
+  near their level (at most 1.45% at p ≤ 0.01).
+- **What the test does about depth.** It thins every sample to equal depth,
+  and takes the cases' common fold out of the higher group by thinning rather
+  than rescaling. A difference in depth between the groups therefore no
+  longer reads as a subset.
+- **The warning.** `wade()` warns how many tested genes fall below 32, and
+  `result.params["subset_validated_genes"]` counts those at or above. Genes
+  below are still tested and reported.
+
+To keep subset calls only where the test is validated, select those genes and
 recompute BH within them:
 
 ```python
-ok = result.tested & (np.minimum(result.case_mean, result.control_mean) >= 128)
+ok = result.tested & (np.minimum(result.case_mean, result.control_mean) >= result.params["subset_validated_reads"])
 subset_q = np.full(len(ok), np.nan)
 subset_q[ok] = wade.bh_adjust(result.subset_pvalue[ok])
 ```
@@ -323,11 +453,10 @@ The area test needs no such limit.
 
 Each count receives independent Uniform(0, 1) jitter, drawn from a stream
 seeded by the run's seed and the gene, so no two values tie. Counts are
-discrete, and many samples share one, above all zero. The subset test's null
-moves every case by a common fold and would pull such ties apart, which the
-observed data never do. The jitter moves a count by less than one, so it
-barely changes well-expressed genes; for a gene full of zeros, which zeros
-fall inside a subset depends on the seed.
+discrete, and many samples share one, above all zero; the walk places its
+boundaries only between distinct values. The jitter moves a count by less than
+one, so it barely changes well-expressed genes; for a gene full of zeros,
+which zeros fall inside a subset depends on the seed.
 
 ## Read, plot and export
 
@@ -344,6 +473,7 @@ fall inside a subset depends on the seed.
 | `subset_fraction` | The subset's share of the cases (0 for none) |
 | `subset_log2fc` | The subset's fold over what the alignment predicts for it, on count + 1 |
 | `subset_pvalue`, `subset_padj` | The test that every case carries one common fold, and its q-value |
+| `subset_rarity` | The share of genes in its group whose subset is at least as rare (1 without a subset) |
 | `status` | `tested`, `filtered` or `all_zero` |
 
 `result.area_permutations` and `result.subset_permutations` record the
@@ -367,16 +497,18 @@ group size-factor medians and every stopping record.
 
 ## Limits
 
-- Samples must be exchangeable under the null once depth is equalized. Batch
-  confounded with the groups violates this; normalization does not repair it.
+- Samples must be exchangeable under the null once depth is equalized: across
+  the cohort, or with strata within each stratum. Batch confounded with the
+  groups violates this. Normalization does not repair it; strata repair a
+  batch that both groups share.
 - The area test's null is that both groups share one distribution. It is built
   to detect a difference in means, but it can also reject when the groups
   differ only in spread.
 - A small `subset_padj` means the cases are more unequal than relabelling
   explains. It does not say which patients are individually outliers, that a
   subset is clinically separable, or how prevalent it is.
-- The subset test plugs in an estimated registration; it is validated where
-  the sparser group averages at least 128 reads per sample.
+- The subset test plugs in an estimated fold; it is validated where the
+  sparser group averages at least 32 reads per sample.
 - In large, heterogeneous cohorts nearly every gene's cases are more unequal
   than its controls (tumour purity alone does it), so the subset test rejects
   almost everywhere. There the subset's fold and share, not its q-value, rank

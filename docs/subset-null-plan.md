@@ -14,9 +14,8 @@ tests, the claims withdrawn along the way, and what comes next.
 ## 1. Scope
 
 - **Two groups, independent samples.** WADE tests cases against controls.
-- **Not yet supported:** strata, pairing, repeated measures and covariates.
-  Passing `strata` is an error. `notebooks/rna100k.qmd`, which blocks the
-  RNA100K compendium by study, waits for that work.
+- **Strata** are supported since 25 October 2026 ([strata plan](strata-plan.md)).
+  Pairing, repeated measures and continuous covariates are not yet supported.
 - **Two tests per gene:**
   - the area test (DE): the difference in means, on counts thinned until
     every sample's size factor equals the smallest;
@@ -26,7 +25,8 @@ tests, the claims withdrawn along the way, and what comes next.
 ## 2. Decisions
 
 Decisions 1 to 14 were taken on 29 and 30 September 2026, during the
-research; 15 to 18 on 30 September 2026, for the build the author uses.
+research; 15 to 18 on 30 September 2026, for the build the author uses; 19
+and 20 on 25 October 2026.
 
 1. **0.2.0 is held** until the method is confirmed (section 4, step 1).
 2. **The subset test uses the Lorenz statistic,** registered by the midpoint
@@ -50,7 +50,7 @@ research; 15 to 18 on 30 September 2026, for the build the author uses.
 12. *Superseded by 14.* The subset test was to equalize depth.
 13. *Replaced by 15.* The mid-rank scores were to compare each pair at its
     own depth.
-14. **The subset test keeps the W1 registration and limits its claim.** Under
+14. *Replaced by 19.* **The subset test keeps the W1 registration and limits its claim.** Under
     the count model it is calibrated where the sparser group expects at least
     128 reads per sample: its worst share at p ≤ 0.01 there is 1.4%, across
     folds from 0.5 to 4 and every depth arm measured. Below that it is
@@ -75,8 +75,20 @@ research; 15 to 18 on 30 September 2026, for the build the author uses.
 17. **One scale and one subset construction.** `scale="log2"` and
     `subsets="either"` are removed.
 18. **The subset test's range is stated, not enforced.** `wade()` warns how
-    many tested genes fall below 128 reads per sample in their lower group,
-    and reports every gene (the author's choice).
+    many tested genes fall below the validated range in their lower group
+    (32 reads per sample since decision 19), and reports every gene (the
+    author's choice).
+19. **The subset test thins** (25 October 2026, the author's choice after
+    rejecting the 128-read range).
+    - Every sample is thinned to the smallest size factor, as for the area
+      test.
+    - The Wasserstein-1 fold of those counts is taken out of the higher group
+      by thinning, not by rescaling.
+    - Its validated range is 32 reads per sample (`research/subset_range.py`,
+      `subset-range-20261025.txt`).
+    - The W1 fixed point reached 8 reads, but failed on zero-inflated genes.
+20. **Strata** (25 October 2026): the design in [strata plan](strata-plan.md),
+    built.
 
 ## 3. Retracted claims (do not repeat)
 
@@ -157,6 +169,7 @@ Scripts in `research/` today, with outputs in `.release/0.2.0/`:
 | `count_model.py` `shipped` | `count-model-shipped-20260930.txt` | The area test, and the same test unthinned, under the count model |
 | `count_model.py` `composition` | `count-model-composition-area-20260930.txt` | The area test when a share of genes changes, with RLE refitted |
 | `count_model.py` `real` | `count-model-real-20260930.txt` | The area test on TCGA prostate with its own labels: depth kept, calls by level, the thinning seed |
+| `rarity.py` | `rarity-20261023.txt` | Rarity against the gap alone: markers, planted subsets, DNA alterations, contamination, stability |
 | `stopping.py` | `stopping-20261023.txt`, `stopping-whole-prostate-20261023.txt` | Decision-based stopping: exactness against finished runs, shuffles and time |
 | `pvalue_accuracy.py` | `pvalue-accuracy-20260930.txt` | The computed area-test p-value against exact enumeration or 20 million shuffles |
 | `subset_recovery.py` | `subset-recovery-20260930.txt` | Planted subsets recovered on the confirmation's matrices |

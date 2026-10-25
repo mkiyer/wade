@@ -139,9 +139,9 @@ the computed p-value where it is accurate and shuffles where it is not.
 
 ## Decision-based stopping
 
-`research/stopping.py` (`stopping-20261023.txt`) runs the TCGA examples'
-independent designs (prostate, 445 tumours v 52 normals; breast, 971 v 112)
-two ways:
+`research/stopping.py` (`stopping-20261025.txt`, with the subset test of 25
+October 2026) runs the TCGA examples' independent designs (prostate, 445
+tumours v 52 normals; breast, 971 v 112) two ways:
 - with `fdr=0.05`, where each gene's shuffles stop once its BH decision is
   settled;
 - with `fdr=None`, where every run finishes.
@@ -155,27 +155,28 @@ two ways:
 
 | Cohort | Called (area / subset) | Subset-test shuffles, finished | With `fdr=0.05` | Wall time, finished → `fdr=0.05` |
 | --- | ---: | ---: | ---: | ---: |
-| Prostate | 1,746 / 728 | 149 million | 2.1 million (71× fewer) | 42 s → 2 s |
-| Breast | 1,975 / 2,432 | 1.57 billion | 1.53 million (1,024× fewer) | 718 s → 3 s |
+| Prostate | 1,746 / 612 | 125 million | 2.2 million (58× fewer) | 39 s → 2 s |
+| Breast | 1,975 / 2,325 | 1.41 billion | 1.56 million (902× fewer) | 689 s → 5 s |
 
 The area test is mostly computed by its saddlepoint, so its few shuffled
 genes cost little either way.
 
 **The whole transcriptome with `fdr=0.05`:**
-- **Prostate** (24,246 genes): 12 s. The subset test used 17 million
-  shuffles, at most 2,092 for any gene.
-- **Breast** (25,328 genes): 27 s. The subset test used 13 million shuffles,
-  at most 624 for any gene: 25 exceedances over BH's threshold of about 0.040.
-- **The earlier finished runs** took 391 s for prostate (1.2 billion subset
-  shuffles) and 5,316 s for breast (13.6 billion), as recorded by the TCGA
-  notebooks.
+- **Prostate** (24,246 genes): 21 s. The subset test used 18 million
+  shuffles, at most 2,456 for any gene.
+- **Breast** (25,328 genes): 42 s. The subset test used 13 million shuffles,
+  at most 651 for any gene: 25 exceedances over BH's threshold of about 0.038.
+- **Before decision-based stopping,** the finished runs took 391 s for
+  prostate (1.2 billion subset shuffles) and 5,316 s for breast (13.6
+  billion), as the TCGA notebooks recorded, with the subset test of 30
+  September.
 
-**The whole prostate transcriptome, both ways** (`stopping-whole-prostate-20261023.txt`):
+**The whole prostate transcriptome, both ways** (`stopping-whole-prostate-20261025.txt`):
 - the decisions were identical in both tests at 0.05, 0.1 and 0.2, over all
   24,246 genes;
 - every gene not called kept its finished p- and q-value;
-- the subset test used 65× fewer shuffles;
-- it took 12 s against 294 s.
+- the subset test used 52× fewer shuffles;
+- it took 20 s against 259 s.
 
 Timings come from a 16-core laptop shared with other jobs.
 
@@ -205,49 +206,101 @@ because a global fold does not move the Lorenz gap.
 
 ## The subset test under the count model
 
-The subset test is unchanged by the 30 September 2026 build except for the
-removed options. Its count-model measurements ran from the scripts at commit
-`e4fd67f`: sections `reference`, `laplace`, `realistic` and
-`summary` of `research/count_model.py`, in `count-model-20260929.txt`,
-`count-model-laplace-20260929.txt`, `count-model-realistic-20260929.txt` and
-`count-model-summary-20260929.txt`.
+Since 25 October 2026 the subset test thins rather than rescales (see
+[method](method.md#the-subset-test)). `research/subset_range.py`
+(`subset-range-20261025.txt`) compares three constructions on the count
+model's reference: every 4th gene of 48 data sets, from TCGA prostate tumours
+split at random per gene and thinned binomially by design.
+- **Thinned:** the test since then.
+- **Rescaled:** the test before, with the cases carried back by the fold on
+  unthinned counts.
+- **Exact:** the true fold.
 
-- **With no fold and equal depths** it is calibrated at every level: 0.6–1.2%
-  at p ≤ 0.01 by level, and 0.058–0.087% overall at 0.001.
-- **Under a fold or a depth imbalance** it is calibrated only where the
-  sparser group expects at least 128 reads per sample. The table gives the
-  worst cell at p ≤ 0.01, by expected reads per sample:
+The 48 data sets cross three designs (222:223, 40:405 and 405:40) and two
+depths (1 and 1/8) with eight arms:
+- no fold;
+- every case 2×, 4× or 0.5×;
+- a 2× depth gap either way;
+- the TCGA prostate design's own imbalance;
+- a fold of 2 with a depth gap of 0.5.
 
-  | Condition | 2–8 | 8–32 | 32–128 | ≥ 128 |
-  | --- | --- | --- | --- | --- |
-  | Equal depths, folds 1.5–4 (cases higher) | 2.1–8.4% | 1.3–1.4% | 0.8–1.1% | 0.9–1.4% |
-  | Equal depths, fold 0.5 (cases lower) | 6.1% | 8.0% | 2.8% | 1.1% |
-  | The TCGA designs' own imbalance, no fold | 2.1% | 1.9% | 1.2% | 1.4% |
-  | A 2× depth gap | 19–24% | 3.0–15% | 1.6–4.5% | 1.3% |
+**Worst share at p ≤ 0.01** over the 48 data sets, by the sparser group's
+expected reads per sample:
 
-- **Why it fails below 128.** The test registers the cases by a fold
-  estimated from the same data and then holds it fixed through the shuffles.
-  At low counts a fold changes Poisson noise and zeros as well as levels, and
-  the extra noise among the lower or shallower cases reads as concentration.
-  - It fails most when the cases are the lower or the shallower group.
-  - 128 is the lowest bin edge at which every arm holds: a measured bound,
-    not a parameter of the method.
-  - `wade()` warns how many tested genes fall below it.
-- **Zero-inflated and bimodal genes** hold under random splits at their real
-  depth (`count-model-realbimodal-20260930.txt`), in the designs 20:20, 10:40,
-  40:10, 50:50 and 100:100:
-  - GSTM1, deleted on both chromosomes in about half of people:
-    4.4–5.3% / 0.68–0.88% / 0.00–0.14%;
-  - ERAP2: 4.3–5.2% / 0.48–1.32% / 0.00–0.12%.
-- **Small-sample residual.** On a simulated bimodal null (two log-normal modes
-  of equal weight), the test is slightly anti-conservative, falling with
-  sample size ([research ideas](research-ideas.md), section 4.9):
-  - at 20 v 20: 5.7–5.9% / 1.8% / 0.32–0.37%;
-  - at 250 v 250: 5.06% / 1.03% / 0.114%.
+| Construction | 0.5–2 | 2–8 | 8–32 | 32–128 | ≥ 128 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Thinned (since 25 October) | 74.4% | 15.9% | 2.15% | 1.89% | 1.46% |
+| Rescaled (before) | 61.2% | 17.3% | 3.69% | 2.56% | 1.30% |
+| An exact test (the true fold) | 1.56% | 1.75% | 1.70% | 1.81% | 1.34% |
+
+- **At 32 reads and above the thinned test is within chance.** With about a
+  thousand genes per cell, an exact test's worst of 48 cells is about 1.8%.
+  32 is the validated range: a measured bound, not a parameter.
+- **Depth no longer reads as a subset.** With no fold and a 2× depth gap, the
+  rescaled test reached 22% below 0.5 reads and 2.6% at 32–128. With every
+  sample thinned to the smallest size factor, every cell of that arm is near
+  1%.
+- **Below 32, a fold carried by every case reads as a subset:** 2.2% at 8–32,
+  16% at 2–8 and 74% at 0.5–2. The fold is estimated and then held fixed. A
+  valid test there would need the fold's estimation inside its null
+  ([research ideas](research-ideas.md), section 4.4).
+- **The W1 fixed point** (section 4.2 there) held to 8 reads in this grid:
+  worst 1.6% at 8–32. It fails on zero-inflated genes (below), so it was set
+  aside.
+
+**Zero-inflated and bimodal genes** under 2,000 random splits of the tumours
+per design (20:20, 10:40, 40:10 and 100:100), at p ≤ 0.05 / 0.01 / 0.001
+(section `bimodal`):
+
+| Gene | Zero in | Thinned | W1 fixed point |
+| --- | ---: | --- | --- |
+| GSTM1 | 32% of tumours | 4.80–5.80% / 0.50–1.00% / 0.00–0.20% | 3.95–5.85% / 0.30–1.20% / 0.00–0.20% |
+| ERAP2 | 0% | 4.30–5.55% / 0.35–1.35% / 0.00–0.15% | 4.15–5.55% / 0.40–1.35% / 0.00–0.20% |
+| PSPHP1 | 50% | 5.00–6.35% / 0.90–1.45% / 0.05–0.25% | 5.05–9.35% / 0.60–4.10% / 0.00–1.20% |
+| UGT2B17 | 24% | 3.90–5.40% / 0.70–0.85% / 0.00–0.10% | 3.45–5.45% / 0.35–0.90% / 0.00–0.10% |
+
+**Power** (section `power`: 222:223, a tenth of the cases at 8× or a fifth at
+4×, at depths 1 and 1/8):
+- At 32 reads and above, the thinned test's power is within 1 point of the
+  rescaled test's.
+- At 8–32 it is within 4 points.
+- Below 8 it is lower: at depth 1/8, a tenth at 8× is called in 47% of genes
+  at 0.5–2 reads, against 70%. The rescaled test is not calibrated there.
+
+The small-sample residual on a simulated bimodal null
+([research ideas](research-ideas.md), section 4.9) was measured on the
+rescaled test and has not been measured again.
+
+**The thinning draw on TCGA prostate** (section `seeds`,
+`subset-seeds-20261025.txt`: 445 tumours v 52 normals, 24,246 tested genes,
+BH q ≤ 0.05). Seeds 1 and 2 draw the jitter, the thinning and the shuffles.
+The share of the genes either seed calls that both call, by the lower
+group's mean reads:
+
+| Run | Calls (seed 1 / seed 2) | All | 0–8 | 8–32 | 32–128 | ≥ 128 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Thinned test | 4,936 / 4,898 | 70.3% | 39% | 36% | 58% | 81% |
+| Thinned test, `relative_error=0.1` | 4,949 / 4,848 | 71.4% | 38% | 37% | 58% | 83% |
+| Seed 1's thinned pool, each seed's shuffles | 4,936 / 5,005 | 92.8% | 88% | 92% | 92% | 94% |
+| Rescaled test (before 25 October) | 5,793 / 5,909 | 92.6% | 86% | 91% | 93% | 94% |
+
+- **The thinning, not the shuffles, moves the calls.** With one thinned
+  pool, a new shuffle stream changes 7% of them, as it did for the rescaled
+  test. A new thinning changes 30%, and 19% at 128 reads and above, where
+  the area test's calls agree on 97%.
+- **More precise p-values do not help:** 100 exceedances instead of 25 agree
+  on 71%.
+- **Why.** The median sample keeps 29.5% of its reads, and the higher group
+  loses more to the fold. Which reads are kept is random, and near BH's
+  threshold it decides the call. ETV4's subset is called under seed 2 and
+  not under seed 1 (q = 0.061).
+- **The subset itself does not move.** Its side, share and fold are read on
+  normalized counts, and rarity's Spearman correlation between the seeds is
+  1.000 ([rarity](#rarity)).
 
 ## Subsets recovered in simulation
 
-`research/subset_recovery.py` (`subset-recovery-20260930.txt`) regenerates the
+`research/subset_recovery.py` (`subset-recovery-20261025.txt`) regenerates the
 60 mixed matrices of the protocol-version-6 confirmation (Gamma–Poisson and
 lognormal–Poisson biology; baseline means 0.5, 5, 50 and 500 counts). It scores
 every planted gene with baseline mean ≥ 5 counts:
@@ -263,42 +316,53 @@ At 250:250:
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Every case × ½, 10% × 8–1,024 above | 100% | 0.09 | 0.97–1.00 | 0.87–0.95 | 100% |
 | 10% of cases × 16 | 100% | 0.09 | 0.97 | 0.88 | 100% |
-| 20% of cases × 4 | 100% | 0.17 | 0.76 | 0.62 | 97% |
-| 5% of cases × 4 | 97% | 0.12 | 0.39 | 0.66 | 48% |
-| 10% of cases × ¼ | 27% | 0.24 | 0.08 | 0.23 | 22% |
-| Every case × 1.5 or × ⅔ | no subset | | | | 7–8% |
+| 20% of cases × 4 | 100% | 0.17 | 0.76 | 0.62 | 95% |
+| 10% of cases × 4 | 100% | 0.12 | 0.60 | 0.62 | 73% |
+| 5% of cases × 4 | 97% | 0.12 | 0.39 | 0.66 | 43% |
+| 10% of cases × ¼ | 27% | 0.24 | 0.08 | 0.23 | 15% |
+| Every case × 1.5 or × ⅔ | no subset | | | | 3% |
 
 - **Raised subsets are found on their side, nearly exactly, in all three
   designs** (250:250, 500:50 and 50:500). A tenth of the cases raised 8× or
   more, alone or above a halved majority, is recovered with precision
-  0.96–1.00 and significant in 97–100% of genes.
+  0.96–1.00 and significant in 95–100% of genes. The split and its scores
+  read normalized counts, unchanged by the thinned test.
+- **Modest subsets are called less often than by the rescaled test.**
+  - At 250:250, a tenth of the cases at 4× is called in 73% of genes,
+    against 85% before.
+  - At 500:50 and 50:500, a fifth at 4× is called in 57% and 70%, against 72%
+    and 83%.
+  - The thinning costs power at low counts, and these matrices include
+    baseline means of 5 counts.
 - **Lowered subsets are the test's weakness.** The split chose the lowered
   side in 27–32% of genes.
 - **On unchanged genes** the split takes 15–16% of the cases, and the subset
-  test is significant in 4.6–4.9%.
-- **A change every case carries** is called a subset in 2–10% of genes across
-  the designs. Two of the three baseline levels tested (5 and 50 counts) lie
-  below the validated range of 128 reads per sample, where an excess is
-  expected.
+  test is significant in 4.9–5.2%.
+- **A change every case carries** is called a subset in 2–13% of genes across
+  the designs, against 2–10% before.
+  - The 13% is ×1.5 at 500:50. By baseline it is 20% at 5 counts, 15% at 50
+    and 5% at 500.
+  - Each baseline cell holds about 20 genes, too few to measure calibration.
+    The count-model grid above measures it.
 
-`research/subset_significance.py` (`subset-significance-20260930.txt`) plants
+`research/subset_significance.py` (`subset-significance-20261025.txt`) plants
 a share of cases raised by a fold in 250:250 Gamma–Poisson genes (mean 50
 counts, 200 genes per row, 999 shuffles).
 
-- **Under the nulls** the test calls 3–5% for no change and for every case
-  doubled or halved. When every case carries the fold it calls 0% with tight
-  biological spread and 6–8% with realistic spread, at 50 reads, below the
-  validated range.
+- **Under the nulls the test calls 4–6%:** for no change, for every case
+  doubled or halved, and when every case carries the fold, with tight or
+  realistic biological spread. Before, the last call rate was 0% with tight
+  spread and 6–8% with realistic spread.
 - **Significance falls as the subset approaches the whole cohort.**
-  - Tight spread: 100% of genes at 5–80% of cases; at 95%, 57% (×4) and
+  - Tight spread: 100% of genes at 5–80% of cases; at 95%, 81% (×4) and
     100% (×100).
-  - Realistic spread: 62–100% from 5% to 80% of cases; 19–28% at 95%.
+  - Realistic spread: 61–100% from 5% to 80% of cases; 12–22% at 95%.
 - **Past half the cases** the smaller side is the unchanged remainder,
   reported as a subset below the rest.
 
 ## On TCGA tumours
 
-The prostate notebook (`notebooks/examples.qmd`, rendered 23 October 2026)
+The prostate notebook (`notebooks/examples.qmd`, rendered 25 October 2026)
 runs the defaults on 445 independent TCGA prostate tumours and 52 normals,
 with 24,246 tested genes. It compares each subset with fusion annotations
 WADE never sees. Only tumours annotated fusion-positive or negative enter
@@ -306,42 +370,243 @@ precision and recall.
 
 | Gene | log2fc | Area fraction | Area q | Subset | Subset q | Positives in subset | Negatives in subset | Precision | Recall |
 | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| ERG | 2.42 | 0.68 | 1.8 × 10⁻⁴ | 38% above | 0.070 | 122 of 130 | 0 | 1.00 | 0.94 |
+| ERG | 2.42 | 0.68 | 1.8 × 10⁻⁴ | 38% above | 0.073 | 122 of 130 | 0 | 1.00 | 0.94 |
 | ETV1 | 2.30 | 0.66 | 0.20 | 8% above | ≤ 0.05 (bound) | 16 of 17 | 0 | 1.00 | 0.94 |
-| ETV4 | 3.96 | 0.88 | 0.54 | 3% above | ≤ 0.05 (bound) | 8 of 9 | 0 | 1.00 | 0.89 |
-| FLI1 | −0.16 | −0.06 | 0.62 | 1% above | 0.81 | 2 of 2 | 0 | 1.00 | 1.00 |
+| ETV4 | 3.96 | 0.88 | 0.54 | 3% above | 0.054 | 8 of 9 | 0 | 1.00 | 0.89 |
+| FLI1 | −0.16 | −0.06 | 0.62 | 1% above | 0.82 | 2 of 2 | 0 | 1.00 | 1.00 |
 
 - **ETV1 and ETV4 are the case WADE is built for.** A few fusion-positive
   tumours carry large mean folds (log2fc 2.30 and 3.96) that the area test
   cannot call, because a few tumours carry the whole difference. Their
-  subsets hold only fusion-positive tumours and are called at q ≤ 0.05.
+  subsets hold only fusion-positive tumours. ETV1's, 36 tumours, is called
+  at q ≤ 0.05; ETV4's, 12 tumours, is not (q = 0.054).
 - **Few controls cost the subset test power.** With `fdr=0.05` the called
   subsets' q-values are bounds. With every run finished (research/stopping.py,
-  section `whole`), ETV1's and ETV4's subset q-values are 0.029 and 0.038.
-  With 52 controls these small subsets are called, but near the threshold.
-  Under the subset test's previous construction, withdrawn on 29 September
-  2026, they reached q ≈ 10⁻⁴.
+  section `whole`), ETV1's and ETV4's subset q-values are 0.036 and 0.061,
+  against 0.029 and 0.038 with the rescaled test. With 52 controls these
+  small subsets sit near the threshold, where the thinning draw decides:
+  under seed 2, ETV4's is called
+  ([the thinning draw](#the-subset-test-under-the-count-model)). Under the
+  construction withdrawn on 29 September 2026, they reached q ≈ 10⁻⁴.
 - **ERG** is fused in 130 of the 290 annotated tumours. Its area is called, and
   its subset holds 122 of the 130 fusion-positive tumours and none of the
-  negatives, at q = 0.070.
+  negatives, at q = 0.073.
 - **Across the transcriptome** the area test called 7,503 genes up and 6,765
-  down at q ≤ 0.05. The subset test found 5,398 subsets above the rest of
-  the tumours and 401 below. The notebook ran in 32 s for both of its output
-  formats, with decision-based stopping.
+  down at q ≤ 0.05. The subset test found 4,595 subsets above the rest of
+  the tumours and 337 below, against 5,398 and 401 with the rescaled test.
+  The notebook, with its rarity tables, renders both of its output formats
+  in 41 s, with decision-based stopping.
 - **These are broad call sets.** They need review of tissue mixture and
   technical effects, which marker recovery does not provide.
 - **The breast notebook** (`notebooks/examples-breast.qmd`, 971 tumours v
-  112 normals, 25,328 tested genes) rendered in 208 s, including its four
+  112 normals, 25,328 tested genes) rendered in 244 s, including its four
   subtype contrasts. Against high-level ERBB2 amplification (GISTIC), which
   WADE never sees:
   - ERBB2's subset, 10% above the rest, holds 86 of the 107 amplified tumours
     and 9 negatives (precision 0.91, recall 0.80);
   - GRB7's, on the same amplicon, holds 72 of 107 and 9 negatives (precision
     0.89, recall 0.67).
-- **Breast across the transcriptome:** the subset test called 19,903 subsets
-  above the rest and 399 below. With 971 tumours, purity and subtype make
+- **Breast across the transcriptome:** the subset test called 19,075 subsets
+  above the rest and 384 below (19,903 and 399 with the rescaled test). With 971 tumours, purity and subtype make
   nearly every gene's tumours more unequal than its normals, so there the
   subset's fold and share, not its q-value, rank the genes.
+
+## Rarity
+
+`research/rarity.py` (`rarity-20261025.txt`) runs both TCGA designs with the
+defaults (seed 1, `fdr=0.05`). Each gene is ranked within its group: the
+subset test's validated range (32 reads per sample and above), or the genes
+below it. Rank 1 is the rarest,
+and tied genes share the better rank. The baseline is the rank by the gap
+alone, without size matching.
+
+**Known biology.** Ranks in the validated range: 16,574 genes in prostate,
+16,956 in breast.
+
+| Cohort | Gene | Subset (tumours) | Rarity rank | Gap-alone rank |
+| --- | --- | ---: | ---: | ---: |
+| Prostate | ETV4 | 12 above | 1 | 1 |
+| | ETV1 | 36 above | 3 | 12 |
+| | ETV5 | 13 above | 80 | 72 |
+| | TP63 | 125 above | 96 | 290 |
+| | ERG | 170 above | 470 | 770 |
+| | FLI1 | 4 above | 1,116 | 2,320 |
+| Breast | KRT5 | 110 above | 403 | 358 |
+| | ERBB2 | 97 above | 746 | 610 |
+| | GRB7 | 83 above | 759 | 611 |
+| | ESR1 | 299 above | 4,727 | 4,458 |
+
+- **The ETS fusions are among the rarest subsets in prostate:** ETV4 first,
+  tied with one tumour's BBOX1, and ETV1 third.
+- **Size matching helps some genes and costs others.**
+  - It lifts ETV1, the larger prostate subsets (TP63, ERG) and FLI1's four
+    tumours.
+  - It ranks ETV5 a little lower, and the breast ERBB2 amplicon about a
+    fifth lower, because many breast genes have a subset of about a tenth of
+    the tumours.
+- **Several of the other 20 rarest are normal-tissue programmes,** from
+  tissue in or beside the sample. Their genes share members, which
+  `rare_subsets()` shows:
+  - prostate: seminal vesicle (SEMG1 and SEMG2, 6 tumours in common);
+  - breast: lactation (the milk proteins CSN1S1, CSN1S2AP, CSN2, LALBA and
+    BTN1A1, in the same 1–2 tumours) and muscle (MYH7 and MYL1, in one
+    tumour).
+  - A driver shares members too: ETV1's 36 tumours include 8 of ISG15's 58.
+- **Expression.** Within the validated range, rarity still rises with
+  expression: Spearman 0.30 in prostate and 0.37 in breast, against 0.21 and
+  0.29 when the range began at 128 reads.
+
+**Planted subsets.** Subsets were planted into 1% of the validated genes per
+replicate, by exact binomial thinning. k of the 445 prostate tumours (1, 3,
+12 or 30) were raised or lowered f-fold, f from 1.5 to 32. Each host gene
+keeps at least 32 reads per sample in its lower group after the thinning, so
+none left the validated range. There were 8 replicates: about 41 genes per
+design at folds 1.5–8 and 83 at 16–32. The rarity and gap columns give the
+planted genes' median percentile in the validated group; lower is rarer. The
+last column is the share the subset test called at q ≤ 0.05.
+
+| Planted | Rarity | Gap alone | Side right | Subset test calls |
+| --- | ---: | ---: | ---: | ---: |
+| 1 tumour × 32, above | 14.1% | 19.7% | 100% | 24% |
+| 3 tumours × 8, above | 26.1% | 29.1% | 100% | 30% |
+| 12 tumours × 16, above | 2.5% | 1.9% | 100% | 22% |
+| 12 tumours × 32, above | 0.6% | 0.6% | 100% | 14% |
+| 30 tumours × 8, above | 2.0% | 1.7% | 100% | 52% |
+| 30 tumours × 32, above | 0.1% | 0.1% | 100% | 61% |
+| 30 tumours × 8, below | 16.5% | 27.8% | 50% | 48% |
+| 30 tumours × 32, below | 13.6% | 26.3% | 56% | 59% |
+
+- **Rarity lifts lowered subsets and small raised ones**, whose gaps run
+  small. A lowered subset's gap is capped by its share of the cases. A raised
+  subset's gap grows with its share unless the fold is extreme: 0.065 for one
+  tumour at 32× over an even group, against 0.30 for 30 tumours at 8×.
+- **For mid-sized raised subsets the gap alone does as well or slightly
+  better.** At 12 tumours × 16 the planted genes' median percentile was 2.5%
+  by rarity and 1.9% by the gap; at 30 tumours × 16, 88% reached the top 1%
+  by rarity, against 93% by the gap.
+- **Strong small subsets rank near the top but are not called.**
+  - Any shuffle that puts none of the planted tumours among the 52 controls
+    repeats the planted split. That is 89.5% of all labellings for 1 tumour,
+    71.7% for 3, 26.1% for 12 and 3.3% for 30.
+  - At 16–32×, subsets of 1–12 tumours were called in 12–38% of genes, no
+    more often than at 1.5× (20–34%). Subsets of 30 were called in 58–61%.
+  - Nearly every raised 12-tumour subset at 32× (94%) was nevertheless in
+    the top 1%.
+- **Lowered subsets are often reported on the raised side.** At 8–32× they
+  were reported on their own side in 17–66% of genes, more often the larger
+  the subset; raised subsets in 96–100%. The walk takes each gene's largest
+  gap, and a lowered subset's gap is capped by its share of the cases.
+
+**DNA alterations.** Take each validated gene that has a subset and at
+least one tumour carrying its own alteration: high-level amplification for a
+raised subset, deep deletion for a lowered one. Calls are GISTIC, from the
+TCGA PanCancer Atlas via cBioPortal, for 436 of 445 prostate and 945 of 971
+breast tumours. That leaves 10,840 prostate and 13,197 breast genes. The
+relative risk is the alteration's rate among the subset's members over its
+rate in the other tumours.
+
+| Rarity rank | Prostate | Breast |
+| --- | ---: | ---: |
+| 1–100 | 2.3 | 1.5 |
+| 101–500 | 1.3 | 1.7 |
+| 501–2,000 | 1.7 | 2.3 |
+| 2,001–5,000 | 2.9 | 3.0 |
+| 5,001 on | 3.8 | 4.0 |
+
+- **Rarer subsets are less often the gene's own copy-number change:** a
+  relative risk of 1.3–2.3 among the 2,000 rarest in either cohort, against
+  3.8–4.0 past rank 5,000. Among the genes ranked 1–100, only 17 in prostate
+  and 27 in breast had an altered member.
+  The rarest come from other tissues, or in prostate from the ETS fusions,
+  which copy number does not see.
+- Rarity ranks what is unusual in the cohort, whatever the cause. It is not a
+  marker of DNA events.
+
+**Sample load.**
+- **The heaviest libraries carry another tissue's or cell type's programme,
+  or an artefact.**
+  - prostate: skeletal muscle (MB, XIRP1, TRIM63), gut Paneth-cell
+    defensins (DEFA5, DEFA6) and immunoglobulins;
+  - breast: muscle (MYH7, MYL2, CKM) and small nuclear and 7SL RNAs
+    (RNU4-1, RNU4-2, RN7SL1).
+- **A light contamination does not stand out.** One breast tumour's library
+  was mixed into each of five prostate tumours, as 0.5–5% of its reads.
+  - Each host's load rose with the share: at 5%, its rank of 445 moved from
+    18, 288, 59, 330 and 362 to 12, 183, 34, 203 and 215.
+  - None reached the top ten.
+- **Weights.** The excess over the null mean, max(0, −log rarity − 1),
+  ranked the hosts 19, 143, 25, 134 and 198 at 5%. It put three of the five
+  nearer the top at 0.5–2% and four at 5%, the heaviest host further down at
+  every share, and none in the top ten. The load keeps −log(rarity), which needs no offset.
+
+**Stability.** Seeds 1 and 2 change the jitter, the thinning and the
+shuffles. Over the 16,409 validated genes with a subset under both seeds,
+rarity's Spearman correlation between them was 1.000. 101 genes ranked in
+the top 100 under both (tied genes share a rank), and 998 in the top 1,000.
+ETV4 and ETV1 ranked first and third under both.
+
+## Strata
+
+`research/strata.py` vets the construction, on the data described in the
+[plan](strata-plan.md#5-what-the-prototype-measures). The record is
+`strata-20261024.txt`; the subset test's thinned construction is in
+`strata-thinned-20261025.txt`.
+
+**Exactness.**
+- **One stratum** is the unstratified procedure, bit for bit: the stream, the
+  shuffled area test and the subset test.
+- **Stratified shuffles** match exact enumeration of every within-stratum
+  labelling on four small designs (2,475 to 109,760 labellings). The median
+  deviation is 2.0–2.3%, against a standard error of 5%, and none exceeds
+  three standard errors.
+- **The stratified saddlepoint's error estimate** sends the inaccurate
+  genes to shuffles.
+  - Small designs: it kept 62–84% of genes, at most 0.9% of them beyond
+    0.67–1.5× of exact.
+  - Five realistic designs, against 20 million labellings: it kept 98–100% of
+    267 genes, none beyond, with a median error of 0.7–2.1%. It shuffled
+    0.5–4.3% of all genes.
+
+**Calibration.** Share of null genes at p ≤ 0.01: the area test over all
+genes, the subset test at 32 reads per sample and above.
+
+| Null | Area, unstratified | Area, stratified | Subset, unstratified | Subset, stratified |
+| --- | ---: | ---: | ---: | ---: |
+| Two studies, batch | 59.8% | 1.5% | 9.2–14.7% | 1.3–1.6% |
+| Two studies, batch, every case 1.5× or 3× | | | 6.3–18.3% | 0.6–1.0% |
+| Twenty studies, batch | 4.8% | 0.9% | 2.1–4.9% | 0.9–1.3% |
+| Twenty studies, batch, every case 1.5× or 3× | | | 2.2–4.0% | 0.96–1.50% |
+| TCGA tumours within 20 sites | 1.8% | 0.85% | 0.57–0.82% | 0.75–0.82% |
+| The real contrast's five sites | 1.1% | 1.1% | 1.0–1.5% | 1.3% |
+| TCGA and GTEx normals by study | 42.5% | 0.78% | 27.5–29.8% | 0.56–0.76% |
+
+Both subset columns are the thinned test of 25 October 2026, in the 32–128
+and ≥ 128 reads bins. The stratified subset test's worst cell at 32 reads and
+above, over every null and fold measured, is 1.64%.
+
+**Power.**
+- **The area test.** Thinning within strata gains 3–8 points over thinning
+  to the global minimum. Inverse-variance weights gain nothing consistent
+  over the Cochran–Mantel–Haenszel weights.
+- **The subset test,** with a tenth of each stratum's cases at 8×: at 32
+  reads and above, the thinned construction matches the rescaled one within
+  1 point.
+
+**On TCGA prostate stratified by site** (5 of 32 sites hold both groups:
+207 tumours and 52 normals; section `real`, `strata-real-20261025.txt`):
+- **The area test** calls 13,167 genes, against 13,197 unstratified on the
+  same 259 samples.
+- **The subset test** calls 4,699, against 4,231 unstratified on the same
+  samples; 3,380 are called by both.
+- **The fusion markers.** ETV1's subset strengthens: q = 0.012, against a
+  bound of 0.05 unstratified. ETV4's weakens: 0.10, against 0.062.
+
+**TCGA normal-adjacent against GTEx normals** (the bridge): the area test
+calls 18,849 of 24,246 genes (78%), 8,060 of them at least 2-fold, and the
+subset test 2,456 (10%; `strata-gtex-20261025.txt`). The two studies'
+normals differ in most genes, so GTEx normals pooled as controls would
+confound study with condition. Strata do not help: a GTEx stratum holds only
+controls and is left out.
 
 ## Earlier confirmation (protocol version 6)
 
@@ -361,8 +626,15 @@ The confirmation of this build, protocol version 7, is pending
   tumours, and its size factors from RLE on the same tumours.
 - Batch effects and changes of composition are measured only as described
   above.
-- The subset test's validity is measured, not proven. Its bound of 128 reads
-  per sample is the coarsest statement every measured arm supports.
+- The subset test's validity is measured, not proven. Its bound of 32 reads
+  per sample is the coarsest statement every measured arm supports. Its
+  calls near the threshold depend on the thinning draw, measured on one
+  cohort.
+- Strata are measured on two simulated designs with batch effects and on
+  three real relabelling nulls (TCGA sites, the real contrast's sites, TCGA
+  with GTEx). Pairing and continuous covariates are not measured.
 - DESeq2/edgeR and outlier statistics were not refitted on these data.
 - Real-data behaviour beyond calibration is illustrated by the TCGA notebooks,
   where no complete truth exists.
+- Rarity's evidence is two TCGA cohorts, subsets planted into one, and one
+  contamination design. It ranks relative to the cohort's own genes.

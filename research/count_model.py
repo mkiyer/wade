@@ -36,10 +36,10 @@ Sections (default: all):
   real         the area test on TCGA prostate with its own labels: the depth kept, the calls
                against the unthinned test by level, and how the calls move with the thinning seed
 
-The subset test is unchanged by the 30 September 2026 build, so its count-model measurements stand;
-they, and the constructions tried and set aside (thinning registrations, the Laplace fold, rank and
-count-exact score tests, depth choices), are in git at commit e4fd67f and recorded in
-docs/research-ideas.md.
+Since 25 October 2026 the subset test thins: its count-model measurements are research/subset_range.py's.
+The constructions measured before (the Laplace fold, rank and count-exact score tests, depth choices) are
+in git at commit e4fd67f and recorded in docs/research-ideas.md; rescaled_subset_test keeps the subset
+test of 30 September 2026 for the studies that measured it.
 
     WADE_TCGA_CONFIG=.release/0.2.0/tcga-config.json RAYON_NUM_THREADS=6 PYTHONPATH=src:research \\
         python research/count_model.py [section ...]
@@ -55,7 +55,8 @@ import numpy as np
 
 import wade
 from wade._means import area_values, expression, jittered, mean_saddlepoint, mean_test
-from wade._subsets import subset_test
+from wade._subsets import advance, split, subset_test, walks
+from wade.pvalues import sequential_p
 from wade.normalize import fit_normalization
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,7 +89,8 @@ def tcga(cancer):
         counts = cohort.counts[:, idx]
         rows = np.flatnonzero(cohort.test_genes & (counts.sum(axis=1) > 0))
         _COHORTS[cancer] = dict(raw=counts[rows], cond=cond, factors=factors,
-                                names=cohort.genes["gene_name"].to_numpy()[rows])
+                                names=cohort.genes["gene_name"].to_numpy()[rows],
+                                samples=meta["tcga_sample"].to_numpy())
     return _COHORTS[cancer]
 
 
@@ -157,11 +159,27 @@ def area_pvalues(z, cond, seed):
 
 def tests(counts, factors, cond, rows, seed=1):
     """The area test (on counts thinned to the shallowest depth), the same test on the unthinned
-    normalized counts (the pre-build DE test), and the subset test, for genes `rows`."""
+    normalized counts (the pre-build DE test), and the subset test as wade() runs it, for genes `rows`."""
     x = expression(jittered(counts, rows, seed), factors)
     return dict(area=area_pvalues(area_values(counts, rows, factors, seed), cond, seed),
                 unthinned=area_pvalues(x, cond, seed),
-                subset=subset_test(x, cond, direction="both", stop=STOP, maximum=MAXIMUM, seed=seed)[0])
+                subset=subset_test(counts, factors, cond, rows, direction="both", stop=STOP, maximum=MAXIMUM, seed=seed)[0])
+
+
+def rescaled_subset_test(x, cond, *, direction="both", stop=STOP, maximum=MAXIMUM, seed=1):
+    """The subset test before 25 October 2026, kept for the studies that measured it: the cases carried
+    back by the W1 fold on count + 1 (rescaled, not thinned), on unthinned normalized counts x."""
+    cond = np.ascontiguousarray(cond, dtype=np.uint8)
+    _, _, _, gap, shift = split(x, cond)
+    ran = np.flatnonzero(gap > 0)
+    pooled, order, observed = walks(x[ran], cond, shift[ran], direction=direction)
+    exceed, tried = np.zeros(len(ran), np.uint64), np.zeros(len(ran), np.uint64)
+    advance(pooled, order, observed, cond, exceed, tried, direction=direction, stop=stop, maximum=maximum,
+            threshold=-np.inf, seed=seed)
+    p, hits, draws = np.ones(len(x)), np.zeros(len(x), np.uint64), np.zeros(len(x), np.uint64)
+    hits[ran], draws[ran] = exceed, tried
+    p[ran] = sequential_p(exceed, tried, stop=stop, maximum=maximum)
+    return p, hits, draws
 
 
 def matches_wade(genes=500, seed=1):

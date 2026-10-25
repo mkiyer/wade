@@ -19,13 +19,15 @@ match normal. For every gene it reports two things and tests each:
 
 Every normalization ends as one size factor per sample. That holds for RLE
 on all genes, RLE on internal control genes, or factors fitted elsewhere. WADE
-divides counts by the size factors for the effects. Before the area test it
+divides counts by the size factors for the effects. Before both tests it
 thins every sample binomially until all size factors equal the smallest.
 
 - A difference in depth between the groups therefore cannot pass for a
   difference in expression.
 - Genes with too few reads to trust are washed out rather than called.
 - Both tests use label permutation, so no count distribution is assumed.
+- With strata (study, site, batch), labels are exchanged only within each
+  stratum, and each stratum is thinned to its own smallest size factor.
 
 ```python
 import wade
@@ -35,8 +37,11 @@ norm = wade.fit_normalization(counts)                            # one size fact
 # norm = wade.fit_normalization(counts, reference_genes=controls)   # or RLE on internal control genes
 keep = wade.filter_counts(counts, min_count=3, min_samples=2)
 result = wade.wade(counts, condition, normalization=norm, test_genes=keep)
+# result = wade.wade(counts, condition, normalization=norm, strata=study)   # merged studies
 table = result.to_frame().sort("area_padj")     # optional Polars dependency
 result.subset("ETV4")                            # the cases departing from a common fold
+result.rare_subsets(n=25)                        # the rarest subsets, with the genes that share their members
+result.sample_load()                             # which cases carry the rarest subsets
 result.plot_gene("ETV4")
 ```
 
@@ -53,12 +58,13 @@ workflow, and the [demo](notebooks/demo.qmd) runs it.
 | `fdr` | `0.05` | The false discovery rate at which BH decides. Shuffles stop once each gene's decision is settled; the decisions are exactly those of finished runs. Rejected genes report a p-value bound. `None` finishes every run |
 | `max_permutations` | `999_999` | The shuffle budget: a shuffled p-value can reach 10⁻⁶, so an isolated discovery stays possible among 50,000 genes |
 | `seed` | `1` | Seeds the jitter, the thinning and the shuffles |
+| `strata` | `None` | One label per sample (study, site, batch), or a list of factors. Labels are exchanged only within strata; strata with one group are left out, with a warning |
 
 ## Results
 
 | Column | Meaning |
 | --- | --- |
-| `case_mean`, `control_mean` | Mean normalized count per group: reads per sample at the cohort's typical depth |
+| `case_mean`, `control_mean` | Mean normalized count per group: reads per sample at the cohort's typical depth (with strata, Mantel–Haenszel standardized) |
 | `area` | `case_mean − control_mean` |
 | `area_fraction` | `area / (case_mean + control_mean)`: 1/3 is a doubling, −1/3 a halving |
 | `log2fc` | `log2(case_mean / control_mean)`: the fold of the group means, ±inf where a group has no reads |
@@ -67,6 +73,7 @@ workflow, and the [demo](notebooks/demo.qmd) runs it.
 | `subset_fraction` | The subset's share of the cases |
 | `subset_log2fc` | Its fold over what the common fold predicts for it |
 | `subset_pvalue`, `subset_padj` | The test that every case carries one common fold, and its q-value |
+| `subset_rarity` | The share of genes whose subset is at least as rare: a size-matched rank that puts rare, strong subsets first |
 | `alignment_log2fc`, `lorenz_gap` | The common fold, and the subset test's statistic |
 | `status` | `tested`, `filtered` or `all_zero` |
 
@@ -77,10 +84,14 @@ q-value. The [manual](docs/manual.md) explains every setting and column.
 
 ## Limits
 
-- **The subset test is validated only for well-expressed genes:** where the
-  sparser group averages at least 128 reads per sample. Below that its
-  p-values can be anti-conservative, and `wade()` warns how many tested genes
-  fall there. The area test holds at every expression level.
+- **The subset test is validated where the sparser group averages at least 32
+  reads per sample.** Below that its p-values can be anti-conservative when
+  every case carries a fold, and `wade()` warns how many tested genes fall
+  there. The area test holds at every expression level.
+- **The subset test's calls depend on its thinning draw.** Thinning keeps the
+  test valid at low counts, but which reads it keeps is random. On TCGA
+  prostate two seeds agreed on 70% of the genes either called (81% at 128
+  reads and above). The subset's side, share, fold and rarity do not move.
 - **Every sample is thinned until its size factor equals the smallest**, so
   remove failed or unusually shallow libraries first.
   `result.params["depth_equalized"]` is the share of its reads the median
@@ -91,8 +102,10 @@ q-value. The [manual](docs/manual.md) explains every setting and column.
   harmless.
 - **The area test's null is one distribution for both groups.** Genes whose
   groups differ only in spread can be called too; their area stays near zero.
-- **Samples must be independent.** Strata and paired designs are not
-  supported yet.
+- **Samples must be exchangeable,** across the cohort or within the strata
+  you pass. Strata cannot separate a study effect from a condition that
+  coincides with it, or bring in external controls. Paired designs are not
+  validated yet.
 
 ## Evidence
 
@@ -117,16 +130,24 @@ binomially to known depths and folds.
   97% of the calls at 128 or more reads per sample.
 - **Speed.** Each gene's shuffles stop once its BH decision is settled. The
   decisions are exactly those of finished runs, and the TCGA breast
-  transcriptome (25,328 genes × 1,083 samples) runs in 27 seconds instead of
-  89 minutes.
-- **The subset test** held its level at or above 128 reads per sample across
-  folds from 0.5 to 4 and every depth arm measured (worst 1.4% at p ≤ 0.01).
-  In simulation it recovered a tenth of the cases raised 8× or more, on the
-  right side, with precision 0.96–1.00.
+  transcriptome (25,328 genes × 1,083 samples) runs in 42 seconds; finished
+  runs took 89 minutes.
+- **The subset test** held its level at or above 32 reads per sample across
+  folds from 0.5 to 4, depth gaps of 2× either way and three designs: its
+  worst share at p ≤ 0.01 was 1.9%, where an exact test reaches 1.8% by
+  chance. Genes that read zero in half the tumours stay near their level
+  (at most 1.45% at p ≤ 0.01). In
+  simulation it recovered a tenth of the cases raised 8× or more, on the
+  right side, with precision 0.96–1.00, and called 95–100% of them.
+- **Strata** hold the level where study effects confound unstratified tests.
+  TCGA and GTEx prostate normals, relabelled with case shares that differ by
+  study, were called at p ≤ 0.01 in 42% (area) and 25% (subset) of genes
+  unstratified, against 0.78% and 0.68% stratified.
 - **On TCGA prostate** the subsets found for ERG, ETV1, ETV4 and FLI1 held no
   fusion-negative tumour and 89–100% of the fusion-positive ones, annotations
-  WADE never saw. With 52 controls, the small ETV1 and ETV4 subsets are called
-  near the threshold (q = 0.029 and 0.038 with every run finished).
+  WADE never saw. With 52 controls the small subsets sit near the threshold:
+  ETV1's is called, and ETV4's is called under one seed and not another
+  (q = 0.061).
 
 Details, the measured limits and how to reproduce them are in
 [validation](docs/validation.md).
