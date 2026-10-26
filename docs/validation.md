@@ -354,8 +354,10 @@ At 250:250:
 - **Raised subsets are found on their side, nearly exactly, in all three
   designs** (250:250, 500:50 and 50:500). A tenth of the cases raised 8× or
   more, alone or above a halved majority, is recovered with precision
-  0.96–1.00 and significant in 98–100% of genes. The split and its scores
-  read normalized counts, unchanged by the thinned test.
+  0.96–1.00 and significant at p ≤ 0.05 in 98–100% of genes. At 500:50 few
+  pass BH over a whole transcriptome
+  ([confirmation](#confirmation-protocol-version-7)). The split and its
+  scores read normalized counts, unchanged by the thinned test.
 - **Modest subsets are called a little less often than by the rescaled
   test.**
   - At 250:250, a tenth of the cases at 4× is called in 78% of genes,
@@ -643,17 +645,132 @@ normals differ in most genes, so GTEx normals pooled as controls would
 confound study with condition. Strata do not help: a GTEx stratum holds only
 controls and is left out.
 
-## Earlier confirmation (protocol version 6)
+## Confirmation (protocol version 7)
 
-Protocol version 6 confirmed the procedure as it stood before this build:
+**The build passed all 27 checks** of a confirmation on fresh seeds. Its
+protocol and script were frozen at commit `74c0752` on 26 October 2026,
+before any of its data existed (`research/protocols/confirmation-v7.json`,
+`research/confirm.py`; outputs in `.release/0.2.0/confirmation-v7`).
 
-- the mean test on unthinned counts;
-- the subset test's previous construction.
+- **The rule.** Each check compares an error rate with an acceptable and an
+  unacceptable value:
+  - per-gene null rates and false discovery proportions: the nominal level,
+    and 1.5× it;
+  - the chance of any discovery in a transcriptome with no change: the
+    level, and 2× it;
+  - the false discovery proportion of the area and subset lists combined:
+    2× and 3× the level.
+- **The decision.** A check fails if its estimate lies significantly above
+  the acceptable value, one-sided at 0.05/27, so the 27 checks share a 5%
+  chance of any false failure. Each also needed power 0.9 at the
+  unacceptable value at its realized size; all had 0.905 or more.
+- **The arms:**
+  - *count-model nulls:* designs 222:223, 40:405 and 405:40 at depths 1 and
+    1/8, crossed with eight arms of folds (½ to 4) and depth gaps (½ to 2×,
+    and TCGA prostate's own), every 4th gene;
+  - *TCGA genes under random labels:* prostate at 40:405, 222:223 and
+    405:40, breast at 88:883, 485:486 and 883:88, with a split per gene;
+  - *strata:* the two simulated-study designs with batch effects of 0 and
+    0.5, TCGA prostate relabelled within its sites, the real contrast's site
+    layout, and TCGA with GTEx normals, 16,000 genes per set;
+  - *simulated transcriptomes* of 16,384 genes through `wade()` itself, with
+    decision-based stopping: 480 with no change and 60 with 960 planted
+    changes each, at 250:250, 500:50 and 50:500;
+  - *biology*, descriptive: the notebooks' fusion and amplicon subsets
+    ([On TCGA tumours](#on-tcga-tumours)).
+- **The per-gene arms** give each gene its own labelling, which `wade()`
+  cannot take, so they run `wade()`'s functions with its settings and every
+  run finished. A preflight found them equal to `wade()`, with and without
+  strata.
+- **Cost.** About 4.2 hours with six threads on a shared 16-core laptop:
+  count model 54 minutes, real labels 5, strata 24, and 2.9 hours of
+  `wade()` time for the 540 transcriptomes (about 19 seconds each).
 
-It ran on 120 fresh simulated transcriptomes (`research/confirm.py`, outputs
-in `.release/0.2.0/confirmation-*`). Its numbers do not describe this build.
-The confirmation of this build, protocol version 7, is pending
-([issues](../ISSUES.md)).
+**Per-gene null rates.** The area test's nulls have no fold. The subset
+test's are counted in its validated range (32 or more reads per sample in
+the lower group) and, in the count-model and strata arms, include folds
+carried by every case.
+
+| Arm | Test | Null genes | p ≤ 0.05 | p ≤ 0.01 | p ≤ 0.001 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Count model | area | 145,488 | 5.00% | 0.99% | 0.084% |
+| | subset | 158,625 | 4.93% | 0.96% | 0.086% |
+| TCGA, random labels | area | 148,722 | 5.03% | 1.06% | 0.115% |
+| | subset | 105,056 | 4.96% | 0.99% | 0.079% |
+| Strata | area | 112,000 | 5.05% | 1.00% | 0.107% |
+| | subset | 147,821 | 5.01% | 0.98% | 0.097% |
+
+**Lists over a transcriptome.** q is BH's adjusted p-value. The subset
+lists keep genes in the validated range, and count a call on a gene changed
+in every case as false.
+
+| Quantity | Test | Matrices | q ≤ 0.05 | q ≤ 0.1 |
+| --- | --- | ---: | ---: | ---: |
+| Any discovery, no change | area | 480 | 5.6% | 10.2% |
+| | subset | 480 | 1.5% | 1.9% |
+| False discovery proportion, changes planted | area | 60 | 4.8% | 9.3% |
+| | subset | 60 | 2.2% | 5.1% |
+| | both lists | 60 | 4.4% | |
+
+- **On real genes the area test runs a little above its level at small
+  p:** 1.06% at p ≤ 0.01 and 0.115% at 0.001, inside the tolerance. The
+  model and strata arms give 0.99–1.00% and 0.084–0.107%.
+- **Below its range the subset test is anti-conservative under a fold,** as
+  measured above. In the count-model arm it rejected 21% of nulls at
+  p ≤ 0.05 below 8 reads and 5.35% at 8–32. On real genes under random
+  labels, with no fold, it rejected 5.44% and 5.02%.
+- **The subset lists run below their level:** 1.5% of the transcriptomes
+  with no change had any subset discovery at q ≤ 0.05.
+
+**Power** (`power.tsv`). These are the shares of planted genes called on
+their side at q ≤ 0.05, for genes with baseline means of 5 counts or more
+(960 per cell). These matrices plant 16 times as many changes as protocol
+version 6's, which loosens BH's cutoff, so the two versions' power is not
+comparable.
+
+| Planted change | Test | 250:250 | 500:50 | 50:500 |
+| --- | --- | ---: | ---: | ---: |
+| Every case × 1.5 | area | 94% | 9% | 62% |
+| | Wilcoxon | 96% | 48% | 51% |
+| Every case × ⅔ | area | 88% | 32% | 26% |
+| | Wilcoxon | 94% | 46% | 46% |
+| A tenth of the cases × 16 | area | 99% | 0% | 90% |
+| | subset | 100% | 1% | 70% |
+| A fifth of the cases × 4 | area | 94% | 0% | 65% |
+| | subset | 72% | 5% | 33% |
+| Every case × ½, a tenth × 8 | subset | 100% | 1% | 82% |
+| Same mean, wider spread | subset | 92% | 38% | 53% |
+
+- **With ten cases per control, the area test misses most modest shifts.**
+  At 500:50 it called 9% of genes raised 1.5× in every case, against 62% at
+  50:500 and 48% for the Wilcoxon comparator.
+  - Raising every case's level also widens the cases' spread. A shuffled
+    difference of means stays exact, but it loses power when the larger
+    group is the more variable one, and gains it in the reverse design
+    ([research ideas](research-ideas.md), section 2.4).
+  - TCGA's tumour-to-normal designs are of this kind.
+- **At 500:50 the subset test called almost none of the planted subsets:**
+  1–2% of the raised tenths, at any fold. This is the floor seen with TCGA
+  prostate's 52 controls ([rarity](#rarity)).
+  - Any shuffle that puts none of the 50 raised cases among the 50 controls
+    repeats the planted split: 0.67% of labellings.
+  - A test valid for exchangeable labels can therefore call such a subset
+    at level α with probability no more than about α/0.0067.
+  - BH's cutoff in these transcriptomes was about 2 × 10⁻⁴ (53 subset calls
+    of 14,480 tested genes in the first), which allows about 3%.
+  - With the full budget, the planted genes' p-values sit at that chance:
+    medians 0.0032–0.0072 (`research/subset_recovery.py`, section `floor`,
+    `subset-recovery-floor-20261026.txt`).
+  - At 250:250 and 50:500 the chance is 1.6 × 10⁻⁸ and 5.1 × 10⁻⁶, and the
+    same genes reach the budget's limit, 10⁻⁶.
+  - The rescaled test of protocol version 6 called more at 500:50 than that
+    bound allows a valid test: all of a tenth at 1,024× above a halved
+    majority, and 20% of a tenth at 16×.
+
+Protocol version 6 confirmed the procedure as it stood before this build
+(the mean test on unthinned counts and the rescaled subset test), on 120
+simulated transcriptomes (`.release/0.2.0/confirmation-v6-20260928`). Its
+numbers do not describe this build.
 
 ## Limits of this evidence
 

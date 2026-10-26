@@ -73,10 +73,11 @@ PYTHONPATH=src:research python research/subset_recovery.py
 PYTHONPATH=src:research python research/subset_significance.py
 ```
 
-The confirmation (protocol version 6) took 26 minutes of `wade()` time on a
-quiet 16-core laptop and 72 on a busy one, for the procedure before depth
-equalization. It refuses to overwrite an existing output directory
-(`--resume` continues one).
+The confirmation (protocol version 7) took about 4.2 hours with six threads
+on a shared 16-core laptop, 2.9 of them in its 540 simulated transcriptomes.
+It refuses to overwrite an existing output directory (`--resume` continues
+one) and to run with uncommitted changes to the package, the script or the
+protocol.
 
 ## Notebooks
 

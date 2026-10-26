@@ -103,6 +103,15 @@ q-value. The [manual](docs/manual.md) explains every setting and column.
   harmless.
 - **The area test's null is one distribution for both groups.** Genes whose
   groups differ only in spread can be called too; their area stays near zero.
+- **Unbalanced designs cost power.** With ten cases per control, in
+  simulation:
+  - the area test called 9% of genes raised 1.5× in every case, where a
+    Wilcoxon test called 48%;
+  - a subset of a tenth of the cases was rarely called (1–2%). With 50
+    controls, 0.67% of random labellings also leave every one of those cases
+    out of the controls, so their p-values sit near that chance, too high
+    for a transcriptome-wide cutoff. Such subsets are still found and
+    described.
 - **Samples must be exchangeable,** across the cohort or within the strata
   you pass. Strata cannot separate a study effect from a condition that
   coincides with it, or bring in external controls. Paired designs are not
@@ -112,7 +121,8 @@ q-value. The [manual](docs/manual.md) explains every setting and column.
 
 The evidence comes from an exact count-model reference built from 445 TCGA
 prostate tumours. The tumours are split at random into two groups and thinned
-binomially to known depths and folds.
+binomially to known depths and folds. A confirmation, predeclared and run on
+fresh seeds, then checked the finished build.
 
 - **The area test held its level in all 50 null cells.**
   - The cells span four designs (222:223, 40:405, 405:40 and 20:20), depths
@@ -139,7 +149,8 @@ binomially to known depths and folds.
   chance. Genes that read zero in half the tumours stay near their level
   (at most 1.25% at p ≤ 0.01). In
   simulation it recovered a tenth of the cases raised 8× or more, on the
-  right side, with precision 0.96–1.00, and called 98–100% of them.
+  right side, with precision 0.96–1.00, and 98–100% of them reached
+  p ≤ 0.05.
 - **Strata** hold the level where study effects confound unstratified tests.
   TCGA and GTEx prostate normals, relabelled with case shares that differ by
   study, were called at p ≤ 0.01 in 42% (area) and 28% (subset) of genes
@@ -149,6 +160,15 @@ binomially to known depths and folds.
   WADE never saw. With 52 controls the small subsets sit near the threshold:
   ETV1's is called, and ETV4's is called in some runs and not others
   (q = 0.031–0.054).
+- **The confirmation passed all 27 of its checks** (protocol version 7,
+  frozen before any of its data existed).
+  - Over 400,000 null genes per test (count-model, TCGA genes under random
+    labels, and stratified), the tests rejected 4.93–5.05% at p ≤ 0.05 and
+    0.079–0.115% at 0.001.
+  - In 480 simulated transcriptomes with no change, the area test made any
+    discovery at q ≤ 0.05 in 5.6% and the subset test in 1.5%.
+  - In 60 with planted changes, their false discovery proportions were 4.8%
+    and 2.2%.
 
 Details, the measured limits and how to reproduce them are in
 [validation](docs/validation.md).

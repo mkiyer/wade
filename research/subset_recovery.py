@@ -7,12 +7,18 @@ chose, the share of cases selected, precision, recall and the subset test (999 s
 A change planted in every case has no subset, and its test should stay near 5%. Unchanged
 genes show what the split finds in noise.
 
-    PYTHONPATH=src:research python research/subset_recovery.py
+The `floor` section asks why few controls cap the calls: it tests the planted tenths of the
+cases in the version-7 confirmation's first mixed matrix per design with the full budget, beside
+the chance that random labels leave every raised case out of the controls.
+
+    PYTHONPATH=src:research python research/subset_recovery.py [floor]
 """
 from pathlib import Path
 import json
+import sys
 
 import numpy as np
+from scipy.special import gammaln
 
 import wade
 from wade._means import expression, jittered
@@ -95,5 +101,41 @@ def report(rows, noise):
               f"subset p <= .05 in {np.mean(p <= .05):.1%}")
 
 
+def missed(n_case, n_control, raised):
+    """The chance that random labels put none of the raised samples among the controls,
+    C(n - raised, n_control) / C(n, n_control)."""
+    n = n_case + n_control
+    return np.exp(gammaln(n - raised + 1) + gammaln(n - n_control + 1) - gammaln(n - raised - n_control + 1)
+                  - gammaln(n + 1))
+
+
+def floor():
+    cfg = json.loads((ROOT / "research/protocols/confirmation-v7.json").read_text())
+    sim, proc = dict(cfg["arms"]["simulated"], seed_root=cfg["seed_root"]), cfg["procedure"]
+    budget = proc["max_permutations"]
+    for setting in datasets(sim):
+        if setting["panel"] != "mixed" or setting["replicate"] != 0:
+            continue
+        data = generate(sim, setting)
+        counts, cond = data["counts"], data["cond"]
+        normalization = wade.fit_normalization(counts)
+        factors = normalization.size_factors
+        nc, n0 = setting["n_case"], setting["n_control"]
+        raised = round(nc * .1)
+        res = wade.wade(counts, cond, normalization=normalization, test_genes=wade.filter_counts(counts, min_count=3, min_samples=2),
+                        direction="both", pvalues=proc["pvalues"], relative_error=proc["relative_error"],
+                        max_permutations=budget, fdr=proc["fdr"], seed=setting["permutation_seed"])
+        calls, tested = int((res.subset_padj <= proc["fdr"]).sum()), int(res.tested.sum())
+        print(f"\n{nc}:{n0}, a tenth of the cases ({raised}) raised: chance that random labels leave all of them "
+              f"out of the controls {missed(nc, n0, raised):.2g}; {budget:,} shuffles at most")
+        print(f"  the confirmation's run of this matrix: {calls} subset calls of {tested:,} tested genes at q <= {proc['fdr']}, "
+              f"so BH's cutoff p = {proc['fdr'] * calls / tested:.2g}")
+        for profile in ("subset_up_10pct_16x", "bulk_half_subset_up_10pct_32x", "bulk_half_subset_up_10pct_1024x"):
+            genes = np.flatnonzero((data["profile"] == profile) & (data["baseline_mean"] >= 5))
+            p, _, _ = subset_test(counts[genes], factors, cond, genes, direction="both", stop=25, maximum=budget, seed=1)
+            print(f"  {profile:34s} {len(genes)} genes: subset p median {np.median(p):.2g}, "
+                  f"range {p.min():.2g} to {p.max():.2g}")
+
+
 if __name__ == "__main__":
-    main()
+    floor() if sys.argv[1:] == ["floor"] else main()

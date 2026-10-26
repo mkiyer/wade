@@ -2,33 +2,35 @@
 
 ## Before releasing 0.2.0
 
-1. **Confirm the build (protocol version 7).**
+1. **Confirm the build (protocol version 7).** *Done 26 October 2026: all 27
+   checks passed*
+   ([validation](docs/validation.md#confirmation-protocol-version-7)).
    - *The build:*
      - the area test on counts thinned until every sample's size factor
        equals the smallest;
      - the area and the area fraction as effects;
      - the subset test on depth-equalized counts, its fold taken out of the
-       higher group by thinning (25 October 2026), with its validated range
-       of 32 reads per sample and a warning below it;
+       higher group by thinning and its walk averaged over four thinning
+       draws (25 October 2026), with its validated range of 32 reads per
+       sample and a warning below it;
      - strata (25 October 2026): shuffles within strata, the stratified
        saddlepoint, thinning within each stratum, Mantel–Haenszel effects,
        and the subset test's one fold and level per stratum;
      - no log2 scale and no `subsets="either"`.
-   - *Measured so far* under the count-model reference, on TCGA prostate with
-     its own labels, on the recovery simulations, and for strata against
-     exact enumeration, simulated studies and real relabelling nulls
-     ([docs/validation.md](docs/validation.md)).
-   - *Protocol version 7 must add* stratified designs: the two simulated
-     study designs, the TCGA site layout and the TCGA–GTEx merge
-     ([strata plan](docs/strata-plan.md), decision 7).
-   - *Pending:* the fresh-seed confirmation, protocol version 7
-     ([plan](docs/subset-null-plan.md), section 4, step 1):
-     - freeze first;
-     - predeclare quantities, tolerances and simulation sizes;
-     - run complete-null and partial-null matrices;
-     - validate at the thresholds users meet.
-     `research/confirm.py` runs the build. Bump the protocol file's version
-     and seed root before running it.
+   - *The confirmation* (`research/protocols/confirmation-v7.json`) was
+     predeclared and frozen at commit `74c0752` before any of its data
+     existed. Its 27 checks, each with power 0.9 at an unacceptable error
+     rate, share a 5% chance of any false failure.
+     - Per-gene null rates over more than 400,000 genes per test:
+       4.93–5.05% at p ≤ 0.05 and 0.079–0.115% at 0.001.
+     - Simulated transcriptomes: any discovery at q ≤ 0.05 in 5.6% (area)
+       and 1.5% (subset) of 480 with no change; false discovery proportions
+       4.8% and 2.2% over 60 with planted changes.
+     - Power, descriptive: with ten cases per control the area test called
+       9% of genes raised 1.5× in every case (Wilcoxon 48%), and the subset
+       test 1–2% of raised tenths, a floor any valid shuffle test shares.
+     - `research/confirm.py --output .release/0.2.0/confirmation-v7`, about
+       4.2 hours with six threads; `--evaluate` scores the checks.
 2. **Review.** The author approves:
    - the rendered demo, prostate and breast notebooks, all re-rendered on
      25 October 2026 with strata and the subset test's four thinning draws
@@ -123,8 +125,9 @@ The ideas and their evidence are in
   - *The subset test.* One fold shared by every stratum and a level per
     stratum, by thinning (S4b, thinned). Four other constructions failed on
     small or lopsided strata, or under a fold.
-  - *Left:* confirmation (item 1); `notebooks/rna100k.qmd`, which blocks
-    the RNA100K compendium by study, can now run.
+  - *Confirmed* with stratified designs (item 1). *Left:*
+    `notebooks/rna100k.qmd`, which blocks the RNA100K compendium by study,
+    can now run.
   - Pairing and continuous covariates remain out of scope.
 
 ## After 0.2.0

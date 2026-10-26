@@ -120,7 +120,9 @@ and 20 on 25 October 2026.
 
 ## 4. Next steps
 
-1. **Confirm the build (protocol version 7), then release.**
+1. **Confirm the build (protocol version 7), then release.** *Confirmed 26
+   October 2026: all 27 checks passed
+   ([validation](validation.md#confirmation-protocol-version-7)).*
    - Freeze first: the normalization, the thinning, the filtering, the
      direction, the Monte Carlo stopping and both statistics.
    - Predeclare, for each arm, the quantity, a tolerance and the simulation
