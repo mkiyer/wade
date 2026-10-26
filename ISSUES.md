@@ -16,10 +16,8 @@ The work queue. Finished work keeps a one-line note; its evidence is in
      [data contract](docs/tcga-examples.md#inputs-and-provenance): the
      versions of the `mibulkrnaseq` workflow and of STAR. The release,
      genome, annotation and gene-ID join are recorded there already.
-3. **Re-render the notebooks.** The 0.2.0 cleanup changed the package
-   source and the notebooks' text (subtitles, captions, the settings they
-   state), so the demo, prostate and breast notebooks need a render from the
-   release commit; their results should not change.
+3. **Re-render the notebooks.** *Done 26 October 2026:* rendered from
+   `ed8b7fb`; the marker tables and transcriptome calls are unchanged.
 4. **Publish.** With the author, tag `v0.2.0` on `main`; CI tests every
    platform and publishes to PyPI.
 
