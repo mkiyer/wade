@@ -355,16 +355,17 @@ min(s)/s_j, where s are the size factors of the normalization you fitted.
   equalizes the depth the controls measure.
 - The reported means, areas and folds use every read; only the tests use the
   thinned counts. The subset test thins the same way, and then takes the
-  cases' common fold out of the higher group by thinning it further
+  cases' common fold out of the higher group by thinning it further, in four
+  independent draws whose walks it averages
   ([the validated range](#the-subset-tests-validated-range)).
 - With strata, each stratum is thinned to its own smallest size factor.
 
 The thinning is random and seeded like the shuffles, so a run is reproducible.
 Genes near a threshold can move between runs with different seeds. The subset
-test's calls move most, because which reads its thinning keeps decides calls
-near the threshold. On TCGA prostate two seeds agreed on 70% of the genes
-either called, and on 81% at 128 reads and above; the area test's calls
-agreed on 93% and 97%
+test's calls move most, because which reads its thinning keeps can decide calls
+near the threshold, so it averages four draws. On TCGA prostate two seeds
+agreed on 81% of the genes either called, and on 90% at 128 reads and above
+(70% and 81% with one draw); the area test's calls agreed on 93% and 97%
 ([validation](validation.md#the-subset-test-under-the-count-model)). A
 subset's side, share, fold and rarity do not move with the seed: rank subsets
 by them, and read a call near the threshold as one draw.
@@ -429,11 +430,14 @@ group averages at least 32 reads per sample
 - **What fails below 32.** A fold that every case carries, at low counts. The
   fold is estimated from the data, and its error reads as a subset. Zero-rich
   genes are not the problem: genes that read zero in half the tumours stay
-  near their level (at most 1.45% at p ≤ 0.01).
+  near their level (at most 1.25% at p ≤ 0.01).
 - **What the test does about depth.** It thins every sample to equal depth,
   and takes the cases' common fold out of the higher group by thinning rather
   than rescaling. A difference in depth between the groups therefore no
   longer reads as a subset.
+- **Four draws.** The thinning is drawn four times, and each shuffle's score
+  is the mean of the four walks, so that which reads one draw keeps does not
+  decide a call. It costs four walks per shuffle.
 - **The warning.** `wade()` warns how many tested genes fall below 32, and
   `result.params["subset_validated_genes"]` counts those at or above. Genes
   below are still tested and reported.
@@ -467,8 +471,8 @@ which zeros fall inside a subset depends on the seed.
 | `area_fraction` | `area / (case_mean + control_mean)`, between −1 and 1 |
 | `log2fc` | `log2(case_mean / control_mean)`: the fold of the group means, ±inf where a group has no reads |
 | `area_pvalue`, `area_padj` | The area's p-value, on depth-equalized counts, and its BH q-value over the tested genes |
-| `alignment_log2fc` | The common fold the subset test holds every case to: the Wasserstein-1 alignment of log(count + 1) |
-| `lorenz_gap` | The subset test's statistic: how far the cases' Lorenz curve falls below the controls' |
+| `alignment_log2fc` | The common fold every case is held to: the Wasserstein-1 alignment of log(count + 1), on normalized counts (the test estimates it again on each thinned draw) |
+| `lorenz_gap` | The subset statistic on normalized counts: how far the cases' Lorenz curve falls below the controls' (the test averages it over four thinned draws) |
 | `subset_side` | `"up"` above the rest of the cases, `"down"` below them, `"none"` |
 | `subset_fraction` | The subset's share of the cases (0 for none) |
 | `subset_log2fc` | The subset's fold over what the alignment predicts for it, on count + 1 |

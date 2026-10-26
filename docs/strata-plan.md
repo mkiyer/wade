@@ -78,7 +78,9 @@ wade(counts, cond)                                  # strata travel with the con
 stratum is first thinned to its own smallest size factor, and the fold is
 taken out of the higher group by thinning, as the unstratified test does since
 25 October 2026 (`strata-thinned-20261025.txt`; the measurements in section 5
-below are of S4b as first prototyped, by rescaling).
+below are of S4b as first prototyped, by rescaling). Like the unstratified
+test, it averages its walk over four thinning draws
+(`strata-shipped-20261025.txt`).
 - **The null.** Within each stratum, every case carries one fold of that
   stratum's controls, the same fold in every stratum. Strata may differ in
   level: depth, batch scale, composition.

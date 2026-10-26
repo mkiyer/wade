@@ -73,8 +73,7 @@ impl Grid {
 /// need not wait on one another.
 fn totals(values: &[f64]) -> (f64, f64) {
     let (mut sum, mut size) = ([0.0; 4], [0.0; 4]);
-    let lanes = values.chunks_exact(4);
-    let rest = lanes.remainder();
+    let (lanes, rest) = values.as_chunks::<4>();
     for lane in lanes {
         for i in 0..4 {
             sum[i] += lane[i];
@@ -322,30 +321,48 @@ impl<'a> Walker<'a> {
     }
 }
 
-/// Validated views of the pooled genes to walk.
+/// Validated views of the pooled genes to walk: each gene's draws are consecutive rows.
 struct Pool<'a> {
     genes: usize,
+    draws: usize,
     n: usize,
     values: &'a [f64],
     at: &'a [i64],
 }
 
 impl<'a> Pool<'a> {
-    fn new(pooled: &'a PyReadonlyArray2<'a, f64>, order: &'a PyReadonlyArray2<'a, i64>) -> PyResult<Self> {
-        let (genes, n) = pooled.as_array().dim();
-        if !pooled.is_c_contiguous() || !order.is_c_contiguous() || order.as_array().dim() != (genes, n) {
-            return Err(PyValueError::new_err("pooled values and order must be C-ordered genes x samples"));
+    fn new(pooled: &'a PyReadonlyArray2<'a, f64>, order: &'a PyReadonlyArray2<'a, i64>, draws: usize) -> PyResult<Self> {
+        let (rows, n) = pooled.as_array().dim();
+        if !pooled.is_c_contiguous() || !order.is_c_contiguous() || order.as_array().dim() != (rows, n) {
+            return Err(PyValueError::new_err("pooled values and order must be C-ordered rows x samples"));
+        }
+        if draws == 0 || !rows.is_multiple_of(draws) {
+            return Err(PyValueError::new_err("the rows must hold the same number of draws for every gene"));
         }
         let (values, at) = (pooled.as_slice()?, order.as_slice()?);
         if n == 0 || at.iter().any(|&i| i < 0 || i as usize >= n) {
             return Err(PyValueError::new_err("invalid walk inputs: shapes or sample order"));
         }
-        Ok(Pool { genes, n, values, at })
+        Ok(Pool { genes: rows / draws, draws, n, values, at })
     }
 
-    fn walker<'g>(&'g self, grid: &'g Grid, g: usize, side: Side) -> Walker<'g> {
-        let row = g * self.n..(g + 1) * self.n;
-        Walker::new(grid, &self.values[row.clone()], &self.at[row], side)
+    /// Gene g's walkers, one for each of its draws.
+    fn walkers<'g>(&'g self, grid: &'g Grid, g: usize, side: Side) -> Draws<'g> {
+        Draws((0..self.draws).map(|d| {
+            let row = (g * self.draws + d) * self.n..(g * self.draws + d + 1) * self.n;
+            Walker::new(grid, &self.values[row.clone()], &self.at[row], side)
+        }).collect())
+    }
+}
+
+/// One gene's walkers, one per thinning draw. Its score under a labelling is the mean of theirs, so
+/// the gene's one stream of shuffles is compared with one observed mean.
+struct Draws<'a>(Vec<Walker<'a>>);
+
+impl Draws<'_> {
+    fn score(&mut self, labels: &[u8]) -> f64 {
+        let total: f64 = self.0.iter_mut().map(|walker| walker.score(labels)).sum();
+        total / self.0.len() as f64
     }
 }
 
@@ -361,14 +378,16 @@ fn cases_in(labels: &[u8], n: usize) -> PyResult<usize> {
     Ok(n1)
 }
 
-/// Each gene's score under one labelling, by the walk the shuffles use: the observed statistic.
+/// Each gene's score under one labelling, by the walk the shuffles use: the observed statistic. With
+/// several draws per gene (consecutive rows), the mean of the draws' scores.
 #[pyfunction]
+#[pyo3(signature = (pooled, order, direction, labels, draws=1))]
 fn score<'py>(
     py: Python<'py>, pooled: PyReadonlyArray2<'py, f64>, order: PyReadonlyArray2<'py, i64>, direction: &str,
-    labels: PyReadonlyArray1<'py, u8>,
+    labels: PyReadonlyArray1<'py, u8>, draws: usize,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let side = Side::parse(direction)?;
-    let pool = Pool::new(&pooled, &order)?;
+    let pool = Pool::new(&pooled, &order, draws)?;
     let lab = labels.as_slice()?;
     if lab.len() != pool.n {
         return Err(PyValueError::new_err("one label per sample"));
@@ -376,7 +395,7 @@ fn score<'py>(
     let n1 = cases_in(lab, pool.n)?;
     let grid = Grid::new(n1, pool.n - n1);
     let scores: Vec<f64> = py.detach(|| {
-        (0..pool.genes).into_par_iter().map(|g| pool.walker(&grid, g, side).score(lab)).collect()
+        (0..pool.genes).into_par_iter().map(|g| pool.walkers(&grid, g, side).score(lab)).collect()
     });
     Ok(scores.into_pyarray(py))
 }
@@ -404,16 +423,18 @@ fn settled(exceed: u64, tried: u64, stop: u64, maximum: u64, threshold: f64) -> 
 /// Walk the shuffles in `labels`, which hold positions `first`, `first` + 1, ... of the run's one
 /// shuffle stream, for every gene not yet settled. Each gene resumes at its own position (the
 /// shuffles it has tried), counts shuffles and those scoring at least the observed score, and
-/// stops once settled. A gene whose position lies beyond this block waits for its own.
+/// stops once settled. A gene whose position lies beyond this block waits for its own. With several
+/// draws per gene (consecutive rows), each shuffle's score is the mean of the draws'.
 #[pyfunction]
+#[pyo3(signature = (pooled, order, direction, labels, observed, exceed, tried, stop, maximum, first, threshold, draws=1))]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn tally<'py>(
     py: Python<'py>, pooled: PyReadonlyArray2<'py, f64>, order: PyReadonlyArray2<'py, i64>, direction: &str,
     labels: PyReadonlyArray2<'py, u8>, observed: PyReadonlyArray1<'py, f64>, exceed: PyReadonlyArray1<'py, u64>,
-    tried: PyReadonlyArray1<'py, u64>, stop: u64, maximum: u64, first: u64, threshold: f64,
+    tried: PyReadonlyArray1<'py, u64>, stop: u64, maximum: u64, first: u64, threshold: f64, draws: usize,
 ) -> PyResult<(Bound<'py, PyArray1<u64>>, Bound<'py, PyArray1<u64>>)> {
     let side = Side::parse(direction)?;
-    let pool = Pool::new(&pooled, &order)?;
+    let pool = Pool::new(&pooled, &order, draws)?;
     let n = pool.n;
     let (lab, observed) = (labels.as_slice()?, observed.as_slice()?);
     let (hits, draws) = (exceed.as_slice()?, tried.as_slice()?);
@@ -435,11 +456,11 @@ fn tally<'py>(
             if settled(record.0, record.1, stop, maximum, threshold) || record.1 >= end {
                 return;
             }
-            let mut walker = pool.walker(&grid, g, side);
+            let mut walkers = pool.walkers(&grid, g, side);
             let bar = observed[g] - TIE_RTOL * observed[g].abs();       // this close ties with it
             for row in lab.chunks_exact(n).skip((record.1 - first) as usize) {
                 record.1 += 1;
-                if walker.score(row) >= bar {
+                if walkers.score(row) >= bar {
                     record.0 += 1;
                 }
                 if settled(record.0, record.1, stop, maximum, threshold) {

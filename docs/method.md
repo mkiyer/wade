@@ -228,13 +228,18 @@ latent level. The test therefore runs on counts made exchangeable by thinning.
    read with chance ρ when ρ < 1. The draw comes from a stream seeded by the
    run's seed and the gene's row (key 3). With the true fold, the groups'
    thinned counts are exchangeable under the null.
-4. **The shuffles.** Labels are shuffled over the jittered thinned counts and
-   every shuffle is walked, with no further registration.
+4. **Four draws.** Steps 1–3 are drawn four times, independently: draw 0 from
+   the streams above, draw d from the same keys with d appended. Each gene
+   then has four thinned pools.
+5. **The shuffles.** Labels are shuffled over the jittered thinned counts with
+   no further registration. Every shuffle walks all four pools, and its score
+   is the mean of their gaps, compared with the observed mean. One draw's
+   chance thinning therefore no longer decides a call on its own.
 
-`direction="both"` counts shuffles whose gap reaches the observed gap. `"up"`
-scores each walk's gap signed by its subset's side (positive above the rest of
-the cases) and counts those at least the observed signed gap; `"down"` the
-reverse. Stopping and p-values follow the shuffled rule above. A gene without a
+`direction="both"` counts shuffles whose mean gap reaches the observed one.
+`"up"` signs each walk's gap by its subset's side (positive above the rest of
+the cases), averages the signed gaps, and counts those at least the observed
+mean; `"down"` the reverse. Stopping and p-values follow the shuffled rule above. A gene without a
 subset on its normalized counts, the subset that is reported, has p = 1.
 
 The subset's description (its side, share, fold and gap) is read on normalized
@@ -244,16 +249,19 @@ The fold is estimated from the same data and held fixed through the shuffles,
 so the test is approximate. Under the count model it is calibrated where the
 sparser group expects at least 32 reads per sample
 (`params["subset_validated_reads"]`). Its worst share there at p ≤ 0.01 is
-1.9%, where an exact test with the true fold reaches 1.8% by chance
+1.8%, which an exact test with the true fold also reaches by chance
 ([validation](validation.md#the-subset-test-under-the-count-model)). Below 32
 reads it can be anti-conservative when every case carries a fold. `wade()` warns
 how many tested genes have a group mean of normalized counts below 32, and
 `params["subset_validated_genes"]` counts the rest.
 
-The thinning is one seeded draw, and near BH's threshold it decides calls: on
-TCGA prostate two seeds agreed on 70% of the genes either called, against 93%
-when only the shuffles change
-([validation](validation.md#the-subset-test-under-the-count-model)).
+Each pool alone is exchangeable under the null. The four together need not
+be exactly so: a sample's draws are more alike the more of its reads it keeps,
+and that share differs between samples. The averaged test was therefore
+measured, not derived. It holds the single draw's level at 32 reads and above,
+and steadies its calls ([validation](validation.md#the-subset-test-under-the-count-model)).
+Each draw costs one walk per shuffle, so the subset test takes about four
+times as long as one draw would.
 
 ## Rarity
 

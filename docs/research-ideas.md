@@ -55,6 +55,7 @@ label and f the gene's fold ([validation](validation.md)).
   25 October 2026 the fold is taken out by thinning rather than rescaling.
   Its claim is limited to genes whose sparser group expects at least 32
   reads per sample (128 before), and `wade()` warns about genes below that.
+  The walk's gap is averaged over four thinning draws (section 3.4).
 - **The count-model reference** as the validation instrument. It thins real
   tumours by the design alone, with a random split per gene. It is kept in
   `research/count_model.py`.
@@ -247,6 +248,63 @@ label and f the gene's fold ([validation](validation.md)).
   - With unequal exposures it fails like the package's subset test: up to
     24% at 2–8 expected reads and 21% at 8–32.
 - **Status.** Rejected. The exposures break it, not the fold.
+
+### 3.4 Pooled thinning draws — adopted: the mean gap of four draws
+
+- **What.** The shipped subset test thins once, and near BH's threshold that
+  one draw decides calls: on TCGA prostate two seeds agree on 70% of them
+  ([validation](validation.md#the-subset-test-under-the-count-model)).
+  `research/subset_pooled.py` combines K independent draws of the thinned
+  pool, all walked under the run's one shuffle stream.
+  - *Mean p:* each draw's p-value, averaged. Each draw alone is the shipped
+    test, and an average of valid p-values is valid within a factor of 2
+    under any dependence.
+  - *Mean gap:* the walk's score averaged over the draws, in one
+    Besag–Clifford run per gene. Not exact in principle: given its level, a
+    sample's draws are correlated by the share of its reads it keeps, which
+    differs between samples and groups.
+- **Evidence** (`subset-pooled-{seeds,grid,bimodal,power}-20261025.txt`).
+  - *Calibration,* worst share at p ≤ 0.01 over the count model's 48 data
+    sets:
+
+    | Construction | 2–8 | 8–32 | 32–128 | ≥ 128 |
+    | --- | ---: | ---: | ---: | ---: |
+    | One draw (shipped) | 15.4% | 1.75% | 1.79% | 1.94% |
+    | Mean p, 4 / 8 draws | 6.5% / 5.5% | 1.02% / 0.85% | 0.57% / 0.67% | 1.09% / 1.06% |
+    | Mean gap, 4 / 8 draws | 29.8% / 33.5% | 2.26% / 2.38% | 1.43% / 1.33% | 1.94% / 1.58% |
+
+  - *Zero-inflated genes* (GSTM1, ERAP2, PSPHP1, UGT2B17): every
+    construction near its level; the mean gap within 0.2 points of one
+    draw, the mean p slightly conservative.
+  - *Power,* planted subsets at p ≤ 0.01: equal within a point at 32 reads
+    and above. Below 32 the mean gap calls more and the mean p less: a
+    tenth of the cases at 8×, 2–8 reads, 72% / 66% / 61% (mean gap 8, one
+    draw, mean p 8).
+  - *TCGA prostate, seeds 1 and 2,* the share of either seed's calls that
+    both make:
+
+    | Construction | Calls (seed 1 / 2) | All | ≥ 128 reads | Time |
+    | --- | ---: | ---: | ---: | ---: |
+    | One draw | 4,936 / 4,898 | 70.3% | 81.0% | 1× |
+    | Mean p, 4 draws | 3,986 / 4,021 | 83.4% | 88.2% | 3.9× |
+    | Mean p, 8 draws | 3,845 / 3,851 | 86.9% | 90.0% | 7.9× |
+    | Mean gap, 4 draws | 5,579 / 5,685 | 80.2% | 89.5% | 10.2× |
+    | Mean gap, 8 draws | 5,724 / 5,815 | 84.7% | 91.5% | 19.9× |
+
+    New shuffles of one thinned pool agree on 93.6% at 128 reads and above:
+    the floor any number of draws can reach at 25 exceedances. The mean
+    gap's times are of a Python loop; a native tally would cost about K
+    times the shipped test. ETV4's subset is called under both seeds by the
+    mean gap (q 0.029–0.034); under the mean p of 8 draws it sits at the
+    threshold (0.050 and 0.051).
+- **Status.** The author adopted the mean gap of four draws on 25 October
+  2026, built into the native walk (`wade._subsets.DRAWS`); the shipped
+  test's own measurements are in [validation](validation.md). The mean gap
+  keeps the one-draw test's level and power where the test is validated,
+  and steadies its calls there; below 32 reads it is more anti-conservative
+  under a fold than one draw. The mean p, conservative everywhere at a fifth
+  of the calls, was set aside. `research/subset_pooled.py --prototype` reruns
+  the measurements above.
 
 ## 4. The subset test's registration
 

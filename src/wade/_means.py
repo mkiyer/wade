@@ -27,7 +27,17 @@ TIE_RTOL = 100 * EPS
 _ERFC = np.frompyfunc(erfc, 1, 1)
 
 
-def jittered(counts, rows, seed):
+def stream(seed, index, kind=None, draw=0):
+    """One gene's generator for one purpose: spawn key (row index,) for its jitter, (row index, kind)
+    for the rest (1 equalizes depth, 3 thins by the subset test's fold; the shuffles use (block, 2)).
+    The subset test's further thinning draws d = 1, 2, ... append d, the jitter's kind then being 0."""
+    key = (index,) if kind is None else (index, kind)
+    if draw:
+        key = (index, kind or 0, draw)
+    return np.random.default_rng(np.random.SeedSequence(seed, spawn_key=key))
+
+
+def jittered(counts, rows, seed, draw=0):
     """Counts plus independent Uniform(0, 1) jitter, each gene's from its own stream (seed, row index).
 
     Counts are discrete, and many samples share one, above all zero. The subset test's null moves
@@ -36,7 +46,7 @@ def jittered(counts, rows, seed):
     """
     out = np.array(counts, dtype=float)
     for row, index in zip(out, rows):
-        row += np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(index,))).random(len(row))
+        row += stream(seed, index, draw=draw).random(len(row))
     return out
 
 
@@ -61,7 +71,7 @@ def floors(factors, code=None):
     return out
 
 
-def equalized(counts, rows, factors, seed, code=None):
+def equalized(counts, rows, factors, seed, code=None, draw=0):
     """Counts thinned binomially until every sample's size factor equals the smallest, each gene
     from its own stream (seed, row index, 1).
 
@@ -75,8 +85,7 @@ def equalized(counts, rows, factors, seed, code=None):
     keep = np.broadcast_to(floors(factors, code) / factors, np.shape(counts))
     out = np.empty(np.shape(counts), np.int64)
     for i, (row, index) in enumerate(zip(counts, rows)):
-        out[i] = np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(index, 1))).binomial(
-            np.rint(row).astype(np.int64), keep[i])
+        out[i] = stream(seed, index, 1, draw).binomial(np.rint(row).astype(np.int64), keep[i])
     return out
 
 

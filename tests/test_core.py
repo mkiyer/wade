@@ -9,7 +9,8 @@ from scipy.stats import false_discovery_control
 
 import wade
 from wade._means import area_values, equalized, expression, jittered, mean_saddlepoint, mean_test
-from wade._subsets import split, subset_test, thinned
+from wade import _kernel
+from wade._subsets import split, subset_test, thinned, walks
 from wade.permutation import STREAM_BLOCK, stream_block
 from wade.pvalues import bound, sequential_p, settle, settled
 
@@ -577,15 +578,56 @@ def test_one_sided_subset_tests_split_the_shuffles_of_the_two_sided_test():
     x[10:20, :5] //= 8                                       # lowered subsets
     cond = np.r_[np.ones(20, int), np.zeros(20, int)]
     ones, rows = np.ones(40), np.arange(30)
-    run = lambda d: subset_test(x, ones, cond, rows, direction=d, stop=STOP, maximum=19, seed=6)    # 19 shuffles each
-    (_, both, tried), (_, up, _), (_, down, _) = run("both"), run("up"), run("down")
+    run = lambda d, k: subset_test(x, ones, cond, rows, direction=d, stop=STOP, maximum=19, seed=6, draws=k)
+    # One draw: a deeper subset on the observed side counts for that side; every other shuffle
+    # counts for the opposite one, and the two-sided test counts depth on either side.
+    (_, both, tried), (_, up, _), (_, down, _) = run("both", 1), run("up", 1), run("down", 1)
     _, side, *_ = split(thinned(x, ones, cond, rows, 6)[0], cond)       # the side of the walk the test shuffles
     ran = tried > 0
     assert ran.any() and np.all(tried[ran] == 19)
-    # A deeper subset on the observed side counts for that side; every other shuffle counts
-    # for the opposite one, and the two-sided test counts depth on either side.
     same, other = np.where(side > 0, up, down), np.where(side > 0, down, up)
     assert np.all(same[ran] <= both[ran]) and np.all(same[ran] + other[ran] >= 19)
+    # Several draws: "up" scores the mean of the draws' signed gaps and "down" its negative, so every
+    # shuffle still counts for one side or the other. (The draws may disagree on the observed side,
+    # so a side's count can exceed the two-sided count.)
+    (_, up, tried), (_, down, _) = run("up", 4), run("down", 4)
+    ran = tried > 0
+    assert ran.any() and np.all(up[ran] + down[ran] >= 19)
+
+
+def test_several_draws_score_the_mean_of_their_walks():
+    rng = np.random.default_rng(15)
+    genes, draws, n = 6, 3, 30
+    x = rng.poisson(30, (genes * draws, n)) + rng.random((genes * draws, n))
+    x[::draws, :3] *= 6                                      # a raised subset in each gene's first draw
+    cond = np.r_[np.ones(15, np.uint8), np.zeros(15, np.uint8)]
+    for direction in ("both", "up", "down"):
+        pooled, order, mean = walks(x, cond, np.ones(len(x)), direction=direction, draws=draws)
+        _, _, each = walks(x, cond, np.ones(len(x)), direction=direction)
+        assert mean.shape == (genes,)
+        assert np.allclose(mean, each.reshape(genes, draws).mean(axis=1), rtol=0, atol=1e-14)
+        # The tally compares each shuffle's mean with the observed mean, gene by gene.
+        labels = stream_block(cond, 0, 3)[:50]
+        scores = np.array([_kernel.score(pooled, order, direction, row, draws) for row in labels])
+        exceed, tried = _kernel.tally(pooled, order, direction, labels, mean, np.zeros(genes, np.uint64),
+                                      np.zeros(genes, np.uint64), 50, 50, 0, -np.inf, draws)
+        assert np.all(tried == 50)
+        assert np.array_equal(exceed, np.sum(scores >= mean - 100 * np.finfo(float).eps * np.abs(mean), axis=0))
+    with pytest.raises(ValueError, match="same number of draws"):
+        _kernel.score(pooled, order, "both", cond, 4)
+
+
+def test_one_draw_is_the_single_thinned_test_and_more_draws_use_new_streams():
+    rng = np.random.default_rng(16)
+    x = rng.poisson(25, (8, 40))
+    cond = np.r_[np.ones(20, np.uint8), np.zeros(20, np.uint8)]
+    factors, rows = np.exp(rng.normal(0, 0.3, 40)), np.arange(8)
+    one, fold = thinned(x, factors, cond, rows, 9)
+    four, folds = thinned(x, factors, cond, rows, 9, draws=4)
+    assert four.shape == (32, 40) and folds.shape == (8, 4)
+    assert np.array_equal(four[::4], one) and np.array_equal(folds[:, 0], fold)    # draw 0 is the single draw
+    for d in range(1, 4):
+        assert not np.array_equal(four[d::4], one)                                 # the others are new draws
 
 
 def test_table_and_subset_agree_for_every_gene():

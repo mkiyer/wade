@@ -31,8 +31,9 @@
      and seed root before running it.
 2. **Review.** The author approves:
    - the rendered demo, prostate and breast notebooks, all re-rendered on
-     25 October 2026 with strata and the thinned subset test (breast in
-     244 s, where it took 89 minutes before decision-based stopping);
+     25 October 2026 with strata and the subset test's four thinning draws
+     (breast in 454 s, where it took 89 minutes before decision-based
+     stopping);
    - the documents' figures, tables and claims.
 
    Record the TCGA count-pipeline provenance: workflow, genome and
@@ -65,13 +66,16 @@ The ideas and their evidence are in
   - The area test's calls below about 32 reads per sample move with the
     seed: on TCGA prostate, 80–86% of the genes one seed calls there are
     called by another, against 97% at 128 reads or more.
-  - The subset test's calls move more: 70% agree, 81% at 128 reads or more,
-    against 93% for the rescaled test and for new shuffles of one thinned
-    pool (`subset-seeds-20261025.txt`). More precise p-values do not help.
-  - *Candidate:* combine K thinned pools, by the gap averaged over them or
-    by their p-values. Each pool alone is exchangeable under the null. A
-    statistic of all K needs measuring, since a sample's K draws are more
-    alike the less it is thinned. It costs K times the walks.
+  - The subset test's calls move more. With one thinning draw 70% agreed,
+    81% at 128 reads or more, against 93% for the rescaled test and for new
+    shuffles of one thinned pool (`subset-seeds-20261025.txt`); more precise
+    p-values did not help. Four draws take it to 81% and 90%
+    (`subset-pooled-native-seeds-20261025.txt`).
+  - *Done 25 October:* the subset test averages its walk over four
+    thinning draws ([ideas](docs/research-ideas.md), section 3.4), natively,
+    at about four times its cost. It keeps the level and power at 32 reads
+    and above and steadies the calls there; below 32 it is more
+    anti-conservative under a fold than one draw.
   - Whether to offer a stability check is open.
 - **Rarity.**
   - **Done 2026-10-23:** `subset_rarity`, `rare_subsets()` and
@@ -102,8 +106,9 @@ The ideas and their evidence are in
   - **Done 2026-10-23:** decision-based stopping. Each gene's shuffles stop
     once its BH decision at `fdr` is settled, with exactly the decisions of
     finished runs (Fischer, Barry and Ramdas 2026). TCGA breast (25,328 genes
-    × 1,083 samples) went from 89 minutes to 27 seconds, and runs in 42
-    seconds with the thinned subset test of 25 October ([validation](docs/validation.md#decision-based-stopping)).
+    × 1,083 samples) went from 89 minutes to 27 seconds; with the subset
+    test's four thinning draws it took 158 seconds beside another project's
+    jobs ([validation](docs/validation.md#decision-based-stopping)).
   - **Remaining.** Measure 5,000–80,000 samples. A lone discovery, or genes
     right at BH's threshold, still need the full budget. Then:
     - vectorize the walk;

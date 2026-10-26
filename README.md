@@ -74,7 +74,7 @@ workflow, and the [demo](notebooks/demo.qmd) runs it.
 | `subset_log2fc` | Its fold over what the common fold predicts for it |
 | `subset_pvalue`, `subset_padj` | The test that every case carries one common fold, and its q-value |
 | `subset_rarity` | The share of genes whose subset is at least as rare: a size-matched rank that puts rare, strong subsets first |
-| `alignment_log2fc`, `lorenz_gap` | The common fold, and the subset test's statistic |
+| `alignment_log2fc`, `lorenz_gap` | The common fold, and the subset statistic on normalized counts (the test walks it on thinned counts) |
 | `status` | `tested`, `filtered` or `all_zero` |
 
 Each test has its own BH family over the tested genes. A subset describes
@@ -88,10 +88,11 @@ q-value. The [manual](docs/manual.md) explains every setting and column.
   reads per sample.** Below that its p-values can be anti-conservative when
   every case carries a fold, and `wade()` warns how many tested genes fall
   there. The area test holds at every expression level.
-- **The subset test's calls depend on its thinning draw.** Thinning keeps the
-  test valid at low counts, but which reads it keeps is random. On TCGA
-  prostate two seeds agreed on 70% of the genes either called (81% at 128
-  reads and above). The subset's side, share, fold and rarity do not move.
+- **The subset test's calls near the threshold depend on its thinning.**
+  Thinning keeps the test valid at low counts, but which reads it keeps is
+  random, so the test averages four draws. On TCGA prostate two seeds agreed
+  on 81% of the genes either called (90% at 128 reads and above, against 81%
+  with one draw). The subset's side, share, fold and rarity do not move.
 - **Every sample is thinned until its size factor equals the smallest**, so
   remove failed or unusually shallow libraries first.
   `result.params["depth_equalized"]` is the share of its reads the median
@@ -130,24 +131,24 @@ binomially to known depths and folds.
   97% of the calls at 128 or more reads per sample.
 - **Speed.** Each gene's shuffles stop once its BH decision is settled. The
   decisions are exactly those of finished runs, and the TCGA breast
-  transcriptome (25,328 genes × 1,083 samples) runs in 42 seconds; finished
-  runs took 89 minutes.
+  transcriptome (25,328 genes × 1,083 samples) ran in 158 seconds on a
+  shared laptop; finished runs of the earlier test took 89 minutes.
 - **The subset test** held its level at or above 32 reads per sample across
   folds from 0.5 to 4, depth gaps of 2× either way and three designs: its
-  worst share at p ≤ 0.01 was 1.9%, where an exact test reaches 1.8% by
+  worst share at p ≤ 0.01 was 1.8%, which an exact test also reaches by
   chance. Genes that read zero in half the tumours stay near their level
-  (at most 1.45% at p ≤ 0.01). In
+  (at most 1.25% at p ≤ 0.01). In
   simulation it recovered a tenth of the cases raised 8× or more, on the
-  right side, with precision 0.96–1.00, and called 95–100% of them.
+  right side, with precision 0.96–1.00, and called 98–100% of them.
 - **Strata** hold the level where study effects confound unstratified tests.
   TCGA and GTEx prostate normals, relabelled with case shares that differ by
-  study, were called at p ≤ 0.01 in 42% (area) and 25% (subset) of genes
-  unstratified, against 0.78% and 0.68% stratified.
+  study, were called at p ≤ 0.01 in 42% (area) and 28% (subset) of genes
+  unstratified, against 0.78% for each stratified.
 - **On TCGA prostate** the subsets found for ERG, ETV1, ETV4 and FLI1 held no
   fusion-negative tumour and 89–100% of the fusion-positive ones, annotations
   WADE never saw. With 52 controls the small subsets sit near the threshold:
-  ETV1's is called, and ETV4's is called under one seed and not another
-  (q = 0.061).
+  ETV1's is called, and ETV4's is called in some runs and not others
+  (q = 0.031–0.054).
 
 Details, the measured limits and how to reproduce them are in
 [validation](docs/validation.md).

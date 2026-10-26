@@ -133,7 +133,7 @@ def line(name, p, bins, alpha=0.01):
             + f" || {share(p, .05):.2%} / {share(p, .01):.2%} / {share(p, .001):.3%}")
 
 
-def grid(designs=((222, 223), (40, 405), (405, 40)), depths=(1, 1 / 8), every=4):
+def grid(designs=((222, 223), (40, 405), (405, 40)), depths=(1, 1 / 8), every=4, construct=None):
     ratio = cohort_ratio("prostate")
     arms = ((1, 1), (2, 1), (4, 1), (0.5, 1), (1, 0.5), (1, 2), (1, ratio), (2, 0.5))
     level = levels()
@@ -149,7 +149,7 @@ def grid(designs=((222, 223), (40, 405), (405, 40)), depths=(1, 1 / 8), every=4)
                 rows = np.flatnonzero(counts.any(axis=1))
                 rows = rows[rows % every == 0]
                 bins = np.digitize(level[rows] * depth * min(p1, p0), EDGES)
-                p = constructions(counts[rows], factors[rows], cond, rows, fold)
+                p = (construct or constructions)(counts[rows], factors[rows], cond, rows, fold)
                 print(f"\n{design[0]}:{design[1]}  depth 1/{round(1 / depth)}  f {fold:g}  d {exposure:.3g}  "
                       f"genes per bin {' | '.join(str(int(np.sum(bins == b))) for b in range(len(LABELS)))}  "
                       f"[{time.time() - start:.0f}s]", flush=True)
@@ -158,7 +158,7 @@ def grid(designs=((222, 223), (40, 405), (405, 40)), depths=(1, 1 / 8), every=4)
 
 
 def bimodal(splits=2_000, designs=((20, 20), (10, 40), (40, 10), (100, 100)),
-            genes=("GSTM1", "ERAP2", "PSPHP1", "UGT2B17")):
+            genes=("GSTM1", "ERAP2", "PSPHP1", "UGT2B17"), construct=None):
     d = tcga("prostate")
     tumour = d["cond"] == 1
     print(f"\n== bimodal: real zero-inflated or bimodal genes, the TCGA prostate tumours split at random "
@@ -174,13 +174,13 @@ def bimodal(splits=2_000, designs=((20, 20), (10, 40), (40, 10), (100, 100)),
             c, sf = raw[pick], factors[pick]
             sf = sf / np.exp(np.log(sf).mean(axis=1, keepdims=True))
             cond = np.r_[np.ones(design[0], np.uint8), np.zeros(design[1], np.uint8)]
-            p = constructions(c, sf, cond, np.arange(splits), 1.0)
+            p = (construct or constructions)(c, sf, cond, np.arange(splits), 1.0)
             print(f"  {design[0]:3d}:{design[1]:<3d} " + " | ".join(
                 f"{name} {share(v, .05):.2%} / {share(v, .01):.2%} / {share(v, .001):.3%}" for name, v in p.items()),
                 flush=True)
 
 
-def power(design=(222, 223), depths=(1, 1 / 8), every=4):
+def power(design=(222, 223), depths=(1, 1 / 8), every=4, construct=None):
     """Subsets planted by thinning: in each gene, a share of the cases keeps its reads and every other
     sample keeps 1/fold (a tenth at 8x, a fifth at 4x), under no common fold; share called at p <= 0.01
     by the sparser group's expected reads per sample (counted outside the subset)."""
@@ -206,7 +206,7 @@ def power(design=(222, 223), depths=(1, 1 / 8), every=4):
             rows = np.flatnonzero(counts.any(axis=1))
             rows = rows[rows % every == 0]
             bins = np.digitize(level[rows] * depth / fold, EDGES)
-            p = constructions(counts[rows], factors[rows], cond, rows, 1.0)
+            p = (construct or constructions)(counts[rows], factors[rows], cond, rows, 1.0)
             print(f"\n  depth 1/{round(1 / depth)}: {share_of:.0%} of the cases at {fold}x", flush=True)
             for name, v in p.items():
                 print(line(name, v, bins), flush=True)

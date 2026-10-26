@@ -169,11 +169,14 @@ Scripts in `research/` today, with outputs in `.release/0.2.0/`:
 | `count_model.py` `shipped` | `count-model-shipped-20260930.txt` | The area test, and the same test unthinned, under the count model |
 | `count_model.py` `composition` | `count-model-composition-area-20260930.txt` | The area test when a share of genes changes, with RLE refitted |
 | `count_model.py` `real` | `count-model-real-20260930.txt` | The area test on TCGA prostate with its own labels: depth kept, calls by level, the thinning seed |
-| `rarity.py` | `rarity-20261023.txt` | Rarity against the gap alone: markers, planted subsets, DNA alterations, contamination, stability |
-| `stopping.py` | `stopping-20261023.txt`, `stopping-whole-prostate-20261023.txt` | Decision-based stopping: exactness against finished runs, shuffles and time |
+| `rarity.py` | `rarity-4draws-20261025.txt` | Rarity against the gap alone: markers, planted subsets, DNA alterations, contamination, stability |
+| `stopping.py` | `stopping-4draws-20261025.txt`, `stopping-whole-prostate-4draws-20261025.txt` | Decision-based stopping: exactness against finished runs, shuffles and time |
 | `pvalue_accuracy.py` | `pvalue-accuracy-20260930.txt` | The computed area-test p-value against exact enumeration or 20 million shuffles |
-| `subset_recovery.py` | `subset-recovery-20260930.txt` | Planted subsets recovered on the confirmation's matrices |
-| `subset_significance.py` | `subset-significance-20260930.txt` | Calibration and significance as a subset grows |
+| `subset_recovery.py` | `subset-recovery-4draws-20261025.txt` | Planted subsets recovered on the confirmation's matrices |
+| `subset_significance.py` | `subset-significance-4draws-20261025.txt` | Calibration and significance as a subset grows |
+| `subset_range.py` | `subset-range-20261025.txt`, `subset-seeds-20261025.txt` | The subset test's constructions under the count model (rescaled, thinned, the W1 fixed point, exact); its calls under two seeds |
+| `subset_pooled.py` | `subset-pooled-native-{seeds,grid,bimodal,power}-20261025.txt`; with `--prototype`, `subset-pooled-{seeds,grid,bimodal,power}-20261025.txt` | The shipped test (four thinning draws) against one and eight: calibration, power, calls under two seeds; the prototype's mean p and mean gap |
+| `strata.py` | `strata-20261024.txt`; `thinned`, `shipped`, `real`, `gtex`: `strata-thinned-20261025.txt`, `strata-shipped-20261025.txt`, `strata-real-4draws-20261025.txt`, `strata-gtex-4draws-20261025.txt` | Strata: exactness, calibration on simulated studies and real relabellings, the real contrast by site, the TCGA–GTEx bridge |
 
 The research since retired ran from the scripts at commit `e4fd67f`:
 

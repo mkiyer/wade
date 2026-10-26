@@ -8,7 +8,7 @@ from math import ceil, isfinite
 from ._means import DIRECTIONS, advance_means, area_values, expression, jittered, mean_saddlepoint
 from ._rarity import rare_subsets, rarity, sample_load
 from ._means import floors
-from ._subsets import advance, aligned, split, thinned, walks
+from ._subsets import DRAWS, advance, aligned, split, thinned, walks
 from .io import Condition, Counts, as_counts, result_columns
 from .normalize import Normalization, _fingerprint, _indices, _named, fit_normalization
 from .permutation import permutation_space, strata_codes, stratum_columns, validate_labels
@@ -57,7 +57,8 @@ class WadeResult:
     (with strata, the weighted median of the strata's own). Under an alternative it is an
     alignment, not necessarily any subgroup's fold. lorenz_gap is the subset statistic read on
     normalized counts: the largest amount by which the cases' Lorenz curve of count + 1 falls below
-    the controls'; the test computes it on counts made exchangeable by thinning (see wade()). The
+    the controls'; the test computes it on counts made exchangeable by thinning, averaged over four
+    draws (see wade()). The
     subset is the cases that depart from the common fold (see subset()): subset_side says whether
     they are the upper ("up") or lower ("down") part of the cases, subset_fraction their share of
     the cases, and subset_log2fc their fold over what the alignment predicts for their quantiles
@@ -286,7 +287,9 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
     every sample is thinned to the smallest size factor, as for the area test, and the fold that
     best aligns the two groups' quantile functions of log(count + 1) (the Wasserstein-1 fold of
     those counts) is taken out of the higher group by thinning it further, not by rescaling it.
-    Labels are then shuffled over that pool. Each count first gets independent Uniform(0, 1)
+    This is done in four independent draws, and labels are shuffled over the four pools at once,
+    each shuffle scored by the mean of their walks, so that one draw's chance thinning does not
+    decide a call. Each count first gets independent Uniform(0, 1)
     jitter, seeded like the shuffles, so that no two values tie. The subset test is validated where
     the lower group averages at least 32 reads per sample; below that it can be anti-conservative
     when every case carries a fold, and wade() warns how many tested genes fall there.
@@ -407,16 +410,16 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
     area_live, subset_live = np.zeros(g, bool), np.zeros(g, bool)  # the genes each test shuffles
 
     def area_step(z, genes, threshold):
-        hits, draws = exceed[genes], tried[genes]
-        advance_means(z, tlabels, hits, draws, direction=direction, stop=stop, maximum=maximum,
+        hits, shuffles = exceed[genes], tried[genes]
+        advance_means(z, tlabels, hits, shuffles, direction=direction, stop=stop, maximum=maximum,
                       threshold=threshold, seed=seed, code=code)
-        exceed[genes], tried[genes] = hits, draws
+        exceed[genes], tried[genes] = hits, shuffles
 
     def subset_step(pooled, order, genes, threshold):
-        hits, draws = subset_exceed[genes], subset_tried[genes]
-        advance(pooled, order, observed[genes], tlabels, hits, draws, direction=direction, stop=stop,
-                maximum=maximum, threshold=threshold, seed=seed, code=code)
-        subset_exceed[genes], subset_tried[genes] = hits, draws
+        hits, shuffles = subset_exceed[genes], subset_tried[genes]
+        advance(pooled, order, observed[genes], tlabels, hits, shuffles, direction=direction, stop=stop,
+                maximum=maximum, threshold=threshold, seed=seed, code=code, draws=DRAWS)
+        subset_exceed[genes], subset_tried[genes] = hits, shuffles
 
     def area_input(counts_rows, genes):
         return area_values(counts_rows[:, keep], genes, factors[keep], seed, code)
@@ -429,9 +432,10 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
         return aligned(x[:, keep], tlabels, code)
 
     def tested_pool(counts_rows, genes):
-        """The values the subset test shuffles: thinned's pool, labels exchanged within strata."""
-        return walks(thinned(counts_rows[:, keep], factors[keep], tlabels, genes, seed, code)[0], tlabels,
-                     np.ones(len(genes)), direction=direction)
+        """The values the subset test shuffles: thinned's DRAWS pools of each gene, labels exchanged
+        within strata, each shuffle scored by the mean of the pools' walks."""
+        return walks(thinned(counts_rows[:, keep], factors[keep], tlabels, genes, seed, code, DRAWS)[0], tlabels,
+                     np.ones(len(genes) * DRAWS), direction=direction, draws=DRAWS)
 
     # The first pass runs every shuffled gene until BH at its top threshold, fdr itself, is settled
     # (pvalues.settle): certified below it, or finished. fdr=None finishes every run here.
@@ -494,7 +498,7 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
                       f"holds at every expression level.", UserWarning, stacklevel=2)
     kept = float(factors.min() / np.median(factors)) if design is None else \
         float(np.median(floors(factors[keep], code) / factors[keep]))
-    params = dict(algorithm="area-and-subset-v4", direction=direction,
+    params = dict(algorithm="area-and-subset-v5", direction=direction,
                   area_test="difference in means of counts thinned binomially until every size factor equals the smallest"
                   if design is None else "the cases' total of counts thinned within each stratum to its smallest size "
                   "factor and centred within it (the Cochran-Mantel-Haenszel sum), labels exchanged within strata",
@@ -506,6 +510,8 @@ def wade(counts, cond, *, direction="both", normalization="rle", test_genes=None
                   "area test), then the higher group thinned by one fold, the weighted median (weights n1s n0s / ns) "
                   "of the strata's own Wasserstein-1 folds of those counts, and each stratum moved to the cohort's "
                   "median log(count + 1); labels exchanged within strata",
+                  subset_draws=DRAWS,
+                  subset_score=f"the walk's gap averaged over {DRAWS} independent thinning draws",
                   subset_description="the subset, its side, share, fold and gap read on normalized counts" + (
                   "" if design is None else ", each stratum moved to the cohort's level and the cases carried back "
                   "by the strata's one fold"),

@@ -30,11 +30,11 @@ This is an intentional breaking release with no compatibility aliases.
   - It thins the depth-equalized counts of the higher group by the
     Wasserstein-1 fold of log(count + 1), rather than rescaling them: a
     thinned count keeps the count model exact.
-  - It then shuffles labels over the thinned counts.
+  - It thins in four independent draws, shuffles labels over them, and
+    scores each shuffle by the mean of the four walks, so that one draw's
+    chance thinning does not decide a call.
   - Its validated range is genes whose sparser group averages at least 32
     reads per sample, and `wade()` warns how many tested genes fall below it.
-  - Its calls near BH's threshold depend on the thinning draw, which the
-    seed sets.
 - `direction="both"` (default) tests both two-sided. `"up"` or `"down"`
   declares a side for both: an area in that direction, and a subset of cases
   beyond the rest on that side.

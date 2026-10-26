@@ -48,6 +48,8 @@ Sections (default: all):
              model's designs and batch settings, and the TCGA sites
   thinned    the adopted subset construction within strata (each stratum thinned to its smallest size
              factor, the higher group thinned by one fold) on the strata's nulls, with bins down to 8 reads
+  shipped    the package's own subset test as wade() runs it (its thinning draws), unstratified and with
+             strata, on the same nulls
   registration  why S1 fails on the TCGA sites: its statistic registered within each stratum and on raw
              values (exact without a fold)
   heterogeneous  folds that differ between strata: what the two-way construction, whose null has one
@@ -1044,8 +1046,14 @@ def real():
     thin = bh_adjust(subset_thinned(c, np.broadcast_to(f, c.shape), cond, code, rows))
     same = wade.wade(c, cond, normalization=wade.Normalization.from_size_factors(c, f, source="TCGA primary RLE"),
                      gene_names=names, seed=1)                  # the same samples, no strata
+    shipped = wade.wade(raw, cond_all, normalization=wade.Normalization.from_size_factors(raw, factors, source="TCGA "
+                        "primary RLE"), gene_names=names, seed=1, strata=site)     # the package, stratified by site
     print(f"  the same {keep.sum()} samples unstratified: area {np.sum(same.area_padj <= .05):,}, subset "
           f"{np.sum(same.subset_padj <= .05):,}", flush=True)
+    print(f"  the package with strata=site ({shipped.params['subset_draws']} thinning draws): area "
+          f"{np.sum(shipped.area_padj <= .05):,}, subset {np.sum(shipped.subset_padj <= .05):,}; with the same samples "
+          f"unstratified, area {np.sum((same.area_padj <= .05) & (shipped.area_padj <= .05)):,} and subset "
+          f"{np.sum((same.subset_padj <= .05) & (shipped.subset_padj <= .05)):,} in both", flush=True)
     print(f"  area called: unstratified {np.sum(res.area_padj <= .05):,}, stratified {np.sum(area <= .05):,}, both "
           f"{np.sum((res.area_padj <= .05) & (area <= .05)):,}", flush=True)
     print(f"  subset called: unstratified {np.sum(res.subset_padj <= .05):,}, stratified pooled (S2) {np.sum(subset <= .05):,}, "
@@ -1059,7 +1067,8 @@ def real():
             i = i[0]
             print(f"    {gene:7s} area q {res.area_padj[i]:.2g} -> {area[i]:.2g}; subset q {res.subset_padj[i]:.2g} "
                   f"(same samples {same.subset_padj[i]:.2g}) -> S2 {subset[i]:.2g}, S4 {twoway[i]:.2g}, S4b {onepass[i]:.2g}, "
-                  f"S4b thinned {thin[i]:.2g}", flush=True)
+                  f"S4b thinned {thin[i]:.2g}; the package stratified: area q {shipped.area_padj[i]:.2g}, subset q "
+                  f"{shipped.subset_padj[i]:.2g}", flush=True)
 
 
 def layout(genes_per_set=4_000):
@@ -1224,26 +1233,55 @@ def heterogeneous(genes_per_set=3_000):
             print(calibration_line(key, p, lowest), flush=True)
 
 
-def thinned(genes_per_set=3_000):
+def shipped_subset(counts, factors, cond, code, rows):
+    """The package's subset test as wade() runs it (wade._subsets.subset_test, its thinning draws), on the
+    strata holding both groups (code), or unstratified (code None)."""
+    from wade._subsets import subset_test as package_subset_test
+    cond = np.ascontiguousarray(cond, dtype=np.uint8)
+    factors = np.broadcast_to(factors, np.shape(counts))
+    keep, inner = np.ones(len(cond), bool), None
+    if code is not None:
+        keep = design(cond, code)[2][code]
+        inner = codes(np.asarray(code)[keep])
+        inner = None if inner.max() == 0 else inner
+    return package_subset_test(np.asarray(counts)[:, keep], np.ascontiguousarray(factors[:, keep]), cond[keep],
+                               np.asarray(rows), direction="both", stop=25, maximum=9_999, seed=1, code=inner)[0]
+
+
+THINNED = ("package", "thinned, unstratified", "S4b, scaled", "S4b, thinned")
+SHIPPED = ("shipped, unstratified", "shipped, S4b")
+
+
+def thinned(genes_per_set=3_000, which=THINNED):
     """The adopted subset construction with strata (S4b, thinned) against S4b as first built (scaled), the
     unstratified thinned test and the unstratified package, on the strata's nulls and planted subsets,
-    with bins down to 8 reads."""
+    with bins down to 8 reads. which=SHIPPED (section shipped) runs the package's own test instead,
+    unstratified and with strata, as wade() runs it."""
     from count_model import area_pvalues, tcga, tumours
     from count_model import rescaled_subset_test as subset_test
+    from wade._subsets import DRAWS
     edges = (8, 32, 128)
-    print("\n== thinned: the subset test with each stratum thinned to its smallest size factor and the higher group "
-          "thinned by one fold (S4b, thinned), against S4b scaled, the unstratified thinned test and the package; share "
-          "at p <= 0.01 by the smallest expected reads per sample (<8 | 8-32 | 32-128 | >=128), then overall at "
-          "0.05 / 0.01 / 0.001", flush=True)
+    if which == SHIPPED:
+        print(f"\n== shipped: the package's subset test as wade() runs it ({DRAWS} thinning draws), unstratified and "
+              f"with strata (S4b); share at p <= 0.01 by the smallest expected reads per sample (<8 | 8-32 | 32-128 | "
+              f">=128), then overall at 0.05 / 0.01 / 0.001", flush=True)
+    else:
+        print("\n== thinned: the subset test with each stratum thinned to its smallest size factor and the higher "
+              "group thinned by one fold (S4b, thinned), against S4b scaled, the unstratified thinned test and the "
+              "package; share at p <= 0.01 by the smallest expected reads per sample (<8 | 8-32 | 32-128 | >=128), then "
+              "overall at 0.05 / 0.01 / 0.001", flush=True)
 
     def compare(counts, factors, cond, code, rows, lowest):
         x = expression(jittered(counts, rows, 1), factors)
         one = np.zeros(len(cond), np.int64)
-        for key, p in (("package", subset_test(x, cond, direction="both", stop=25, maximum=9_999, seed=1)[0]),
-                       ("thinned, unstratified", subset_thinned(counts, factors, cond, one, rows)),
-                       ("S4b, scaled", subset_pooled(x, cond, code, values_of=onepass_values)),
-                       ("S4b, thinned", subset_thinned(counts, factors, cond, code, rows))):
-            print(calibration_line(key, p, lowest, edges=edges), flush=True)
+        runs = {"package": lambda: subset_test(x, cond, direction="both", stop=25, maximum=9_999, seed=1)[0],
+                "thinned, unstratified": lambda: subset_thinned(counts, factors, cond, one, rows),
+                "S4b, scaled": lambda: subset_pooled(x, cond, code, values_of=onepass_values),
+                "S4b, thinned": lambda: subset_thinned(counts, factors, cond, code, rows),
+                "shipped, unstratified": lambda: shipped_subset(counts, factors, cond, None, rows),
+                "shipped, S4b": lambda: shipped_subset(counts, factors, cond, code, rows)}
+        for key in which:
+            print(calibration_line(key, runs[key](), lowest, edges=edges), flush=True)
 
     raw = tumours()
     expressed = np.flatnonzero((raw > 0).mean(axis=1) >= 0.5)
@@ -1386,7 +1424,7 @@ def speed():
 
 SECTIONS = dict(exact=exact, accuracy=accuracy, model=model, sites=sites, gtex=gtex, real=real, layout=layout,
                 fold=fold, common=common, heterogeneous=heterogeneous, registration=registration, thinned=thinned,
-                speed=speed)
+                shipped=lambda: thinned(which=SHIPPED), speed=speed)
 
 if __name__ == "__main__":
     for section in sys.argv[1:] or list(SECTIONS):
