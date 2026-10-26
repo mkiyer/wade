@@ -2,8 +2,9 @@
 
 WADE reads no files, so there is nothing here about parsing. What is tested is
 the boundary it *does* own: accepting a count matrix in the shapes it arrives
-in, refusing input it cannot safely interpret, aligning a sample sheet by name
-without ever dropping a sample quietly, and writing the result with a manifest.
+in, refusing input it cannot safely interpret, and aligning a sample sheet by
+name without ever dropping a sample quietly. Writing results is tested in
+test_results.py.
 
 polars is used to build the frames because it is what the environment has; the
 frame support itself is duck-typed and imports neither polars nor pandas.
@@ -11,13 +12,10 @@ frame support itself is duck-typed and imports neither polars nor pandas.
 
 from __future__ import annotations
 
-import json
-
 import numpy as np
 import pytest
 
-import wade
-from wade.io import RESULT_COLUMNS, Condition, Counts, as_counts, condition
+from wade.io import Condition, Counts, as_counts, condition
 
 pl = pytest.importorskip("polars")
 
@@ -45,23 +43,6 @@ def sheet():
 
 
 # ---------------------------------------------------------------------------
-# The optional-dependency contract
-
-
-def test_importing_wade_imports_neither_frame_library():
-    """The statistic keeps its NumPy-only surface: polars is imported inside
-    to_frame/write_results, and frames are duck-typed, never imported."""
-    import subprocess
-    import sys
-
-    code = ("import sys, wade; "
-            "bad = [m for m in ('polars', 'pandas') if m in sys.modules]; "
-            "sys.exit(1 if bad else 0)")
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-
-
-# ---------------------------------------------------------------------------
 # as_counts
 
 
@@ -69,9 +50,10 @@ def test_as_counts_from_an_array_synthesizes_positional_labels(matrix):
     c = as_counts(matrix)
     assert isinstance(c, Counts) and c.shape == (G, N)
     assert c.gene_names[0] == "gene0" and c.sample_names[0] == "sample0"
-    assert c.values.dtype == np.float64 and c.meta == {}
+    assert c.values.dtype == np.float64
     np.testing.assert_array_equal(c.values, matrix)
-    assert as_counts(c) is c                       # idempotent
+    again = as_counts(c)                           # a Counts is checked like any input, and kept as it is
+    assert again.values is c.values and list(again.gene_names) == list(c.gene_names)
 
 
 def test_as_counts_from_a_frame_takes_labels_from_it(frame, matrix):
@@ -95,33 +77,32 @@ def test_as_counts_id_column_auto_name_index_or_none(frame, matrix):
         as_counts(frame, id_column="nope")
 
 
-def test_as_counts_refuses_a_non_numeric_leftover_and_carries_every_column(matrix):
-    """The featureCounts layout: Chr/Strand must not be read as expression, and
-    Length must land where the normalizer is looked up.
-
-    Once ``sample_columns`` says which columns are counts, **every** leftover
-    per-gene column is carried — string ones included, because a symbol is what
-    makes a ranked table readable. No statistic reads any of it; only a numeric
-    column can serve as the normalizer.
-    """
+def test_as_counts_refuses_a_non_numeric_leftover(matrix):
+    """The featureCounts layout: Chr/Strand must not be read as expression, nor a
+    Boolean flag; once ``sample_columns`` says which columns are counts, the
+    others are not read."""
     fc = pl.DataFrame({
         "Geneid": GENES, "Chr": ["chr1"] * G, "Start": np.arange(G),
         "Strand": ["+"] * G, "Length": np.arange(100, 100 + G, dtype=float),
         **{s: matrix[:, j] for j, s in enumerate(SAMPLES)},
     })
-    with pytest.raises(ValueError, match=r"not numeric.*featureCounts"):
+    with pytest.raises(ValueError, match=r"not numeric.*sample_columns.*featureCounts"):
         as_counts(fc)
     c = as_counts(fc, sample_columns=SAMPLES)
-    assert c.shape == (G, N)
-    assert set(c.meta) == {"Chr", "Start", "Strand", "Length"}   # all of them
-    assert list(c.meta["Chr"][:2]) == ["chr1", "chr1"]
-    with pytest.raises(TypeError, match="not numeric"):
-        c.normalizer("Chr")
-    np.testing.assert_allclose(c.normalizer("Length"), np.arange(100, 100 + G))
-    with pytest.raises(KeyError, match="no column 'Width'"):
-        c.normalizer("Width")
+    assert c.shape == (G, N) and list(c.sample_names) == SAMPLES
+    flagged = pl.DataFrame({"gene_id": GENES, "coding": [True] * G,
+                            **{s: matrix[:, j] for j, s in enumerate(SAMPLES)}})
+    with pytest.raises(ValueError, match=r"\['coding'\] are not numeric"):
+        as_counts(flagged)
     with pytest.raises(KeyError, match="sample_columns not in"):
         as_counts(fc, sample_columns=["S0", "nope"])
+
+
+def test_as_counts_reads_a_pandas_frame_with_a_labelled_index(matrix):
+    pd = pytest.importorskip("pandas")
+    c = as_counts(pd.DataFrame(matrix, index=GENES, columns=SAMPLES))
+    assert list(c.gene_names) == GENES and list(c.sample_names) == SAMPLES
+    np.testing.assert_array_equal(c.values, matrix)
 
 
 def test_as_counts_transposes_when_genes_are_columns(matrix):
@@ -131,9 +112,6 @@ def test_as_counts_transposes_when_genes_are_columns(matrix):
     assert c.shape == (G, N)
     assert list(c.gene_names) == GENES and list(c.sample_names) == SAMPLES
     np.testing.assert_allclose(c.values, matrix)
-    # The leftover columns of a samples-as-rows frame describe samples, not
-    # genes, so they are not offered as a gene normalizer.
-    assert c.meta == {}
     with pytest.raises(ValueError, match="genes must be"):
         as_counts(matrix, genes="down")
 
@@ -155,14 +133,12 @@ def test_as_counts_validates_labels_and_values(matrix):
         as_counts(matrix, gene_names=GENES[:-1])
     # A bad count is located, not merely reported: a blank in a big file is
     # the ordinary cause and "contains non-finite values" leaves you hunting.
-    with pytest.raises(ValueError, match=r"non-finite.*gene0/sample1"):
+    # ... and no value is substituted, because a missing count is not a zero.
+    with pytest.raises(ValueError, match=r"non-finite.*gene0/sample1.*not a zero"):
         as_counts(np.array([[1.0, np.nan]]))
     with pytest.raises(ValueError, match=r"negative.*g1/S0"):
         as_counts(np.array([[1.0, 2.0], [-2.0, 3.0]]),
                   gene_names=["g0", "g1"], sample_names=["S0", "S1"])
-    # ... and no value is substituted, because a missing count is not a zero
-    with pytest.raises(ValueError, match="not a zero"):
-        as_counts(np.array([[1.0, np.nan]]))
     with pytest.raises(ValueError, match="2-D"):
         as_counts(np.arange(5.0))
 
@@ -230,5 +206,9 @@ def test_condition_alignment_is_strict_in_both_directions(sheet):
                                   [1] * (N // 2) + [0] * (N // 2 - 1))
 
 
-# ---------------------------------------------------------------------------
-# Through wade()
+def test_condition_refuses_missing_strata_in_every_form():
+    pd = pytest.importorskip("pandas")
+    for missing in (None, float("nan"), np.float32("nan"), pd.NA):
+        sheet = {"id": list("abcd"), "group": ["x", "x", "y", "y"], "batch": ["p", missing, "p", "q"]}
+        with pytest.raises(ValueError, match="no value"):
+            condition(sheet, key="id", column="group", case="x", control="y", strata="batch")

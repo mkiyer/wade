@@ -7,7 +7,7 @@ build-backend = "maturin"
 # project); the import name is `wade`.
 name = "wade-rnaseq"
 version = "0.2.0"
-description = "Wasserstein-area differential expression for RNA-seq biomarker discovery: each gene's mean shift, and the subset of cases that departs from it"
+description = "Wasserstein-area differential expression for RNA-seq biomarker discovery: each gene's area between cases and controls, and the subset of cases that departs from a common fold"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-only"
@@ -34,7 +34,7 @@ Issues = "https://github.com/mkiyer/wade/issues"
 # Everything the statistic needs is NumPy. Each extra adds one capability.
 io = ["polars>=1.0"]                                  # to_frame() and write_results()
 plot = ["plotly>=6", "matplotlib>=3.8"]   # the figures; either backend alone works
-all = ["polars>=1.0", "plotly>=6", "matplotlib>=3.8"]
+all = ["wade-rnaseq[io,plot]"]
 test = ["pytest>=7", "scipy>=1.11", "polars>=1.0", "pandas>=2.0"]
 
 [tool.maturin]
@@ -43,15 +43,13 @@ module-name = "wade._kernel"
 features = ["pyo3/extension-module"]
 # Keep the private workbench, local evidence and historical illustrations
 # in the checkout, out of release archives. Current figures are notebook outputs.
-exclude = ["notebooks/rna100k.qmd", ".release/**", "notebooks/results/**", "archive/**", "research/**", "docs/figures/**"]
+exclude = ["notebooks/rna100k.qmd", ".release/**", "notebooks/results/**", "archive/**", "research/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "research/tests"]
 pythonpath = ["research"]
 norecursedirs = ["archive", ".release", "target", ".git"]
-markers = [
-    "validation: method-validation simulations, not parity",
-]
+addopts = "--strict-markers"
 # Small synthetic data sit below the subset test's validated range; one test checks the warning itself.
 filterwarnings = [
     "ignore:.*below the range where the subset test is validated:UserWarning",

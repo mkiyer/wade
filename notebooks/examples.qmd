@@ -1,6 +1,6 @@
 ---
 title: "TCGA prostate: fusion-associated expression"
-subtitle: "WADE 0.2.0 · release candidate · review pending"
+subtitle: "WADE 0.2.0"
 format:
   html:
     html-math-method: mathml
@@ -46,18 +46,17 @@ primary unpaired comparison retains eligible normal-adjacent samples and
 excludes their paired tumours, leaving independent patients. Technical and
 population exclusions are fixed before gene testing; cases are not removed
 because they weaken a signal. Exact retained IDs and exclusions are exported. Every gene, normalization
-reference and stopping record is retained. All results and figures require
-user approval.
+reference and stopping record is retained.
 
 RLE is fitted on the full measured gene universe after primary sample selection.
 The prespecified example test mask requires at least 10 counts in five pooled
 samples and pooled mean CPM at least 0.1, using the eligible input cohort.
 This is an example recipe, not a universal threshold. Test filtering reuses
-the fitted factors. The area test runs on counts thinned binomially until
-every sample's size factor equals the smallest; the subset test uses normalized counts with WADE's
-seeded count jitter, `(count + jitter) / size_factor`; figures use log2. Repeated observations, depth and tissue mixture remain relevant to
-interpretation. The upstream count processing/reference record remains a
-release documentation requirement.
+the fitted factors. Both tests run on counts thinned binomially until every
+sample's size factor equals the smallest; the effects and the subset's
+description read normalized counts, and figures plot log2(count / size factor + 1).
+Repeated observations, depth and tissue mixture remain relevant to
+interpretation.
 
 ```{python}
 #| label: accounting
@@ -70,8 +69,8 @@ table(primary_meta.group_by("group").len(),"primary-accounting")
 
 Each gene's area and subset are tested with the default settings (both
 directions, `pvalues="auto"`, `relative_error=0.2`, the
-999,999-shuffle budget, seed 1), and each test has one BH family over the
-tested genes. Display markers were fixed in advance; their inclusion does not
+999,999-shuffle budget, `fdr=0.05`, seed 1), and each test has one BH family
+over the tested genes. Display markers were fixed in advance; their inclusion does not
 imply significance.
 
 ```{python}
@@ -106,7 +105,7 @@ table(TC.panel_table(res,PANEL).select(SHOW),"primary-panel")
 
 ```{python}
 #| label: fig-patterns
-#| fig-cap: "Each tested gene's subset: its share of the tumours against its fold over the alignment, colored by the subset test's q-value. A few tumours far above the alignment sit at a small share and a large fold."
+#| fig-cap: "Each tested gene's subset: its share of the tumours against its fold over the alignment, colored by whether the subset test calls it (q ≤ 0.05). A few tumours far above the alignment sit at a small share and a large fold."
 TC.plot_subsets(res,PANEL[:5])
 ```
 
@@ -192,8 +191,8 @@ The plot is an annotation association, not a ground-truth FDR assessment.
 
 Nearly every gene's tumours depart somewhat from a common fold: tumour purity
 alone does it. `subset_rarity` ranks the subsets instead. It is the share of
-genes whose subset is at least as rare, among genes with a subset of the same
-size and side, within the subset test's validated range. The rarest subsets,
+genes whose subset is at least as rare: whose own gap, at this gene's cut,
+is at least this gene's gap, ranked within the subset test's validated range. The rarest subsets,
 and the rare genes that share their members:
 
 ```{python}

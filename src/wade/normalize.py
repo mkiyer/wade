@@ -13,22 +13,14 @@ def _positive(values, shape, what):
     return a
 
 
-def _as_counts(counts):
-    return as_counts(counts).values
-
-
 def _readonly(a, dtype=float):
     a = np.array(a, dtype=dtype, copy=True)
     a.flags.writeable = False
     return a
 
 
-def _geomean(a):
-    return float(np.exp(np.log(a).mean()))
-
-
 def _indices(selection, names, what):
-    """Explicit positions or unique labels; never silently drop a name."""
+    """Rows or columns chosen by a Boolean mask or by unique labels; never silently drop a name."""
     sel = np.asarray(selection)
     if sel.ndim != 1:
         raise ValueError(f"{what} must be one-dimensional")
@@ -51,16 +43,10 @@ def _indices(selection, names, what):
 
 def _fit_input(counts, gene_names, sample_names):
     data = as_counts(counts, gene_names=gene_names, sample_names=sample_names)
-    c = _as_counts(data.values)
-    totals = c.sum(axis=0)
-    if not c.shape[1] or np.any(~np.isfinite(totals)) or np.any(totals <= 0):
+    totals = data.values.sum(axis=0)
+    if not data.shape[1] or np.any(~np.isfinite(totals)) or np.any(totals <= 0):
         bad = data.sample_names[~(np.isfinite(totals) & (totals > 0))].tolist()
-        raise ValueError(
-            f"zero library size or invalid total for samples {bad[:8]}; "
-            "remove empty samples before fitting normalization"
-        )
-    if len(set(data.sample_names)) != len(data.sample_names):
-        raise ValueError("normalization requires unique sample names")
+        raise ValueError(f"zero library size or invalid total for samples {bad[:8]}; remove empty samples first")
     return data, totals
 
 
@@ -79,14 +65,15 @@ def _fingerprint(data):
     return h.hexdigest()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Normalization:
     """Frozen sample size factors and their reference provenance.
 
     Factors have geometric mean one over the fit cohort. Selecting samples
     never refits or recenters them. transform() returns counts / size_factor,
-    the scale WADE tests. External factors must include sampling depth, not
-    just a composition correction.
+    the normalized scale WADE reports; its tests run on counts thinned by
+    these factors. External factors must include sampling depth, not just a
+    composition correction.
     """
     method: str
     sample_names: tuple
@@ -117,11 +104,6 @@ class Normalization:
     def __repr__(self):
         return (f"Normalization(method={self.method!r}, samples={len(self.sample_names)}, "
                 f"references={len(self.used_reference_genes)}/{len(self.reference_genes)})")
-
-    @property
-    def usable_genes(self):
-        """Number of references actually used, per sample (all-positive RLE)."""
-        return np.full(len(self.sample_names), len(self.used_reference_genes), dtype=int)
 
     @classmethod
     def from_size_factors(cls, counts, factors, *, source, gene_names=None, sample_names=None):
@@ -172,7 +154,7 @@ class Normalization:
     @classmethod
     def from_dict(cls, record):
         record = dict(record)
-        if record.pop("algorithm_version") != 2 or record.pop("expression") != "counts / size_factor":
+        if record.pop("algorithm_version", None) != 2 or record.pop("expression", None) != "counts / size_factor":
             raise ValueError("unsupported normalization record")
         return cls(**record)
 
@@ -228,7 +210,7 @@ def fit_normalization(counts, *, method="rle", reference_genes=None, gene_names=
 
 
 def cpm(counts):
-    """Counts per million, calculated independently for each nonempty sample.
+    """Counts per million of each sample's total; every sample must have reads.
 
     A descriptive abundance conversion, not WADE's inferential expression scale.
     All measured genes should contribute to the library denominator.
@@ -241,7 +223,6 @@ def tpm(counts, lengths):
     """Transcripts per million from positive per-gene lengths in a common unit.
 
     Uses length-adjusted rates and a separate denominator for each sample.
-    Values remain zero where counts are zero; sparsity does not require noise.
     """
     data, _ = _fit_input(counts, None, None)
     lengths = _positive(lengths, (data.shape[0],), "gene lengths")

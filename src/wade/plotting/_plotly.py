@@ -27,10 +27,9 @@ def gene(spec):
     fig.add_trace(go.Scatter(x=d.probability, y=np.r_[d.effect,d.effect[-1]], mode="lines",
                             line=dict(color=t.ink, shape="hv"), name="Quantile effect"),row=1,col=2)
     for b in spec["boundaries"]:
-        dash = "dash" if b["style"] == "--" else "dot"
-        fig.add_vline(x=b["expression"], line_dash=dash, line_color=t.ink, row=1, col=1,
+        fig.add_vline(x=b["expression"], line_dash="dot", line_color=t.ink, row=1, col=1,
                       annotation_text=b["label"], annotation_position="top left")
-        fig.add_vline(x=b["quantile"], line_dash=dash, line_color=t.ink, row=1, col=2)
+        fig.add_vline(x=b["quantile"], line_dash="dot", line_color=t.ink, row=1, col=2)
     fig.add_hline(y=spec["alignment"], line_dash="dot", line_color=t.case, row=1, col=2)
     fig.update_xaxes(title_text=EXPRESSION_LABEL,row=1,col=1)
     fig.update_yaxes(title_text="Cumulative fraction",row=1,col=1)

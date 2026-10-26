@@ -1,14 +1,15 @@
 """Pooled thinning draws for the subset test: do K draws keep it calibrated and steady its calls?
 
-The subset test thins each gene once (wade._subsets.thinned): every sample to the smallest size factor,
-then the higher group by the fold. Which reads are kept is random, and near BH's threshold one draw
-decides the call: on TCGA prostate two seeds agree on 70% of the subset calls, against 93% when only the
-shuffles change (research/subset_range.py, section seeds). This study combines K independent draws of
-the thinned pool, every draw walked under the package's one shuffle stream:
+The thinned subset test as first built (25 October 2026) thinned each gene once (wade._subsets.thinned
+with draws=1): every sample to the smallest size factor, then the higher group by the fold. Which reads
+are kept is random, and near BH's threshold one draw decides the call: on TCGA prostate two seeds agree
+on 70% of the subset calls, against 93% when only the shuffles change (research/subset_range.py, section
+seeds). This study combines K independent draws of the thinned pool, every draw walked under the
+package's one shuffle stream:
 
-  single       the package's test: one draw (draw 0 is the package's own)
+  single       one draw (draw 0 is the first of the package's draws)
   mean p (K)   each draw's Besag-Clifford p-value under the same shuffles, averaged over the K draws.
-               Each draw alone is the package's test. An average of valid p-values is valid within a
+               Each draw alone is the one-draw test. An average of valid p-values is valid within a
                factor of 2 under any dependence (Rüschendorf 1982; Vovk and Wang 2020); it estimates the
                p-value averaged over the thinning
   mean gap (K) the walk's score averaged over the K draws, in one Besag-Clifford run. Given its level, a
@@ -26,7 +27,7 @@ draws seeded [seed, TAG, draw], the mean gap walked from Python).
 Sections (default: all):
 
   grid       the count model's 48 data sets (subset_range.py, section grid): share at p <= 0.01 by the
-             sparser group's expected reads per sample, then overall
+             lower group's expected reads per sample, then overall
   bimodal    real zero-inflated genes under random splits of the tumours (subset_range.py, section bimodal)
   power      subsets planted by thinning at low counts (subset_range.py, section power)
   seeds      TCGA prostate with its own labels (445 tumours v 52 normals): the calls at BH q <= 0.05 under

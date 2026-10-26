@@ -5,7 +5,7 @@ from .io import as_counts
 from .permutation import validate_labels
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class GeneDetail:
     """Exact empirical quantile intervals, ordered from low to high expression."""
     probability: np.ndarray

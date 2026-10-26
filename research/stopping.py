@@ -9,11 +9,11 @@ the examples' tested genes and RLE size factors), per cancer:
           the decisions of both tests at BH levels 0.05, 0.1 and 0.2, the p- and q-values of the genes
           not rejected, the bounds of those rejected, and the shuffles each gene used
   full    the whole tested transcriptome with fdr=0.05: wall time, shuffles and passes
-  whole   the whole tested transcriptome both ways (prostate only, by default): the exactness checks
+  whole   the whole tested transcriptome both ways (both cancers unless one is named): the exactness checks
           of `exact` on every gene, and the display markers' q-values, bounded and finished
 
     WADE_TCGA_CONFIG=.release/0.2.0/tcga-config.json RAYON_NUM_THREADS=6 PYTHONPATH=src:research \\
-        python research/stopping.py [prostate breast] [exact full]
+        python research/stopping.py [prostate breast] [exact full whole]
 """
 import sys
 import time

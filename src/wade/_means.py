@@ -19,11 +19,10 @@ from math import erfc, exp, lgamma, log, pi, sqrt
 import numpy as np
 
 from .permutation import STREAM_BLOCK, stratum_columns, stream_block
-from .pvalues import sequential_p, settled
+from .pvalues import TIE_RTOL, sequential_p, settled
 
 DIRECTIONS = ("both", "up", "down")
 EPS, TINY = np.finfo(float).eps, np.finfo(float).tiny
-TIE_RTOL = 100 * EPS
 _ERFC = np.frompyfunc(erfc, 1, 1)
 
 
@@ -40,12 +39,12 @@ def stream(seed, index, kind=None, draw=0):
 def jittered(counts, rows, seed, draw=0):
     """Counts plus independent Uniform(0, 1) jitter, each gene's from its own stream (seed, row index).
 
-    Counts are discrete, and many samples share one, above all zero. The subset test's null moves
-    each case by a fold and would pull such ties apart, which the observed data never are;
-    jittered values are all distinct. The jitter does not depend on the gene chunk.
+    Counts are discrete, and many samples share one, above all zero. Jittered values are all
+    distinct, so no two values tie and the subset walk can split between any two cases. The jitter
+    does not depend on the gene chunk.
     """
     out = np.array(counts, dtype=float)
-    for row, index in zip(out, rows):
+    for row, index in zip(out, rows, strict=True):
         row += stream(seed, index, draw=draw).random(len(row))
     return out
 
@@ -77,14 +76,14 @@ def equalized(counts, rows, factors, seed, code=None, draw=0):
 
     Sample j keeps each read with chance min(s) / s_j, s its size factor from the normalization.
     A thinned Poisson count is Poisson at the lower rate, so every sample ends at one size factor
-    and a difference in depth between the groups cannot pass for a difference in expression. Counts are rounded to whole
-    reads first. factors holds one size factor per sample, or one row of them per gene. The draws
+    and a difference in depth between the groups cannot pass for a difference in expression.
+    Counts are rounded to whole reads first. factors holds one size factor per sample, or one row of them per gene. The draws
     do not depend on the gene chunk. With strata (code), each stratum is thinned to its own smallest
     size factor: labels move only within strata, so depths need to be equal only there.
     """
     keep = np.broadcast_to(floors(factors, code) / factors, np.shape(counts))
     out = np.empty(np.shape(counts), np.int64)
-    for i, (row, index) in enumerate(zip(counts, rows)):
+    for i, (row, index) in enumerate(zip(counts, rows, strict=True)):
         out[i] = stream(seed, index, 1, draw).binomial(np.rint(row).astype(np.int64), keep[i])
     return out
 
@@ -166,7 +165,7 @@ def mean_test(x, cond, *, direction, stop, maximum, seed, code=None):
 
 
 def mean_saddlepoint(x, cond, *, direction, code=None):
-    """Each gene's exact permutation p-value for the mean shift by Skovgaard's double saddlepoint,
+    """Each gene's exact permutation p-value for the area by Skovgaard's double saddlepoint,
     and that p-value's estimated relative error.
 
     The cases' total is a sum of n1 values drawn without replacement: independent Bernoulli
@@ -218,19 +217,14 @@ def _upper_tail(values, n1, total):
     top = ~flat & ~beyond & (a >= highest - reach)
     inside = ~flat & ~beyond & ~top & (a > ordered[:, :n1].sum(axis=1) + reach)
     p, error = np.where(beyond, 0.0, 1.0), np.zeros(len(v))
-    p[top] = [_most_extreme(row, n1) for row in ordered[top]]
+    p[top] = [_most_extreme(row, np.zeros(1, np.int64), [n1]) for row in ordered[top]]
     if inside.any():
         p[inside], error[inside] = _saddlepoint(v[inside], n1, a[inside])
     return p, error
 
 
-def _most_extreme(ordered, n1):
-    """The exact chance of the largest total: the labellings taking the n1 largest values, ties included."""
-    n = len(ordered)
-    last = ordered[n - n1]
-    tied = np.abs(ordered - last) <= TIE_RTOL * np.abs(ordered).max()
-    within = int(np.sum(tied[n - n1:]))
-    return max(exp(_log_choose(int(tied.sum()), within) - _log_choose(n, n1)), TINY)
+def _softplus(z):
+    return np.maximum(z, 0) + np.log1p(np.exp(-np.abs(z)))
 
 
 def _log_choose(n, k):
@@ -247,10 +241,8 @@ def _saddlepoint(v, n1, a):
     # difference of the two sums of n softplus terms would lose it near the centre.
     p0, t0 = n1 / n, log(n1 / n0)
     delta = s[:, None] * v + (t - t0)[:, None]
-    softplus = lambda z: np.maximum(z, 0) + np.log1p(np.exp(-np.abs(z)))
-    near = delta <= 1
-    bregman = np.where(near, np.log1p(p0 * np.expm1(np.minimum(delta, 1))),
-                       softplus(t0 + delta) - softplus(t0)) - p0 * delta
+    bregman = np.where(delta <= 1, np.log1p(p0 * np.expm1(np.minimum(delta, 1))),
+                       _softplus(t0 + delta) - _softplus(t0)) - p0 * delta
     hessian, third, fourth = _derivatives(v, s, t)
     w = np.sign(s) * np.sqrt(np.maximum(2 * (s * a - bregman.sum(axis=1)), 0.0))
     u = s * np.sqrt(np.maximum(np.linalg.det(hessian), 0.0) / (n1 * n0 / n))
@@ -395,15 +387,15 @@ def _strata_tail(c, code, starts, n1s, n0s, total):
     inside = ~flat & ~beyond & ~top & (a > lowest + reach)
     p, error = np.where(beyond, 0.0, 1.0), np.zeros(G)
     for g in np.flatnonzero(top):
-        p[g] = _strata_most_extreme(v[g], starts, n1s)
+        p[g] = _most_extreme(v[g], starts, n1s)
     if inside.any():
         p[inside], error[inside] = _strata_inside(v[inside], code, starts, n1s, n0s, a[inside])
     return p, error
 
 
-def _strata_most_extreme(v, starts, n1s):
-    """The exact chance of the largest stratified total: every stratum takes its n1s largest values,
-    ties included."""
+def _most_extreme(v, starts, n1s):
+    """The exact chance of the largest total: every stratum (one, without strata) takes its n1s
+    largest values, ties included."""
     out = 0.0
     for s, (lo, hi) in enumerate(zip(starts, np.r_[starts[1:], len(v)])):
         ordered = np.sort(v[lo:hi])
@@ -423,7 +415,7 @@ def _strata_state(v, code, theta, lam):
 
 def _strata_phi(v, code, theta, lam, a, n1s):
     z, _, _ = _strata_state(v, code, theta, lam)
-    return (np.maximum(z, 0) + np.log1p(np.exp(-np.abs(z)))).sum(axis=1) - theta * a - lam @ n1s
+    return _softplus(z).sum(axis=1) - theta * a - lam @ n1s
 
 
 def _strata_solve(v, code, starts, n1s, n0s, a):
@@ -475,9 +467,8 @@ def _strata_inside(v, code, starts, n1s, n0s, a):
     # precision near the centre.
     delta = theta[:, None] * v + (lam - t0)[:, code]
     base = p0[code]
-    softplus = lambda z: np.maximum(z, 0) + np.log1p(np.exp(-np.abs(z)))
     bregman = np.where(delta <= 1, np.log1p(base * np.expm1(np.minimum(delta, 1))),
-                       softplus(t0[code] + delta) - softplus(t0[code])) - base * delta
+                       _softplus(t0[code] + delta) - _softplus(t0[code])) - base * delta
     w = np.sign(theta) * np.sqrt(np.maximum(2 * (theta * a - bregman.sum(axis=1)), 0.0))
     _, p, q = _strata_state(v, code, theta, lam)
     b, d = np.add.reduceat(q * v, starts, axis=1), np.add.reduceat(q, starts, axis=1)

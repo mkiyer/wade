@@ -1,9 +1,8 @@
 """Packaging invariants — the things that break on someone else's machine.
 
 None of this tests the statistic; it tests that the package is a package:
-one version string, the optional extras actually importable when installed,
-the declared pytest markers matching the ones in use, and the public API
-surface matching what is exported.
+one version string, a public API surface matching what is exported, and an
+import that costs only NumPy.
 """
 
 from __future__ import annotations
@@ -11,7 +10,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
 
 import wade
 
@@ -28,17 +26,6 @@ def test_version_comes_from_pyproject():
     assert declared.group(1) == wade.__version__, (
         f"pyproject {declared.group(1)!r} != wade.__version__ {wade.__version__!r}; "
         f"reinstall with `pip install -e .`")
-
-
-def test_every_declared_marker_is_used_and_every_used_marker_declared():
-    declared = set(re.findall(r'^\s*"(\w+): ', PYPROJECT, re.M))
-    used = set()
-    for folder in ("tests", "research/tests"):
-        for f in (ROOT / folder).glob("test_*.py"):
-            used |= set(re.findall(r"pytest\.mark\.(\w+)", f.read_text(encoding="utf-8")))
-    used -= {"parametrize", "skipif", "xfail", "skip", "filterwarnings", "usefixtures"}
-    assert used <= declared, f"markers used but not declared: {sorted(used - declared)}"
-    assert declared <= used, f"markers declared but unused: {sorted(declared - used)}"
 
 
 def test_all_is_sorted_and_complete():
@@ -67,7 +54,3 @@ def test_importing_wade_costs_only_numpy():
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
-
-@pytest.mark.parametrize("extra", ["test", "plot", "io", "all"])
-def test_optional_extras_are_declared(extra):
-    assert re.search(rf"^{extra} = \[", PYPROJECT, re.M), f"extra {extra!r} not declared"

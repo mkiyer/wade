@@ -20,8 +20,7 @@ import numpy as np
 from . import _kernel
 from ._subsets import _sorted
 
-GENE_BLOCK = 4096                       # genes compared at a time against a chunk of curves
-CURVE_BYTES = 32 * 2**20                # gap curves held at a time
+SCRATCH_BYTES = 32 * 2**20              # values, curves and comparisons held at a time
 
 
 def cuts(size, side, n1):
@@ -40,7 +39,7 @@ def rarity(walked, cond, size, side, groups):
     (NaN rarity). walked(rows) gives the values the subset walk reads for those genes (rows)."""
     cond = np.asarray(cond)
     n1 = int(cond.sum())
-    chunk = max(1, CURVE_BYTES // (8 * max(n1 - 1, 1)))
+    chunk = max(1, SCRATCH_BYTES // (8 * len(cond)))          # genes walked at a time, every sample each
     k = cuts(size, side, n1)
     genes = len(size)
     rare, share = np.full(genes, np.nan), np.full(genes, np.nan)
@@ -54,8 +53,9 @@ def rarity(walked, cond, size, side, groups):
         counts = np.zeros(genes, np.int64)
         for at in range(0, len(members), chunk):
             curves = gap_curves(walked(members[at:at + chunk]), cond)
-            for b in range(0, len(with_subset), GENE_BLOCK):
-                rows = with_subset[b:b + GENE_BLOCK]
+            block = max(1, SCRATCH_BYTES // (8 * len(curves)))  # genes compared at a time against the curves
+            for b in range(0, len(with_subset), block):
+                rows = with_subset[b:b + block]
                 counts[rows] += np.sum(curves[:, k[rows] - 1] >= own[rows], axis=0)
         share[members] = 1.0
         share[with_subset] = counts[with_subset] / len(members)
@@ -64,11 +64,12 @@ def rarity(walked, cond, size, side, groups):
     return rare
 
 
-def memberships(walked, cond, size, side, genes, block=4096):
+def memberships(walked, cond, size, side, genes):
     """For each of genes, the case positions (among the cases the walk reads) in its subset, furthest
     out first. walked(rows) gives the values the subset walk reads for those genes."""
     cases = np.flatnonzero(np.asarray(cond) == 1)
     genes = np.asarray(genes, dtype=np.int64)
+    block = max(1, SCRATCH_BYTES // (8 * np.size(cond)))             # genes read at a time, every sample each
     out = []
     for at in range(0, len(genes), block):
         part = genes[at:at + block]

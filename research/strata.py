@@ -1,10 +1,15 @@
-"""Strata: a prototype of WADE's tests with labels exchanged only within strata, and its vetting.
+"""Strata: WADE's tests with labels exchanged only within strata, the subset constructions weighed for
+them, and their vetting.
 
 Strata are the groups that one or more factors (study, site, batch) define. Under the stratified
 null the labels are exchangeable within each stratum, whatever differs between strata, and every
 test shuffles them only there. A stratum with only cases or only controls cannot move a label and
-carries no information. This file prototypes the pieces outside the package and measures them;
-nothing here changes wade() until the design is adopted.
+carries no information. The design was prototyped and measured here, and adopted in the package on
+25 October 2026 (wade(..., strata=)). Where this file carried copies of the package's functions, the
+vetting sections now exercise the package's own: the stratified stream (wade.permutation.stream_block),
+the area test's equalized values, shuffles and saddlepoint (wade._means: area_values, mean_test,
+strata_saddlepoint), and the subset test's thinned pool and shuffles (wade._subsets: thinned, advance).
+The copies were identical to them bit for bit, so replacing them changed no output.
 
 The area test. The cases' total, shuffled within strata, is the Cochran-Mantel-Haenszel sum:
 T - E(T) = sum_s (n1s n0s / ns)(mean1_s - mean0_s). So the statistic is unchanged and only the
@@ -14,17 +19,23 @@ arrowhead; every quantity, including the second-order error term, is a sum over 
 gene, whatever S). Each stratum is thinned to its own smallest size factor, which is all that
 exchangeability within the stratum needs.
 
-The subset test. Two constructions are compared:
-  pooled (S2)   register each stratum's cases onto its controls by the stratum's own W1 fold, align
-                each stratum's registered pool to the cohort's, and walk the pooled cases against
-                the pooled controls, as now, with labels shuffled within strata;
-  combined (S1) walk each stratum on its own and add the strata's gaps with weights
-                sqrt(n1s n0s / ns), labels shuffled within strata.
+The subset test. The constructions weighed, each with labels shuffled within strata:
+  combined (S1)   walk each stratum on its own and add the strata's gaps with weights sqrt(n1s n0s / ns);
+  pooled (S2)     register each stratum's cases onto its controls by the stratum's own W1 fold, align
+                  each stratum's registered pool to the cohort's, and walk the pooled cases against the
+                  pooled controls;
+  common (S3)     align the strata without the labels, then one registration for every case;
+  two-way (S4)    a level per stratum and one fold for every case, fitted by alternating robust steps;
+  one pass (S4b)  S4 in one pass, its fold the weighted median of the strata's own folds;
+  S4b, thinned    the construction adopted: each stratum thinned to its smallest size factor and the
+                  higher group thinned by the one fold (the package's pool, one draw), every gene walked.
+                  The package's subset_test averages DRAWS such draws (section shipped).
 
 Sections (default: all):
 
   exact      the stratified saddlepoint and the stratified shuffles against exact enumeration of
-             every within-stratum labelling, on small designs; one stratum reproduces the package
+             every within-stratum labelling, on small designs; with one stratum they reproduce the
+             unstratified saddlepoint and stream
   accuracy   the stratified saddlepoint and its error estimate on realistic designs (the TCGA sites,
              two unbalanced studies, many small ones), against 20 million within-stratum labellings,
              on the confirmation's generator with batch effects and lumpy totals, as
@@ -54,27 +65,28 @@ Sections (default: all):
              values (exact without a fold)
   heterogeneous  folds that differ between strata: what the two-way construction, whose null has one
              fold, and the pooled one, with a fold per stratum, call
-  speed      the stratified pieces' cost against the unstratified ones on TCGA prostate (24,246 genes,
-             497 samples), measured back to back, with 1 to 128 strata drawn at random
+  speed      the package's stratified saddlepoint and stream against its unstratified ones on TCGA
+             prostate (24,246 genes, 497 samples), measured back to back, with 1 to 128 strata drawn at
+             random; and the cost of the S4 and S4b pools
 
     WADE_TCGA_CONFIG=.release/0.2.0/tcga-config.json RAYON_NUM_THREADS=6 PYTHONPATH=src:research \\
         python research/strata.py [section ...]
 """
 import itertools
 import sys
-from math import comb, erfc, exp, lgamma, log, pi, sqrt
+from math import comb, sqrt
 
 import numpy as np
 
 from wade import _kernel
-from wade._means import _log_choose, expression, jittered, mean_saddlepoint
+from wade._means import area_values, expression, jittered, mean_saddlepoint, mean_test, strata_saddlepoint
+from wade._subsets import advance
 from wade._subsets import split as package_split
-from wade.permutation import STREAM_BLOCK
-from wade.pvalues import sequential_p, settled
+from wade._subsets import thinned as package_thinned
+from wade.permutation import stream_block
+from wade.pvalues import TIE_RTOL, sequential_p
 
-EPS, TINY = np.finfo(float).eps, np.finfo(float).tiny
-TIE_RTOL = 100 * EPS
-_ERFC = np.frompyfunc(erfc, 1, 1)
+TINY = np.finfo(float).tiny
 
 
 # ---------------------------------------------------------------------------------------------
@@ -100,276 +112,16 @@ def design(cond, code):
     return n1s, ns - n1s, (n1s > 0) & (n1s < ns)
 
 
-def stream_block(cond, code, block, seed):
-    """Block `block` of the stratified stream: each stratum's labels permuted within it, the strata in
-    order, all from the block's one generator (spawn key (block, 2), as the package's stream). With one
-    stratum it is the package's stream exactly."""
-    cond = np.asarray(cond, dtype=np.uint8)
-    rng = np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(block, 2)))
-    rows = np.tile(cond, (STREAM_BLOCK, 1))
-    S = int(np.max(code)) + 1
-    if S == 1:
-        return rng.permuted(rows, axis=1, out=rows)
-    for s in range(S):
-        idx = np.flatnonzero(code == s)
-        if 0 < cond[idx].sum() < len(idx):
-            rows[:, idx] = rng.permuted(rows[:, idx], axis=1)
-    return rows
-
-
-def equalized(counts, rows, factors, code, seed):
-    """Counts thinned binomially until every sample's size factor equals its stratum's smallest, each gene
-    from its own stream (seed, row index, 1), as the package's equalized(). Exchangeability within a
-    stratum needs equal depths only there. factors: one per sample, or one row per gene."""
-    factors = np.broadcast_to(factors, np.shape(counts)).astype(float)
-    floor = np.empty_like(factors)
-    for s in np.unique(code):
-        idx = code == s
-        floor[:, idx] = factors[:, idx].min(axis=1, keepdims=True)
-    keep = floor / factors
-    out = np.empty(np.shape(counts), np.int64)
-    for i, (row, index) in enumerate(zip(counts, rows)):
-        out[i] = np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(index, 1))).binomial(
-            np.rint(row).astype(np.int64), keep[i])
-    return out, floor
-
-
-def area_values(counts, rows, factors, code, seed):
-    """The values the stratified area test shuffles: counts equalized within strata, jittered, over each
-    stratum's common size factor (normalized units, comparable across strata)."""
-    thinned, floor = equalized(counts, rows, factors, code, seed)
-    return expression(jittered(thinned, rows, seed), floor)
-
-
 # ---------------------------------------------------------------------------------------------
-# The area test's p-value: shuffled, and by the stratified double saddlepoint
-
-def shuffled_area(x, cond, code, *, direction="both", stop=25, maximum=9_999, seed=1):
-    """Besag-Clifford p-values of the cases' total under within-stratum shuffles, every run finished:
-    the package's advance_means with the stratified stream (one stratum: the package exactly).
-
-    Values are centred within their stratum first. The cases' total is then centred at zero under the
-    stratified null, which the two-sided test needs: with case shares that differ between strata, the
-    plain difference in means has a null mean away from zero."""
-    cond, code = np.asarray(cond), np.asarray(code)
-    if len(np.unique(code)) > 1:
-        means = np.zeros((len(x), int(code.max()) + 1))
-        for s in np.unique(code):
-            means[:, s] = x[:, code == s].mean(axis=1)
-        x = x - means[:, code]
-    n1, n0 = int(cond.sum()), int((cond == 0).sum())
-    observed = x[:, cond == 1].mean(axis=1) - x[:, cond == 0].mean(axis=1)
-    total = x.sum(axis=1)
-    rounding = TIE_RTOL * np.abs(x).sum(axis=1) / min(n1, n0)
-    exceed, tried = np.zeros(len(x), np.uint64), np.zeros(len(x), np.uint64)
-    steps = np.arange(STREAM_BLOCK)
-    while (live := ~settled(exceed, tried, stop=stop, maximum=maximum, threshold=-np.inf)).any():
-        block = int(tried[live].min()) // STREAM_BLOCK
-        first = block * STREAM_BLOCK
-        genes = np.flatnonzero(live & (tried < first + STREAM_BLOCK))
-        labels = stream_block(cond, code, block, seed)
-        sums = x[genes] @ labels.T.astype(float)
-        shuffled = sums / n1 - (total[genes, None] - sums) / n0
-        mark, tie = observed[genes, None], rounding[genes, None]
-        hits = (shuffled >= mark - tie if direction == "up" else shuffled <= mark + tie if direction == "down"
-                else np.abs(shuffled) >= np.abs(mark) - tie)
-        start = tried[genes].astype(np.int64) - first
-        mine = steps >= start[:, None]
-        count = exceed[genes, None].astype(np.int64) + np.cumsum(hits & mine, axis=1)
-        position = tried[genes, None].astype(np.int64) + steps - start[:, None] + 1
-        done = mine & settled(count, np.maximum(position, count), stop=stop, maximum=maximum, threshold=-np.inf)
-        last = np.where(done.any(axis=1), done.argmax(axis=1), STREAM_BLOCK - 1)
-        rows = np.arange(len(genes))
-        exceed[genes], tried[genes] = count[rows, last], position[rows, last]
-    return sequential_p(exceed, tried, stop=stop, maximum=maximum)
-
-
-def saddlepoint_area(x, cond, code, *, direction="both"):
-    """Each gene's p-value for the cases' total under within-stratum exchange, by the stratified double
-    saddlepoint, and its estimated relative error (the second-order term, and one labelling among the
-    L = p prod_s C(ns, n1s) in the tail). Strata without both groups are left out: they cannot move."""
-    cond, code = np.asarray(cond), np.asarray(code)
-    n1s, n0s, informative = design(cond, code)
-    keep = informative[code]
-    x, cond = x[:, keep], cond[keep]
-    remap = np.cumsum(informative) - 1
-    code = remap[code[keep]]
-    n1s, n0s = n1s[informative], n0s[informative]
-    order = np.argsort(code, kind="stable")                    # strata as contiguous blocks
-    x, cond, code = x[:, order], cond[order], code[order]
-    starts = np.r_[0, np.flatnonzero(np.diff(code)) + 1]
-    means = np.add.reduceat(x, starts, axis=1) / (n1s + n0s)
-    centred = x - means[:, code]
-    total = (centred * cond).sum(axis=1)                      # the cases' total less its null mean
-    if direction == "up":
-        p, error = _tail(centred, code, starts, n1s, n0s, total)
-    elif direction == "down":
-        p, error = _tail(-centred, code, starts, n1s, n0s, -total)
-    else:
-        gap = np.abs(total)
-        (above, ea), (below, eb) = (_tail(centred, code, starts, n1s, n0s, gap),
-                                    _tail(-centred, code, starts, n1s, n0s, gap))
-        p = np.minimum(above + below, 1.0)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            error = np.where(above + below > 0, (above * ea + below * eb) / (above + below), 0.0)
-    labellings = sum(_log_choose(int(a + b), int(a)) for a, b in zip(n1s, n0s))
-    with np.errstate(over="ignore", divide="ignore"):
-        granularity = np.exp(-(np.log(p) + labellings))
-    return p, np.where(error > 0, np.maximum(error, granularity), 0.0)
-
-
-def _tail(c, code, starts, n1s, n0s, total):
-    """P(T >= total) per row for T the stratified cases' total of values c (centred within strata), and
-    the saddlepoint's estimated relative error (0 where exact)."""
-    G, n = c.shape
-    spread = np.sqrt((c * c).mean(axis=1))
-    flat = spread <= TIE_RTOL * np.abs(c).max(axis=1)
-    spread = np.where(flat, 1.0, spread)
-    v = c / spread[:, None]
-    a = total / spread
-    reach = TIE_RTOL * n * np.abs(v).max(axis=1)
-    highest, lowest = np.zeros(G), np.zeros(G)
-    for s, (lo, hi) in enumerate(zip(starts, np.r_[starts[1:], n])):
-        block = np.sort(v[:, lo:hi], axis=1)
-        highest += block[:, -n1s[s]:].sum(axis=1)
-        lowest += block[:, :n1s[s]].sum(axis=1)
-    beyond = ~flat & (a > highest + reach)
-    top = ~flat & ~beyond & (a >= highest - reach)
-    inside = ~flat & ~beyond & ~top & (a > lowest + reach)
-    p, error = np.where(beyond, 0.0, 1.0), np.zeros(G)
-    for g in np.flatnonzero(top):
-        p[g] = _most_extreme(v[g], starts, n1s)
-    if inside.any():
-        p[inside], error[inside] = _saddlepoint(v[inside], code, starts, n1s, n0s, a[inside])
-    return p, error
-
-
-def _most_extreme(v, starts, n1s):
-    """The exact chance of the largest stratified total: every stratum takes its n1s largest, ties included."""
-    out = 0.0
-    for s, (lo, hi) in enumerate(zip(starts, np.r_[starts[1:], len(v)])):
-        ordered = np.sort(v[lo:hi])
-        ns, k = len(ordered), int(n1s[s])
-        last = ordered[ns - k]
-        tied = np.abs(ordered - last) <= TIE_RTOL * np.abs(ordered).max()
-        out += _log_choose(int(tied.sum()), int(np.sum(tied[ns - k:]))) - _log_choose(ns, k)
-    return max(exp(out), TINY)
-
-
-def _sums(values, starts):
-    return np.add.reduceat(values, starts, axis=1)
-
-
-def _state(v, code, theta, lam):
-    """Each selector's natural parameter, probability p and variance q at (theta, lambda)."""
-    z = theta[:, None] * v + lam[:, code]
-    e = np.exp(-np.abs(z))
-    return z, np.where(z >= 0, 1.0, e) / (1 + e), e / (1 + e) ** 2
-
-
-def _phi(v, code, theta, lam, a, n1s):
-    z, _, _ = _state(v, code, theta, lam)
-    return (np.maximum(z, 0) + np.log1p(np.exp(-np.abs(z)))).sum(axis=1) - theta * a - lam @ n1s
-
-
-def _solve(v, code, starts, n1s, n0s, a):
-    """The minimum of phi(theta, lambda) = K - theta a - lambda . n1s per row, by damped Newton with the
-    arrowhead Hessian (each step O(n)), to machine precision."""
-    G = len(v)
-    theta = np.zeros(G)
-    lam = np.tile(np.log(n1s / n0s), (G, 1))
-    phi = _phi(v, code, theta, lam, a, n1s)
-    live = np.ones(G, bool)
-    while live.any():
-        rows = np.flatnonzero(live)
-        vv, th, la, aa = v[rows], theta[rows], lam[rows], a[rows]
-        _, p, q = _state(vv, code, th, la)
-        gt = (p * vv).sum(axis=1) - aa
-        gs = _sums(p, starts) - n1s
-        b, d = _sums(q * vv, starts), _sums(q, starts)
-        c = (q * vv * vv).sum(axis=1) - (b * b / d).sum(axis=1)
-        dt = -(gt - (b * gs / d).sum(axis=1)) / c
-        dl = -(gs + b * dt[:, None]) / d
-        now = phi[rows]
-        done = -(gt * dt + (gs * dl).sum(axis=1)) <= 4 * EPS * (np.abs(now) + 1)
-        live[rows[done]] = False
-        pending, step = np.flatnonzero(~done), np.ones(len(rows))
-        while len(pending):
-            tn = th[pending] + step[pending] * dt[pending]
-            ln = la[pending] + step[pending, None] * dl[pending]
-            new = _phi(vv[pending], code, tn, ln, aa[pending], n1s)
-            fell = new < now[pending]
-            moved = rows[pending[fell]]
-            theta[moved], lam[moved], phi[moved] = tn[fell], ln[fell], new[fell]
-            pending = pending[~fell]
-            step[pending] /= 2
-            stuck = step[pending] < EPS
-            live[rows[pending[stuck]]] = False
-            pending = pending[~stuck]
-    return theta, lam
-
-
-def _saddlepoint(v, code, starts, n1s, n0s, a):
-    """The stratified double-saddlepoint tail and its estimated error, for rows strictly inside the range."""
-    ns = n1s + n0s
-    theta, lam = _solve(v, code, starts, n1s, n0s, a)
-    p0, t0 = n1s / ns, np.log(n1s / n0s)
-    q0 = p0 * (1 - p0)
-    # w^2 / 2 = theta a - sum_j Bregman_j, each selector's Bregman divergence of the softplus from its
-    # stratum's centre t0_s (the constraint terms vanish there, sum_j p0_s = n1s).
-    delta = theta[:, None] * v + (lam - t0)[:, code]
-    base = p0[code]
-    softplus = lambda z: np.maximum(z, 0) + np.log1p(np.exp(-np.abs(z)))
-    bregman = np.where(delta <= 1, np.log1p(base * np.expm1(np.minimum(delta, 1))),
-                       softplus(t0[code] + delta) - softplus(t0[code])) - base * delta
-    w = np.sign(theta) * np.sqrt(np.maximum(2 * (theta * a - bregman.sum(axis=1)), 0.0))
-    _, p, q = _state(v, code, theta, lam)
-    b, d = _sums(q * v, starts), _sums(q, starts)
-    c = (q * v * v).sum(axis=1) - (b * b / d).sum(axis=1)       # the arrowhead's Schur complement
-    log_ratio = np.log(np.maximum(c, TINY)) + (np.log(d) - np.log(ns * q0)).sum(axis=1)
-    u = theta * np.exp(0.5 * log_ratio)
-    # At the centre 1/w - 1/u is 0/0; its limit is the conditional skewness over 6.
-    r0 = q0 * (1 - 2 * p0)
-    v2, v3 = _sums(v * v, starts), _sums(v ** 3, starts)
-    limit = (r0 * v3).sum(axis=1) / (6 * ((q0 * v2).sum(axis=1)) ** 1.5)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        correction = np.where(np.abs(theta) < EPS ** (1 / 3), limit, 1 / w - 1 / u)
-    tail = 0.5 * _ERFC(w / sqrt(2)).astype(float)
-    pval = tail - np.exp(-0.5 * w * w) / sqrt(2 * pi) * correction
-    floor = max(exp(-sum(_log_choose(int(k), int(m)) for k, m in zip(ns, n1s))), TINY)
-    error = _second_order(v, code, starts, p, q, b, d, c, n1s, ns)
-    return np.clip(pval, floor, 1.0), error
-
-
-def _second_order(v, code, starts, p, q, b, d, c, n1s, ns):
-    """|joint second-order density term - the strata counts' own|, from sums over samples: with
-    e_j = (v_j, unit vector of j's stratum), every cumulant tensor is sum_j k_j^(m) e_j^(x)m, and the
-    inverse arrowhead Hessian gives e_j' M e_k = vt_j vt_k / c + [same stratum] / d_s, vt = v - b_s / d_s."""
-    r, f = q * (1 - 2 * p), q * (1 - 6 * q)
-    ratio = b / d
-    vt = v - ratio[:, code]
-    h = vt * vt / c[:, None] + 1 / d[:, code]                   # e_j' M e_j
-    rho4 = (f * h * h).sum(axis=1)
-    ut, us = (r * h * v).sum(axis=1), _sums(r * h, starts)
-    rho13 = (ut - (ratio * us).sum(axis=1)) ** 2 / c + (us * us / d).sum(axis=1)
-    rho23 = ((r * vt ** 3).sum(axis=1)) ** 2 / c ** 3 + (
-        3 * _sums(r * vt * vt, starts) ** 2 / (c[:, None] ** 2 * d)
-        + 3 * _sums(r * vt, starts) ** 2 / (c[:, None] * d * d)
-        + _sums(r, starts) ** 2 / d ** 3).sum(axis=1)
-    p0 = n1s / ns
-    q0 = p0 * (1 - p0)
-    lambda3, lambda4 = (1 - 2 * p0) / np.sqrt(q0 * ns), (1 - 6 * q0) / (q0 * ns)
-    counts = float(np.sum(lambda4 / 8 - 5 * lambda3 ** 2 / 24))
-    return np.abs(rho4 / 8 - (2 * rho23 + 3 * rho13) / 24 - counts)
-
+# The area test's p-value
 
 def area_p(z, cond, code, *, seed=1, stop=25, maximum=9_999, relative_error=0.2):
-    """The stratified area test's p-values as wade() would compute them: the saddlepoint, shuffled within
-    strata where its error estimate exceeds relative_error."""
-    p, error = saddlepoint_area(z, cond, code)
+    """The stratified area test's p-values as wade() would compute them, every run finished: the package's
+    stratified saddlepoint, shuffled within strata where its error estimate exceeds relative_error."""
+    p, error = strata_saddlepoint(z, cond, code, direction="both")
     shuffle = error > relative_error
     if shuffle.any():
-        p[shuffle] = shuffled_area(z[shuffle], cond, code, stop=stop, maximum=maximum, seed=seed)
+        p[shuffle] = mean_test(z[shuffle], cond, direction="both", stop=stop, maximum=maximum, seed=seed, code=code)[0]
     return p
 
 
@@ -486,79 +238,38 @@ def onepass_values(x, cond, code):
     return pooled, cond, code
 
 
-def thinned_pool(counts, factors, cond, code, rows, seed=1):
-    """S4b with thinning, the construction adopted on 25 October 2026: the strata with both groups only;
-    each stratum thinned to its own smallest size factor (the area test's equalization, the same draw);
-    one fold for every case, the weighted median (weights n1s n0s / ns) of the strata's own W1 folds on
-    the equalized counts; the higher group thinned by it in every stratum (draw (seed, gene, 3)); then each
-    stratum moved, by a fold on count + 1, to the cohort's median log(count + 1). With one stratum it is
-    research/subset_range.py's "equalized, thinned". Returns the pool (jittered), its labels and codes."""
-    n1s, n0s, informative = design(cond, code)
-    keep = informative[code]
-    factors = np.broadcast_to(factors, np.shape(counts))
-    c, f, cond, code = counts[:, keep], factors[:, keep], np.ascontiguousarray(cond[keep], dtype=np.uint8), codes(code[keep])
-    level, _ = equalized(c, rows, f, code, seed)
-    ones = np.ones(level.shape[1])
-    x = expression(jittered(level, rows, seed), ones)
-    strata = np.unique(code)
-    folds = np.empty((len(x), len(strata)))
-    weights = np.empty(len(strata))
-    for i, s_ in enumerate(strata):
-        idx = np.flatnonzero(code == s_)
-        a = int(cond[idx].sum())
-        weights[i] = a * (len(idx) - a) / len(idx)
-        folds[:, i] = np.log(package_split(np.ascontiguousarray(x[:, idx]), cond[idx])[4])
-    order = np.argsort(folds, axis=1, kind="stable")
-    ranked = np.take_along_axis(folds, order, axis=1)
-    below = np.cumsum(weights[order], axis=1)
-    total = weights.sum()
-    g = np.arange(len(x))
-    first = np.argmax(2 * below >= total * (1 - 1e-12), axis=1)
-    half = np.abs(2 * below[g, first] - total) <= 1e-12 * total
-    fold = np.exp(np.where(half, 0.5 * (ranked[g, first] + ranked[g, np.minimum(first + 1, len(strata) - 1)]),
-                           ranked[g, first]))[:, None]
-    keep_share = np.where(cond == 1, np.where(fold > 1, 1 / fold, 1.0), np.where(fold < 1, fold, 1.0))
-    thinned = np.empty_like(level)
-    for i, (row, index) in enumerate(zip(level, rows)):
-        thinned[i] = np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(int(index), 3))).binomial(row, keep_share[i])
-    logs = np.log1p(expression(jittered(thinned, rows, seed), ones))
-    centre = np.median(logs, axis=1, keepdims=True)
-    for s_ in strata:
-        idx = code == s_
-        logs[:, idx] += centre - np.median(logs[:, idx], axis=1, keepdims=True)
-    return np.expm1(logs), cond, code
-
-
 def subset_thinned(counts, factors, cond, code, rows, *, direction="both", stop=25, maximum=9_999, seed=1):
-    """The thinned S4b subset test: thinned_pool's pool walked with no further registration, labels shuffled
-    within strata, the package's walk and Besag-Clifford stopping."""
-    pooled, labels, inner = thinned_pool(counts, factors, cond, code, rows, seed)
-    order = np.ascontiguousarray(np.argsort(pooled, axis=1, kind="stable"), dtype=np.int64)
-    values = np.ascontiguousarray(np.take_along_axis(pooled, order, axis=1))
-    observed = _kernel.score(values, order, direction, labels)
-    exceed, tried = np.zeros(len(counts), np.uint64), np.zeros(len(counts), np.uint64)
-    while (live := ~settled(exceed, tried, stop=stop, maximum=maximum, threshold=-np.inf)).any():
-        block = int(tried[live].min()) // STREAM_BLOCK
-        exceed[:], tried[:] = _kernel.tally(values, order, direction, stream_block(labels, inner, block, seed),
-                                            observed, exceed, tried, stop, maximum, block * STREAM_BLOCK, -np.inf)
-    p = sequential_p(exceed, tried, stop=stop, maximum=maximum)
-    return np.where(observed > 0, p, 1.0)
+    """The thinned S4b subset test as first built: the package's pool (wade._subsets.thinned, one draw) of
+    the strata with both groups, renumbered in order of first appearance, walked with no further
+    registration (see walked). With one stratum it is research/subset_range.py's "equalized, thinned".
+    Unlike the package's subset_test it walks every gene, not only those with a subset on their
+    normalized counts, and one draw, not DRAWS."""
+    keep = design(cond, code)[2][code]
+    labels = np.ascontiguousarray(np.asarray(cond)[keep], dtype=np.uint8)
+    inner = codes(np.asarray(code)[keep])
+    factors = np.broadcast_to(factors, np.shape(counts))
+    pooled, _ = package_thinned(counts[:, keep], factors[:, keep], labels, rows, seed, inner)
+    return walked(pooled, labels, inner, direction=direction, stop=stop, maximum=maximum, seed=seed)
 
 
 def subset_pooled(x, cond, code, *, direction="both", stop=25, maximum=9_999, seed=1, values_of=None):
-    """The pooled subset test (S2; S3 with values_of=common_values): one walk of the pooled cases against
-    the pooled controls, labels shuffled within strata, the package's native walk and Besag-Clifford
-    stopping."""
+    """The pooled subset test (S2; S3, S4 or S4b with values_of=common_values, twoway_values or
+    onepass_values): one walk of the pooled cases against the pooled controls (see walked)."""
     pooled, labels, inner = (values_of or pooled_values)(x, cond, code)
-    labels = np.ascontiguousarray(labels, dtype=np.uint8)
+    return walked(pooled, np.ascontiguousarray(labels, dtype=np.uint8), inner, direction=direction, stop=stop,
+                  maximum=maximum, seed=seed)
+
+
+def walked(pooled, labels, code, *, direction, stop, maximum, seed):
+    """Subset p-values of a pool walked as it stands, every gene run to the end of its Besag-Clifford rule:
+    the package's native walk, and its shuffles within strata (wade._subsets.advance). p = 1 where the
+    observed walk finds no subset."""
     order = np.ascontiguousarray(np.argsort(pooled, axis=1, kind="stable"), dtype=np.int64)
     values = np.ascontiguousarray(np.take_along_axis(pooled, order, axis=1))
     observed = _kernel.score(values, order, direction, labels)
-    exceed, tried = np.zeros(len(x), np.uint64), np.zeros(len(x), np.uint64)
-    while (live := ~settled(exceed, tried, stop=stop, maximum=maximum, threshold=-np.inf)).any():
-        block = int(tried[live].min()) // STREAM_BLOCK
-        exceed[:], tried[:] = _kernel.tally(values, order, direction, stream_block(labels, inner, block, seed),
-                                            observed, exceed, tried, stop, maximum, block * STREAM_BLOCK, -np.inf)
+    exceed, tried = np.zeros(len(pooled), np.uint64), np.zeros(len(pooled), np.uint64)
+    advance(values, order, observed, labels, exceed, tried, direction=direction, stop=stop, maximum=maximum,
+            threshold=-np.inf, seed=seed, code=code)
     p = sequential_p(exceed, tried, stop=stop, maximum=maximum)
     return np.where(observed > 0, p, 1.0)
 
@@ -586,7 +297,7 @@ def subset_combined(x, cond, code, *, direction="both", shuffles=1_999, seed=1):
     hits = np.zeros(len(x))
     done, block = 0, 0
     while done < shuffles:
-        rows = stream_block(cond, code, block, seed)[:shuffles - done]
+        rows = stream_block(cond, block, seed, code)[:shuffles - done]
         for row in rows:
             hits += score(row) >= bar
         done += len(rows)
@@ -624,14 +335,13 @@ def exact():
     rng = np.random.default_rng(2026102401)
     print("\n== exact: the stratified saddlepoint and the stratified stream against every within-stratum "
           "labelling", flush=True)
-    # One stratum: the prototype reproduces the package's saddlepoint and stream.
+    # One stratum: the stratified saddlepoint and stream reproduce the unstratified ones.
     x = rng.gamma(2, 50, (300, 40)) + rng.random((300, 40))
     cond = np.r_[np.ones(15, int), np.zeros(25, int)]
     one = np.zeros(40, np.int64)
     p_pkg, e_pkg = mean_saddlepoint(x, cond, direction="both")
-    p_new, e_new = saddlepoint_area(x, cond, one, direction="both")
-    from wade.permutation import stream_block as package_stream
-    same_stream = np.array_equal(stream_block(cond, one, 3, 7), package_stream(cond, 3, 7))
+    p_new, e_new = strata_saddlepoint(x, cond, one, direction="both")
+    same_stream = np.array_equal(stream_block(cond, 3, 7, one), stream_block(cond, 3, 7))
     print(f"  one stratum: largest relative difference from the package's saddlepoint p {np.max(np.abs(p_new / p_pkg - 1)):.1e}, "
           f"its error estimate {np.max(np.abs(e_new - e_pkg) / np.maximum(e_pkg, TINY)):.1e}; same stream: {same_stream}",
           flush=True)
@@ -651,8 +361,8 @@ def exact():
         x += rng.random(x.shape)
         x[:, cond == 1] *= np.exp(rng.normal(0, 0.4, (300, 1)))             # some genes shifted, some not
         exact_p = exact_area(x, cond, code)
-        sp, err = saddlepoint_area(x, cond, code)
-        mc = shuffled_area(x, cond, code, stop=400, maximum=99_999, seed=5)
+        sp, err = strata_saddlepoint(x, cond, code, direction="both")
+        mc = mean_test(x, cond, direction="both", stop=400, maximum=99_999, seed=5, code=code)[0]
         rel = np.abs(sp / exact_p - 1)
         flagged = err > 0.2
         n1s, n0s, inf = design(cond, code)
@@ -748,8 +458,8 @@ def accuracy(per_decade=10):
             counts[g, rng.choice(np.flatnonzero(cond == 1), rng.integers(1, 3), replace=False)] *= 20
         keep = np.flatnonzero(wade.filter_counts(counts, min_count=3, min_samples=2))
         factors = wade.fit_normalization(counts).size_factors
-        x = area_values(counts[keep], keep, factors, code, 1)
-        p, error = saddlepoint_area(x, cond, code)
+        x = area_values(counts[keep], keep, factors, 1, code)
+        p, error = strata_saddlepoint(x, cond, code, direction="both")
         pick = []
         for lo in range(1, 7):
             inside = np.flatnonzero((p <= 10.0 ** -(lo - 1)) & (p > 10.0 ** -lo))
@@ -860,7 +570,6 @@ def calibration_line(name, p, lowest, alpha=0.01, edges=EDGES):
 
 def model(genes_per_set=3_000):
     from count_model import area_pvalues, tumours
-    from wade._means import area_values as package_area_values
     from count_model import rescaled_subset_test as subset_test
     print("\n== model: the count model with studies; each gene split at random into the design's studies; "
           f"{genes_per_set:,} genes per data set (expressed, at random); share at p <= 0.01 by each gene's "
@@ -877,8 +586,8 @@ def model(genes_per_set=3_000):
                 counts, factors, cond, code, lowest = model_dataset(sizes, depths, batch_sd, fold, subset, 1, pick,
                                                                     noise_sd=noise_sd)
                 rows = pick
-                zU = package_area_values(counts, rows, factors, 1)
-                zP = area_values(counts, rows, factors, code, 1)
+                zU = area_values(counts, rows, factors, 1)
+                zP = area_values(counts, rows, factors, 1, code)
                 x = expression(jittered(counts, rows, 1), factors)
                 out = dict()
                 if not subset:
@@ -921,7 +630,6 @@ def real_null(name, counts, factors, groups, share_of, genes_used, lowest_reads,
     fold > 1, every pseudo-case carries that fold (the pseudo-controls thinned by 1/fold, gene by gene):
     the subset test's null still holds, and only it is run."""
     from count_model import area_pvalues
-    from wade._means import area_values as package_area_values
     from count_model import rescaled_subset_test as subset_test
     rng = np.random.default_rng(seed)
     orders, cond, code = relabelled(groups, share_of, rng, len(genes_used))
@@ -930,8 +638,8 @@ def real_null(name, counts, factors, groups, share_of, genes_used, lowest_reads,
         c = np.random.default_rng([seed, 1]).binomial(c, np.where(cond == 1, 1.0, 1 / fold))
     f = factors[orders]
     rows = np.asarray(genes_used)
-    zU = package_area_values(c, rows, f, 1)
-    zP = area_values(c, rows, f, code, 1)
+    zU = area_values(c, rows, f, 1)
+    zP = area_values(c, rows, f, 1, code)
     x = expression(jittered(c, rows, 1), f)
     n1s, n0s, inf = design(cond, code)
     print(f"\n  {name}{f', every pseudo-case {fold:g}x' if fold != 1 else ''}: {len(groups)} strata, "
@@ -1037,7 +745,7 @@ def real():
     res = wade.wade(raw, cond_all, normalization=wade.Normalization.from_size_factors(raw, factors, source="TCGA primary RLE"),
                     gene_names=names, seed=1)
     c, f, cond, code = raw[:, keep], factors[keep], cond_all[keep], codes(code_all[keep])
-    z = area_values(c, rows, np.broadcast_to(f, c.shape), code, 1)
+    z = area_values(c, rows, np.broadcast_to(f, c.shape), 1, code)
     area = bh_adjust(area_p(z, cond, code))
     x = expression(jittered(c, rows, 1), f)
     subset = bh_adjust(subset_pooled(x, cond, code))
@@ -1104,7 +812,6 @@ def common(genes_per_set=3_000):
     from count_model import rescaled_subset_test as subset_test
     print("\n== common: the subset test with one registration after a label-free alignment of the strata "
           "(S3), against S2 and the unstratified test", flush=True)
-    layout_sites = []
     d = tcga("prostate")
     site_all = np.array([s_.split("-")[1] for s_ in d["samples"]])
     tumour = np.flatnonzero(d["cond"] == 1)
@@ -1201,7 +908,7 @@ def registration(genes_per_set=2_000, shuffles=999):
             bar = observed - TIE_RTOL * np.abs(observed)
             hits, done, block = np.zeros(len(x)), 0, 0
             while done < shuffles:
-                rows = stream_block(cond, code, block, 1)[:shuffles - done]
+                rows = stream_block(cond, block, 1, code)[:shuffles - done]
                 for row in rows:
                     hits += score(row) >= bar
                 done += len(rows)
@@ -1257,7 +964,7 @@ def thinned(genes_per_set=3_000, which=THINNED):
     unstratified thinned test and the unstratified package, on the strata's nulls and planted subsets,
     with bins down to 8 reads. which=SHIPPED (section shipped) runs the package's own test instead,
     unstratified and with strata, as wade() runs it."""
-    from count_model import area_pvalues, tcga, tumours
+    from count_model import tcga, tumours
     from count_model import rescaled_subset_test as subset_test
     from wade._subsets import DRAWS
     edges = (8, 32, 128)
@@ -1372,24 +1079,22 @@ def fold(genes_per_set=3_000, factor=1.5):
 def speed():
     import time
     from count_model import tcga
-    from wade._means import area_values as package_area_values
     from count_model import rescaled_subset_test as subset_test
-    from wade.permutation import stream_block as package_stream
     d = tcga("prostate")
     raw, cond, factors = d["raw"], d["cond"], d["factors"]
     rows = np.arange(len(raw))
-    z = package_area_values(raw, rows, factors, 1)
+    z = area_values(raw, rows, factors, 1)
     x = expression(jittered(raw, rows, 1), factors)
     clock = lambda f: (lambda t: (f(), time.perf_counter() - t)[1])(time.perf_counter())
     base = clock(lambda: mean_saddlepoint(z, cond, direction="both"))
-    stream = clock(lambda: [package_stream(cond, b, 1) for b in range(50)])
+    stream = clock(lambda: [stream_block(cond, b, 1) for b in range(50)])
     print(f"\n== speed: TCGA prostate, {len(raw):,} genes x {len(cond)} samples; the package's saddlepoint "
           f"{base:.1f} s, 50 stream blocks {stream:.2f} s", flush=True)
     rng = np.random.default_rng(2026102408)
     for S in (1, 8, 32, 128):
         code = np.zeros(len(cond), np.int64) if S == 1 else rng.integers(0, S, len(cond))
-        sp = clock(lambda: saddlepoint_area(z, cond, code))
-        st = clock(lambda: [stream_block(cond, code, b, 1) for b in range(50)])
+        sp = clock(lambda: strata_saddlepoint(z, cond, code, direction="both"))
+        st = clock(lambda: [stream_block(cond, b, 1, code) for b in range(50)])
         print(f"  {S:3d} strata: stratified saddlepoint {sp:.1f} s ({sp / base:.2f}x the package's); "
               f"50 stream blocks {st:.2f} s ({st / stream:.2f}x)", flush=True)
     genes = rows[:3_000]

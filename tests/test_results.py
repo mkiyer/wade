@@ -48,6 +48,28 @@ def test_plots_render_from_one_schema(result,tmp_path,backend,theme):
             fig.to_json()
 
 
+def test_write_results_takes_integer_gene_ids_and_numpy_labels(tmp_path):
+    pl = pytest.importorskip("polars")
+    x = np.random.default_rng(3).poisson(20, (6, 8))
+    sheet = {"id": [f"s{j}" for j in range(8)], "group": np.r_[np.ones(4, np.int64), np.zeros(4, np.int64)]}
+    cond = wade.condition(sheet, key="id", column="group", case=np.int64(1), control=np.int64(0))
+    r = wade.wade(x, cond, gene_names=np.arange(100, 106), sample_names=sheet["id"], fdr=np.float32(0.1),
+                  max_permutations=99)
+    for extension in ("tsv", "parquet"):
+        path = wade.write_results(r, tmp_path / f"r.{extension}")
+        frame = pl.read_csv(path, separator="\t") if extension == "tsv" else pl.read_parquet(path)
+        assert frame["gene"].to_list() == list(range(100, 106))
+    record = json.loads((tmp_path / "r.manifest.json").read_text())
+    assert record["run"]["case_label"] == 1 and record["run"]["fdr"] == pytest.approx(0.1)
+
+
+def test_rarity_views_check_their_arguments(result):
+    with pytest.raises(ValueError, match="n must"):
+        result.rare_subsets(n=0)
+    with pytest.raises(ValueError, match="drivers"):
+        result.sample_load(drivers=-1)
+
+
 def test_manual_counts_container_is_validated():
     invalid=wade.Counts(np.array([[1,np.nan,2,2]]),np.array(["g"]),np.array(list("abcd")))
     with pytest.raises(ValueError,match="non-finite"):

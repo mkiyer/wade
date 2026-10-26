@@ -1,6 +1,6 @@
 ---
 title: "TCGA breast: subtypes and expression heterogeneity"
-subtitle: "WADE 0.2.0 · release candidate · review pending"
+subtitle: "WADE 0.2.0"
 format:
   html:
     html-math-method: mathml
@@ -51,11 +51,11 @@ RLE is fitted on the full measured gene universe after primary sample selection.
 The prespecified example test mask requires at least 10 counts in five pooled
 samples and pooled mean CPM at least 0.1, using the eligible input cohort.
 This is an example recipe, not a universal threshold. Test filtering reuses
-the fitted factors. The area test runs on counts thinned binomially until
-every sample's size factor equals the smallest; the subset test uses normalized counts with WADE's
-seeded count jitter, `(count + jitter) / size_factor`; figures use log2. Repeated observations, depth and tissue mixture remain relevant to
-interpretation. The upstream count processing/reference record remains a
-release documentation requirement.
+the fitted factors. Both tests run on counts thinned binomially until every
+sample's size factor equals the smallest; the effects and the subset's
+description read normalized counts, and figures plot log2(count / size factor + 1).
+Repeated observations, depth and tissue mixture remain relevant to
+interpretation.
 
 ```{python}
 #| label: accounting
@@ -68,8 +68,8 @@ table(primary_meta.group_by("group").len(),"primary-accounting")
 
 Each gene's area and subset are tested with the default settings (both
 directions, `pvalues="auto"`, `relative_error=0.2`, the
-999,999-shuffle budget, seed 1), and each test has one BH family over the
-tested genes. Display markers were fixed in advance; their inclusion does not
+999,999-shuffle budget, `fdr=0.05`, seed 1), and each test has one BH family
+over the tested genes. Display markers were fixed in advance; their inclusion does not
 imply significance.
 
 ```{python}
@@ -104,7 +104,7 @@ table(TC.panel_table(res,PANEL).select(SHOW),"primary-panel")
 
 ```{python}
 #| label: fig-patterns
-#| fig-cap: "Each tested gene's subset: its share of the tumours against its fold over the alignment, colored by the subset test's q-value."
+#| fig-cap: "Each tested gene's subset: its share of the tumours against its fold over the alignment, colored by whether the subset test calls it (q ≤ 0.05)."
 TC.plot_subsets(res,["ERBB2","ESR1","PGR","KRT5","MKI67"])
 ```
 
@@ -181,8 +181,10 @@ above. The tumour reference fit is frozen before the contrasts. Each contrast
 uses the same eligible genes and seed, with a prespecified 99,999-shuffle
 budget. For each test, one BH correction covers every gene × contrast p-value
 together. This is an exploratory expression-label association family, not
-independent validation of PAM50. With the shuffled floor of 10⁻⁵, a subset
-discovery in this family needs several genes at the floor together.
+independent validation of PAM50. Each contrast runs with `fdr=0.05`, so its
+discoveries report bounds certified for that contrast alone: pooled, BH calls a
+subset of what finished runs would. With the shuffled floor of 10⁻⁵, a subset
+discovery in this family needs at least 21 genes at the floor together.
 
 ```{python}
 #| label: subtype-tests
@@ -209,8 +211,7 @@ table(all_contrasts.filter(pl.col("gene").is_in(["ERBB2","ESR1","KRT5","MKI67"])
     "subtype","gene","log2fc","area_fraction","subset_fraction","subset_log2fc","q_area_four_contrasts","q_subset_four_contrasts"),"subtype-panel")
 ```
 
-## Review status
+## Scope
 
 All subtype and primary results, including missed display markers, are retained.
-Figures and results require user approval before release. No sample-level
-rarity or inferred subtype membership is claimed.
+No sample-level rarity or inferred subtype membership is claimed.

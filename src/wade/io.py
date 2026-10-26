@@ -8,8 +8,8 @@ instead:
   (NumPy array, polars or pandas DataFrame, any sparse matrix with
   ``.toarray()``) and turn it into the one shape the statistic uses: a dense
   ``genes x samples`` float64 array with gene and sample labels beside it.
-  Labels are optional; the orientation is never guessed. Other per-gene
-  columns are carried in ``Counts.meta`` and read by no statistic.
+  Labels are optional; the orientation is never guessed. Columns that are
+  not samples are not read.
 * :func:`condition` — turn a sample metadata table into a case/control
   assignment and align it to the matrix's samples *strictly*: a silently
   dropped sample is a silently different analysis, and because library sizes
@@ -25,7 +25,7 @@ imported inside the call.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -57,36 +57,10 @@ class Counts:
     values: np.ndarray                  # (genes, samples) float64
     gene_names: np.ndarray              # (genes,) object
     sample_names: np.ndarray            # (samples,) object
-    #: Every non-sample column of an input frame, per gene — a symbol, a
-    #: biotype, a length. Read by no statistic; figures can show it and
-    #: ``normalizer="Length"`` is looked up here.
-    meta: dict = field(default_factory=dict)
 
     @property
     def shape(self) -> tuple[int, int]:
         return self.values.shape
-
-    def normalizer(self, column: str) -> np.ndarray:
-        """The per-gene **numeric** vector held in ``meta`` under ``column``.
-
-        ``meta`` carries every per-gene column the input had, including string
-        ones (a symbol, a biotype); only a numeric column can be a normalizer,
-        so naming a non-numeric one raises here rather than failing later
-        inside the arithmetic.
-        """
-        if column not in self.meta:
-            raise KeyError(
-                f"no column {column!r} to use as a normalizer; the matrix carries "
-                f"{sorted(self.meta) or 'no metadata columns'}. Pass the values as an "
-                f"array instead, or name a column that is in the counts frame."
-            )
-        col = np.asarray(self.meta[column])
-        if not _numeric(col):
-            raise TypeError(
-                f"column {column!r} is not numeric, so it cannot be a normalizer; "
-                f"it is carried as per-gene metadata instead."
-            )
-        return col
 
 
 def _is_frame(obj) -> bool:
@@ -106,10 +80,20 @@ def _positional(prefix: str, n: int) -> np.ndarray:
 
 
 def _numeric(a: np.ndarray) -> bool:
-    if a.dtype.kind in "iufb":
+    if a.dtype.kind in "iuf":
         return True
-    return a.dtype == object and all(isinstance(v, (int, float, np.number)) and
-                                     not isinstance(v, bool) for v in a[:32])
+    return a.dtype == object and all(isinstance(v, (int, float, np.integer, np.floating)) and
+                                     not isinstance(v, bool) for v in a.tolist())
+
+
+def _missing(value) -> bool:
+    """None, a NaN or infinity, or a missing-value marker such as pandas' NA."""
+    if value is None or (isinstance(value, (float, np.floating)) and not np.isfinite(value)):
+        return True
+    try:
+        return bool(value != value)
+    except (TypeError, ValueError):                  # pandas.NA: its comparisons are themselves missing
+        return True
 
 
 def _labelled_index(frame):
@@ -122,8 +106,8 @@ def _labelled_index(frame):
     return None if _numeric(values) else values
 
 
-def _from_frame(frame, id_column, sample_columns, exclude=()):
-    """(values, gene_names, sample_names, meta) from a duck-typed DataFrame."""
+def _from_frame(frame, id_column, sample_columns):
+    """(values, gene_names, sample_names) from a duck-typed DataFrame."""
     cols = list(frame.columns)
     if not cols:
         raise ValueError("the counts frame has no columns")
@@ -143,22 +127,19 @@ def _from_frame(frame, id_column, sample_columns, exclude=()):
 
     rest = [c for c in cols if c != id_column]
     if sample_columns is None:
-        # A column named as the normalizer is metadata, not a sample: without
-        # this a featureCounts-lite frame (id, Length, samples) would quietly
-        # analyse the gene lengths as an extra sample.
-        sample_columns = [c for c in rest if c not in set(exclude)]
         # Everything after the id column is a sample by default. A non-numeric
         # leftover means the frame is not a plain matrix — a featureCounts file
         # has Chr and Strand in there — so refuse rather than analyse a
         # chromosome name as expression.
+        sample_columns = rest
         bad = [c for c in sample_columns if not _numeric(_column(frame, c))]
         if bad:
             raise ValueError(
                 f"columns {bad} are not numeric, so they cannot be samples. Pass "
-                f"sample_columns=[...] to say which columns hold counts; the others "
-                f"are kept as per-gene metadata. (A featureCounts file needs this: "
-                f"its Chr/Start/End/Strand/Length columns sit between the gene id "
-                f"and the samples.)"
+                f"wade.as_counts(frame, sample_columns=[...]) to say which columns "
+                f"hold counts; the others are not read. (A featureCounts file needs "
+                f"this: its Chr/Start/End/Strand/Length columns sit between the gene "
+                f"id and the samples.)"
             )
     else:
         sample_columns = list(sample_columns)
@@ -169,10 +150,7 @@ def _from_frame(frame, id_column, sample_columns, exclude=()):
         raise ValueError("no sample columns were found in the counts frame")
 
     values = np.asarray(frame[sample_columns].to_numpy(), dtype=np.float64)
-    # Every leftover column is carried, string ones included: a symbol is what
-    # makes a ranked table readable. Only a numeric one can be a normalizer.
-    meta = {c: _column(frame, c) for c in rest if c not in sample_columns}
-    return values, gene_names, np.asarray(sample_columns, dtype=object), meta
+    return values, gene_names, np.asarray(sample_columns, dtype=object)
 
 
 def as_counts(
@@ -181,7 +159,6 @@ def as_counts(
     genes: str = "rows",
     id_column="auto",
     sample_columns=None,
-    exclude=(),
     gene_names=None,
     sample_names=None,
 ) -> Counts:
@@ -193,7 +170,7 @@ def as_counts(
         A 2-D NumPy array; a polars or pandas DataFrame (duck-typed on
         ``.columns`` and ``.to_numpy()``, so neither is a dependency); any
         sparse matrix exposing ``.toarray()``; or an existing :class:`Counts`,
-        which is returned unchanged.
+        which is checked like any other input.
     genes
         ``"rows"`` (the default and WADE's canonical orientation) or
         ``"columns"``, which **transposes**. Never inferred: a square matrix
@@ -208,14 +185,10 @@ def as_counts(
         a sample.
     sample_columns
         For a frame: which columns hold counts. By default every column after
-        the id column, so **every numeric column is a sample** unless it is
-        named in ``exclude`` or left out of ``sample_columns``; a non-numeric
-        leftover raises rather than being read as a sample. Columns not in
-        ``sample_columns`` become :attr:`Counts.meta`.
-    exclude
-        Column names that are **not** samples, kept as per-gene metadata.
-        :func:`wade.wade` passes the normalizer's column name here, so
-        ``normalizer="Length"`` never doubles as an extra sample.
+        the id column, so **every numeric column is a sample** unless
+        ``sample_columns`` leaves it out; a non-numeric leftover raises rather
+        than being read as a sample. Columns not in ``sample_columns`` are not
+        read.
     gene_names, sample_names
         Explicit labels, overriding anything found on the object. Positional
         names (``gene0``, ``sample0``, ...) are synthesized when neither is
@@ -224,26 +197,16 @@ def as_counts(
     if isinstance(obj, Counts):
         if gene_names is not None or sample_names is not None or genes != "rows":
             raise ValueError("Counts already carries labels and orientation; change them explicitly before analysis")
-        if obj.values.ndim != 2:
-            raise ValueError("Counts.values must be genes x samples")
-        for labels, size in ((obj.gene_names, obj.shape[0]), (obj.sample_names, obj.shape[1])):
-            if np.asarray(labels).shape != (size,) or _duplicates(np.asarray(labels)):
-                raise ValueError("Counts identifiers must be unique and match the matrix shape")
-        if any(np.asarray(v).shape != (obj.shape[0],) for v in obj.meta.values()):
-            raise ValueError("Counts metadata must contain one value per gene")
-        _locate_bad_counts(obj.values, obj.gene_names, obj.sample_names)
-        return obj
+        obj, gene_names, sample_names = obj.values, obj.gene_names, obj.sample_names
     if genes not in ("rows", "columns"):
         raise ValueError(f"genes must be 'rows' or 'columns'; got {genes!r}")
 
-    meta: dict = {}
     found_genes = found_samples = None
 
     if _is_frame(obj):
         # A frame's columns are the axis with labels, so read it in its own
         # orientation and transpose afterwards if the caller says so.
-        values, found_genes, found_samples, meta = _from_frame(
-            obj, id_column, sample_columns, exclude)
+        values, found_genes, found_samples = _from_frame(obj, id_column, sample_columns)
     elif hasattr(obj, "toarray"):                     # scipy.sparse and friends
         values = np.asarray(obj.toarray(), dtype=np.float64)
     else:
@@ -253,11 +216,8 @@ def as_counts(
         raise ValueError(f"expected a 2-D genes x samples matrix, got shape {values.shape}")
 
     if genes == "columns":
-        # The frame's rows were samples, so its leftover columns described
-        # samples, not genes: they are not gene metadata and are dropped.
         values = values.T
         found_genes, found_samples = found_samples, found_genes
-        meta = {}
     values = np.ascontiguousarray(values, dtype=np.float64)
     g, n = values.shape
 
@@ -282,8 +242,7 @@ def as_counts(
                              + (f" and {len(dup) - 8} more" if len(dup) > 8 else ""))
 
     _locate_bad_counts(values, found_genes, found_samples)
-    return Counts(values=values, gene_names=found_genes, sample_names=found_samples,
-                  meta={k: np.asarray(v) for k, v in meta.items()})
+    return Counts(values=values, gene_names=found_genes, sample_names=found_samples)
 
 
 def _locate_bad_counts(values, gene_names, sample_names) -> None:
@@ -317,7 +276,7 @@ def _locate_bad_counts(values, gene_names, sample_names) -> None:
 def _duplicates(arr: np.ndarray) -> list:
     seen, duplicates = set(), []
     for value in arr.tolist():
-        if value is None or (isinstance(value, (float, np.floating)) and not np.isfinite(value)):
+        if _missing(value):
             raise ValueError("identifiers cannot be missing or non-finite")
         try:
             if value in seen:
@@ -463,8 +422,7 @@ def condition(
         for name, f in zip(strata_columns, factors):
             if len(f) != len(ids):
                 raise ValueError(f"columns {key!r} and {name!r} have different lengths")
-            missing = [s for s, v in zip(ids[chosen].tolist(), f[chosen].tolist())
-                       if v is None or (isinstance(v, float) and not np.isfinite(v))]
+            missing = [s for s, v in zip(ids[chosen].tolist(), f[chosen].tolist()) if _missing(v)]
             if missing:
                 raise ValueError(f"strata column {name!r} has no value for {len(missing)} sample(s): {missing[:8]}")
         by_sample = {s: tuple(f[j] for f in factors) for j, s in enumerate(ids.tolist()) if chosen[j]}
@@ -483,10 +441,6 @@ RESULT_COLUMNS = (
 )
 
 
-def result_columns(res):
-    return {name: getattr(res, name) for name in RESULT_COLUMNS}
-
-
 def manifest(res, *, alpha=0.05):
     """The complete tested family, preprocessing, sample design and MC records."""
     from datetime import datetime, timezone
@@ -500,6 +454,7 @@ def manifest(res, *, alpha=0.05):
         wade_version=__version__, created_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         numpy_version=np.__version__, run=dict(res.params), normalization=res.normalization.to_dict(),
         design=dict(genes=genes, sample_names=res.sample_names.tolist(), condition=res.cond.tolist(),
+                    strata=None if res.strata is None else res.strata.tolist(),
                     n_case=int(res.cond.sum()), n_control=int((res.cond == 0).sum()),
                     n_tested=int(tested.sum()), status=res.status.tolist(),
                     tested_reference_genes=[g for g, keep in zip(genes, tested)
@@ -529,10 +484,13 @@ _WRITERS = {
 }
 
 
-def _manifest_path(path: Path) -> Path:
-    """``<stem>.manifest.json`` beside the table; ``stem`` keeps every dotted
-    component, so ``plasma.v1.tsv`` and ``plasma.v2.tsv`` get their own."""
-    return path.with_name(path.stem + ".manifest.json")
+def _plain(value):
+    """NumPy scalars and arrays as JSON values."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
 
 
 def write_results(res, path, *, alpha: float = 0.05) -> Path:
@@ -540,8 +498,9 @@ def write_results(res, path, *, alpha: float = 0.05) -> Path:
 
     Format follows the extension: ``.tsv`` / ``.txt``, ``.csv``, ``.parquet``,
     ``.arrow`` / ``.ipc`` / ``.feather``. The manifest is written to
-    ``<stem>.manifest.json``; ``alpha`` sets the significance counts it
-    records.
+    ``<stem>.manifest.json`` (``stem`` keeps every dotted component, so
+    ``plasma.v1.tsv`` and ``plasma.v2.tsv`` get their own); ``alpha`` sets the
+    significance counts it records and is independent of the run's ``fdr``.
     """
     path = Path(path)
     writer = _WRITERS.get(path.suffix.lower())
@@ -549,7 +508,8 @@ def write_results(res, path, *, alpha: float = 0.05) -> Path:
         raise ValueError(
             f"unknown result format {path.suffix!r}; use one of {sorted(_WRITERS)}."
         )
+    record = json.dumps(manifest(res, alpha=alpha), indent=2, default=_plain) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     writer(res.to_frame(), path)
-    _manifest_path(path).write_text(json.dumps(manifest(res, alpha=alpha), indent=2) + "\n")
+    path.with_name(path.stem + ".manifest.json").write_text(record)
     return path

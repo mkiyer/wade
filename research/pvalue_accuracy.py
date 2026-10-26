@@ -88,9 +88,7 @@ def main():
         print(f"{n1:3d} v {n0:3d}: {len(keep)} tested genes, estimate > 0.2 for "
               f"{np.mean(error > 0.2):.1%}; checked {resolved.sum()} against "
               f"{'every labelling' if everything else f'{SHUFFLES:.0e} shuffles'}", flush=True)
-    out = np.array(rows, dtype=object)
-    np.save(ROOT / ".release/0.2.0/pvalue-accuracy.npy", out, allow_pickle=True)
-    report(out)
+    report(np.array(rows, dtype=object))
 
 
 def report(rows):

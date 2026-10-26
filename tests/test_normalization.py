@@ -1,7 +1,17 @@
 import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 import wade
+
+
+def test_rle_matches_deseq2():
+    """RLE size factors equal DESeq2's median-of-ratios factors on its reference cases."""
+    reference = json.loads((Path(__file__).parent / "fixtures" / "normalization-reference.json").read_text())
+    for case in reference["cases"].values():
+        factors = wade.fit_normalization(np.array(case["counts"], float)).size_factors
+        np.testing.assert_allclose(factors, case["rle"], rtol=1e-13)
 
 
 def test_reference_ids_rle_formula_and_json_roundtrip():

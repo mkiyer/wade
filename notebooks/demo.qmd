@@ -211,7 +211,7 @@ result.plot_volcano(label=marker_names[:-1])
 
 ```{python}
 #| label: fig-demo-patterns
-#| fig-cap: "Each gene's subset share against its fold over the alignment, colored by its q-value."
+#| fig-cap: "Each gene's subset share against its fold over the alignment, colored by whether the subset test calls it (q ≤ 0.05)."
 result.plot_patterns(label=marker_names[:-1])
 ```
 

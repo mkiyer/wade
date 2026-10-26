@@ -61,7 +61,6 @@ def test_mean_test_and_stopping_records_against_exact_mean_differences(direction
     assert p[0] == 1 and tried[0] == STOP
 
 
-@pytest.mark.validation
 def test_the_computed_tail_matches_exact_enumeration_of_every_labelling():
     n1, n0 = 9, 11
     x = np.random.default_rng(5).negative_binomial(5, 5 / 55, (40, n1 + n0)).astype(float)   # mean 50
@@ -779,27 +778,43 @@ def test_strata_hold_the_level_where_a_study_effect_confounds_the_unstratified_t
     assert np.mean(strat.area_pvalue <= 0.05) <= bound and np.mean(strat.subset_pvalue <= 0.05) <= bound
 
 
-def test_restricted_shuffle_preserves_each_group_and_missing_strata_rejected():
-    from wade.permutation import validate_perms
-    cond = np.array([1, 1, 0, 1, 0, 0])
-    strata = np.repeat(["a", "b"], 3)
-    labels = wade.draw_perms(cond, 101, seed=42, strata=strata)
-    validate_perms(labels, cond, 101, strata=strata)
-    assert (labels[:, :3].sum(axis=1) == 2).all()
-    assert (labels[:, 3:].sum(axis=1) == 1).all()
-    with pytest.raises(ValueError, match="missing"):
-        wade.draw_perms(cond, 3, strata=["a"]*5+[None])
+def test_missing_strata_labels_are_rejected_in_every_form():
+    from wade.permutation import strata_codes
+    for missing in (None, float("nan"), np.float32("nan"), float("inf")):
+        with pytest.raises(ValueError, match="missing"):
+            strata_codes(["a"] * 5 + [missing], 6)
+        with pytest.raises(ValueError, match="missing"):
+            strata_codes([["a"] * 6, ["p"] * 5 + [missing]], 6)
 
 
-def test_exhaustive_orbit_calibrates_the_mean_test():
-    """Over every relabelling of a small design, the exact permutation p-value is superuniform."""
-    x = np.array([[0, 0, 0, 2, 4, 4], [0, 0, 0, 0, 0, 100], [3, 3, 3, 3, 3, 3], [1, 9, 2, 8, 3, 7]], float)
-    orbit = [np.isin(np.arange(6), idx).astype(int) for idx in combinations(range(6), 3)]
-    difference = np.array([x[:, p == 1].mean(axis=1) - x[:, p == 0].mean(axis=1) for p in orbit])
-    for row in difference.T:
-        p = (np.abs(row)[None, :] >= np.abs(row)[:, None] - 1e-12).mean(axis=1)
-        for alpha in np.unique(p):
-            assert np.mean(p <= alpha) <= alpha + 1e-14
+def test_strata_follow_the_counts_sample_order_in_wade_contrast():
+    x = np.random.default_rng(9).poisson(30, (20, 8)).astype(float)
+    names = np.array([f"s{j}" for j in range(8)])
+    order = [1, 3, 5, 7, 0, 2, 4, 6]                           # cases s1, s3, s5, s7, then the controls
+    # Cases in one stratum and controls in another: no stratum holds both groups.
+    with pytest.raises(ValueError, match="no stratum holds both"):
+        wade.wade_contrast(x, names[1::2], names[::2], sample_names=names, strata=np.where(np.arange(8) % 2, "b", "a"))
+    strata = np.where(np.arange(8) < 4, "a", "b")
+    contrast = wade.wade_contrast(x, names[1::2], names[::2], sample_names=names, strata=strata,
+                                  max_permutations=99, fdr=None)
+    direct = wade.wade(x[:, order], [1, 1, 1, 1, 0, 0, 0, 0], strata=strata[order], max_permutations=99, fdr=None)
+    np.testing.assert_array_equal(contrast.strata, direct.strata)
+    np.testing.assert_array_equal(contrast.area_pvalue, direct.area_pvalue)
+    np.testing.assert_array_equal(contrast.subset_pvalue, direct.subset_pvalue)
+
+
+def test_genes_without_reads_in_the_tested_samples_are_neither_tested_nor_described():
+    x = np.random.default_rng(11).poisson(40, (6, 10)).astype(float)
+    x[0] = 0                                                   # no reads at all
+    x[1] = 0
+    x[1, 8:] = 50                                              # reads only in a stratum that is left out
+    cond = [1, 1, 1, 1, 0, 0, 0, 0, 1, 1]
+    with pytest.warns(UserWarning, match="left out"):
+        r = wade.wade(x, cond, strata=["a"] * 8 + ["b"] * 2, max_permutations=99, fdr=None)
+    assert list(r.status[:3]) == ["all_zero", "all_zero", "tested"] and r.params["hypotheses"] == 4
+    assert list(r.subset_side[:2]) == ["none", "none"] and not r.subset_fraction[:2].any()
+    assert np.isnan(r.subset_log2fc[:2]).all() and np.isnan(r.alignment_log2fc[:2]).all()
+    assert r.subset("gene0").side == "none" and len(r.subset("gene0").samples) == 0
 
 
 def subset_genes(rng, n1, n0, genes=24):

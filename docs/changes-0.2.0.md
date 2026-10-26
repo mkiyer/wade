@@ -1,145 +1,157 @@
 # Changes in WADE 0.2.0
 
-0.2.0 replaces the 0.1.x two-stage test with two questions per gene, each
-tested: how far apart the cases and controls lie as a whole (the area), and
-whether a subset of cases departs from the one fold every case would share.
-This is an intentional breaking release with no compatibility aliases.
+0.2.0 replaces 0.1.0's two-stage test (`p_mean_shift`, then `p_subset`) with
+two tested quantities per gene: the **area** between cases and controls, and
+the **subset** of cases that departs from the one fold every case would
+share. It is a breaking release with no compatibility aliases. This note maps
+0.1.0, the published release (tag `v0.1.0`), onto 0.2.0. The
+[manual](manual.md) documents every argument and column, and the
+[method](method.md) gives the definitions.
 
-## The area and the subset
+## What the tests now do
 
-- `wade(counts, cond)` measures each gene's **area**, the signed area between
-  the case and control quantile functions of normalized counts. It is exactly
-  the difference in means, in reads per sample. It also reports the **area
-  fraction**, the area over the total area under both curves, between −1 and
-  1.
-- The **fold**, `log2fc`, is log2(case mean / control mean), with no
-  pseudocount (±inf where a group has no reads).
-- Every normalization ends as one size factor per sample: RLE on all genes,
-  RLE on internal control genes, or factors fitted elsewhere. Before testing,
-  both tests thin every sample binomially until all size factors equal the
-  smallest.
-  - Samples sequenced to different depths are then exchangeable under the
-    null at every expression level.
-  - Genes with too few reads to trust are washed out rather than called.
-  - The effects use every read.
-- WADE finds each gene's **subset**: the cases above or below the point where
-  the cases' Lorenz curve of count + 1 falls furthest below the controls'.
-  Nothing about the subset's size is chosen in advance.
-- **The subset test** asks whether every case could carry one common fold of
-  the controls' distribution.
-  - It thins the depth-equalized counts of the higher group by the
-    Wasserstein-1 fold of log(count + 1), rather than rescaling them: a
-    thinned count keeps the count model exact.
-  - It thins in four independent draws, shuffles labels over them, and
-    scores each shuffle by the mean of the four walks, so that one draw's
-    chance thinning does not decide a call.
-  - Its validated range is genes whose sparser group averages at least 32
-    reads per sample, and `wade()` warns how many tested genes fall below it.
-- `direction="both"` (default) tests both two-sided. `"up"` or `"down"`
-  declares a side for both: an area in that direction, and a subset of cases
-  beyond the rest on that side.
-- Each count receives seeded Uniform(0, 1) jitter, so that no two values tie,
-  above all zeros.
-- **Strata.** `strata=` takes one label per sample (study, site, batch), or a
-  list of factors whose combinations are the strata; `condition(...,
-  strata=...)` reads them from metadata columns.
-  - Labels are exchanged only within strata, and each stratum is thinned to
-    its own smallest size factor.
-  - The area test sums within-stratum differences with
-    Cochran–Mantel–Haenszel weights, its p-value from a stratified
-    saddlepoint or from shuffles within strata.
-  - The subset test takes one fold out of every case and a level per
-    stratum.
-  - case_mean and control_mean are Mantel–Haenszel standardized means.
-  - Strata holding only one group are left out of both tests, with a
-    warning.
-  - `params["strata"]` records the design.
-  - Pairing and repeated measures are not validated yet.
+- **The area** is exactly the difference in group means, in reads per sample:
+  the signed area between the quantile functions, with no quantile grid. Its
+  **area fraction**, the area over the total area under both curves, lies
+  between −1 and 1, and `log2fc` is log2(case mean / control mean).
+- **Normalization** is one size factor per sample, RLE by default. Means are
+  count / size factor: reads per sample at the cohort's typical depth, not
+  per million.
+- **Depth equalization.** Before both tests every sample is thinned
+  binomially until all size factors equal the smallest. Depth cannot then
+  pass for expression, and genes with too few reads are washed out rather
+  than called. The effects use every read.
+- **The subset** is the cases above or below the point where the cases'
+  Lorenz curve of count + 1 falls furthest below the controls'. Its test asks
+  whether every case could carry one common fold, and averages its walk over
+  four thinning draws. It is validated where the lower group averages at
+  least 32 reads per sample, and `wade()` warns how many tested genes fall
+  below that.
+- **P-values.** `relative_error` sets the precision of every p-value. The
+  area test's p-value is a saddlepoint approximation to its exact
+  permutation distribution, shuffled where the approximation's error
+  estimate exceeds `relative_error`; the subset test is always shuffled.
+  With `fdr` set, shuffles stop once each gene's BH decision is settled, and
+  the decisions are exactly those of finished runs.
+- **Strata** exchange labels only within each stratum and thin each stratum
+  to its own smallest size factor. The area test combines strata with
+  Cochran–Mantel–Haenszel weights.
 
-## P-values
+## `wade()`
 
-- `relative_error=0.2` sets the precision of every p-value. Shuffled p-values
-  follow Besag–Clifford's sequential rule, stopping at the
-  ⌈1/relative_error²⌉-th exceedance (the 25th by default) or at
-  `max_permutations` shuffles (default 999,999, so an isolated discovery stays
-  possible among 50,000 genes).
-- `pvalues="auto"` (default) computes the area test from the exact permutation
-  distribution of the cases' total by Skovgaard's double saddlepoint, with no
-  floor above one labelling. It shuffles only the genes whose saddlepoint
-  error estimate exceeds `relative_error`. `pvalues="permutation"` shuffles
-  every p-value. The subset test is always shuffled.
-- `fdr=0.05` (default) is the level at which BH decides. Shuffles stop once
-  each gene's decision is settled: once a bound on its finished p-value falls
-  below BH's threshold.
-  - BH rejects exactly the genes it would reject had every run finished, so
-    the false discovery rate is unchanged.
-  - Strongly significant genes need hundreds of shuffles instead of the full
-    budget.
-  - Rejected genes report the bound as their p-value; `result.bounded` marks
-    them. `fdr=None` finishes every run.
-- Every gene, in both tests, sees one seeded stream of shuffles that can be
-  regenerated from any position, so a gene can stop and resume exactly.
-- The subset walk and its registration are native code, one implementation for
-  the observed split and every shuffle.
+```python
+# 0.1.0
+wade(counts, normalizer, cond, *, nperms=2000, seed=1, alternative="two-sided",
+     lib_sizes=None, strata=None, n_boot=0, boot_level=0.95, subset=True,
+     pseudocount=1.0, max_probs=2000, gene_chunk=None, stage1="grid",
+     fit_backend="numpy", backend="auto", gene_names=None, sample_names=None,
+     noise=0.01, norm_factor=1e6, n_exc_min=10, n_tail=250, jitter=None,
+     perms=None, keep_null=False, allow_single_sample_group=False,
+     allow_empty_samples=False)
 
-## Results
+# 0.2.0
+wade(counts, cond, *, direction="both", normalization="rle", test_genes=None,
+     pvalues="auto", fdr=0.05, relative_error=0.2, max_permutations=999_999,
+     seed=1, strata=None, gene_names=None, sample_names=None, gene_chunk=None)
+```
 
-One row per input gene, with these columns: `gene`, `status`, `case_mean`,
-`control_mean`, `area`, `area_fraction`, `log2fc`, `area_pvalue`, `area_padj`,
-`alignment_log2fc`, `lorenz_gap`, `subset_side`, `subset_fraction`,
-`subset_log2fc`, `subset_pvalue`, `subset_padj` and `subset_rarity`. Each test has its own BH
-family over the tested genes.
+The second positional argument is now the condition: `wade(counts,
+normalizer, cond)` becomes `wade(counts, cond)`.
 
-- `result.subset(gene)` returns the subset's cases, its side, share, fold,
-  p-value and q-value.
-- `subset_rarity` ranks each gene's subset among genes with a subset of the
-  same size and side: the share of genes whose subset is at least as rare,
-  within the subset test's validated range or below it.
-  - `result.rare_subsets(n)` lists the rarest subsets, with the genes that
-    share their members.
-  - `result.sample_load()` shows which cases carry the rarest subsets, and
-    their driving genes.
-- `gene_detail(gene)` returns exact quantile intervals and their signed area.
-- `plot_volcano` maps area fractions against area q-values, `plot_patterns`
-  each gene's subset share against its fold, and `plot_gene` shows log2
-  expression.
+| 0.1.0 | 0.2.0 |
+| --- | --- |
+| `normalizer` (positional), `lib_sizes`, `norm_factor` | `normalization=`: `"rle"` (default), `"library"` (total counts), or a `Normalization` from `fit_normalization(...)` or `Normalization.from_size_factors(...)` |
+| `alternative="two-sided"`, `"greater"`, `"less"` | `direction="both"`, `"up"`, `"down"`, for both tests |
+| `nperms` | `relative_error`, `max_permutations` and `fdr` |
+| `stage1="saddlepoint"` | `pvalues="auto"` (the default) |
+| `seed`, `strata`, `gene_names`, `sample_names`, `gene_chunk` | unchanged names |
+| none | `test_genes=`, a mask such as `filter_counts(...)` returns |
+
+**Removed with no counterpart:** `n_boot`, `boot_level`, `subset` (the
+subset test always runs), `pseudocount`, `max_probs`, `fit_backend`,
+`backend`, `noise`, `jitter`, `perms`, `n_exc_min`, `n_tail`, `keep_null`,
+`allow_single_sample_group` and `allow_empty_samples`. The jitter is
+Uniform(0, 1) per count and the shuffles come from one stream, both seeded
+by `seed`. Each group needs at least two samples, and `wade()` refuses
+samples with no reads: remove them first.
+
+## Result columns
+
+| 0.1.0 | 0.2.0 | Note |
+| --- | --- | --- |
+| `gene` | `gene` | |
+| none | `status` | `tested`, `filtered` (left out by `test_genes`) or `all_zero` |
+| `case_mean`, `ctrl_mean` | `case_mean`, `control_mean` | Reads per sample at the cohort's typical depth |
+| `mean_shift` | `area` | Exactly the difference in means |
+| none | `area_fraction` | |
+| `log2_fc` | `log2fc` | log2(case_mean / control_mean): ±inf where a group has no reads |
+| `p_mean_shift`, `padj_mean_shift` | `area_pvalue`, `area_padj` | Tested on depth-equalized counts |
+| `fitted_fold_change` (an attribute) | `alignment_log2fc` | The common fold, as log2 |
+| `subset_stat` | `lorenz_gap` | A different statistic: the largest gap between the Lorenz curves |
+| `p_subset`, `padj_subset` | `subset_pvalue`, `subset_padj` | The null that every case carries one common fold |
+| `affected_fraction` | `subset_fraction` | The subset's share of the cases |
+| `direction`, a score from −1 to 1 | `subset_side` | `"up"`, `"down"` or `"none"` |
+| `subset_log2_fc` | `subset_log2fc` | The subset's fold over what the common fold predicts |
+| none | `subset_rarity` | A size-matched rank of the subset |
+| `w1`, `neglog10_p_*`, `z_*`, `nexc_*`, `refined_*`, bootstrap `*_lo` / `*_hi` | removed | |
+
+Each test has its own BH family over the tested genes. `result.bounded` marks
+the p-values that are bounds because their shuffles stopped at the decision.
+
+## Other changes to the API
+
+- `wade_contrast(counts, normalizer, case_samples, ctrl_samples, ...)` is now
+  `wade_contrast(counts, case_samples, control_samples, ...)`. Groups are
+  chosen by sample ID or Boolean mask; integer column positions are no
+  longer accepted. Its `strata=` follows the counts' sample order, as
+  before.
+- `condition(..., strata=)` reads strata from sample metadata columns.
+- `library_qc(counts, *, top_n=10)` drops `normalizer=`.
+- `plot_gene(result, gene)` and `plot_volcano(result)` take a result only,
+  and `plot_patterns(result)` is new. The volcano maps area fractions against
+  area q-values; the patterns plot maps each subset's share against its
+  fold. matplotlib is the default backend; pass `backend="plotly"` for
+  plotly. `Theme` drops `sequential`, `diverging`, `scale()` and `box()`.
+- `WadeResult` gains `subset(gene)`, `rare_subsets(n)`, `sample_load()`,
+  `bounded`, and the `plot_gene`, `plot_volcano` and `plot_patterns`
+  methods. `result.expression`, 0.1.0's `result.tpm`, holds the jittered
+  normalized counts.
+- `gene_detail(gene)` returns the exact quantile intervals of
+  `result.expression`, without strata. Their signed area is the difference in
+  means of those jittered values, so it differs from `area` by the jitter.
+- `as_counts` drops `exclude=`: name the sample columns with
+  `sample_columns=`. `Counts.meta`, `Counts.normalizer()` and
+  `WadeResult.gene_meta` are gone.
+- `write_results` writes integer gene IDs, which 0.1.0 refused, and NumPy
+  scalar labels.
+
+**Removed names.** `ALTERNATIVES`, `DEFAULT_MAX_PROBS`, `DEFAULT_NPERMS`,
+`affected_fraction`, `detectability_floor`, the `direction` function,
+`draw_jitter`, `draw_perms`, `library_sizes`, `null_statistics`,
+`perm_pvalues`, `plot_drivers`, `plot_linked`, `plot_stages`,
+`probability_grid`, `subset_drivers`, `subset_log2_fc`, `tpm_like`,
+`wade_gene` and `wade_stats`. From `wade.plotting`: `BACKENDS`,
+`DEFAULT_BACKEND`, `DEFAULT_THEME`, `QUADRANTS`, `available_backends`,
+`GenePanel`, `VolcanoData`, `StagesData`, `DriverPanel`, `gene_panels`,
+`volcano_data`, `stages_data` and `driver_panel`.
+
+**New names.** `DEFAULT_MAX_PERMUTATIONS`, `Normalization`, `Subset`,
+`fit_normalization`, `filter_counts`, `cpm`, `tpm` and `plot_patterns`.
+`cpm` and `tpm` convert counts for reporting; they are not test inputs.
+`permutation_space` stays.
+
+## Behaviour to note
+
+- Genes with no reads in the samples the tests use have `status`
+  `all_zero`: no test and no subset (`subset_side` `"none"`). Like filtered
+  genes, they stay in the table outside the BH families.
+- Strata holding only one group are left out of both tests, with a warning.
+  A gene whose reads all lie in left-out samples is then `all_zero`.
+- Missing values in strata raise an error, whether strata come as one
+  vector, a list of factors or `condition(..., strata=)`. 0.1.0 grouped them
+  silently.
 - The manifest records the hypothesis families, the p-value settings, the
-  depth kept, group size-factor medians and every stopping record.
+  strata, the depth kept, the groups' median size factors and every stopping
+  record.
 
-**Removed from 0.1.x.**
-
-- The `p_mean_shift`/`p_subset` stages and their q-values, the fitted
-  bulk-shift null, GPD tail extrapolation and bootstrap intervals.
-- The arguments `normalizer`, `nperms`, `max_probs`, `stage1`, `fit_backend`,
-  `backend`, `n_exc_min` and `jitter`.
-- The names `ALTERNATIVES`, `DEFAULT_MAX_PROBS`, `DEFAULT_NPERMS`,
-  `affected_fraction`, `detectability_floor`, the `direction` function,
-  `draw_jitter`, `library_sizes`, `null_statistics`, `perm_pvalues`,
-  `plot_drivers`, `plot_linked`, `plot_stages`, `probability_grid`,
-  `subset_drivers`, `subset_log2_fc`, `tpm_like`, `wade_gene` and
-  `wade_stats`.
-
-**Also removed before release:** the `scale="log2"` option and the
-`subsets="either"` option. They are recorded in
-[research ideas](research-ideas.md).
-
-**New names:** `DEFAULT_MAX_PERMUTATIONS`, `Normalization`, `Subset`,
-`fit_normalization`, `filter_counts`, `cpm`, `tpm` and `plot_patterns`. New
-arguments: `wade(..., strata=)` and `condition(..., strata=)`.
-
-## Normalization and filtering
-
-- `fit_normalization(counts)` fits RLE once; `reference_genes=` restricts it to
-  validated controls; `normalization="library"` uses total counts;
-  `Normalization.from_size_factors(...)` imports external exposures.
-- `filter_counts` and `test_genes=` choose the tested genes without refitting.
-  Filtered and all-zero genes stay in the table with a status and no test.
-- `cpm` and `tpm` convert single samples for reporting; they are not test inputs.
-
-## Evidence
-
-The area test was measured under an exact count-model reference built from
-real tumours, and the subset test's validated range under the same reference.
-Strata were measured against exact enumeration, on simulated studies with
-batch effects, and on real relabelling nulls from TCGA and GTEx; see
-[validation](validation.md).
+The evidence for the new tests is in [validation](validation.md).

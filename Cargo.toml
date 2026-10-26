@@ -4,6 +4,7 @@ name = "wade-kernel"
 # in pyproject.toml.
 version = "0.0.0"
 edition = "2021"
+rust-version = "1.88"                   # slice::as_chunks
 description = "Permutation-loop kernel for WADE (Wasserstein Area Differential Expression)"
 license = "GPL-3.0-only"
 
@@ -15,7 +16,9 @@ crate-type = ["cdylib"]
 [dependencies]
 # abi3-py310 matches requires-python: one wheel per platform works on
 # every supported Python, instead of one per platform per minor version.
-pyo3 = { version = "0.27", features = ["extension-module", "abi3-py310"] }
+# extension-module comes from pyproject.toml's maturin features, so that
+# cargo can also link the crate on its own.
+pyo3 = { version = "0.27", features = ["abi3-py310"] }
 numpy = "0.27"
 rayon = "1"
 

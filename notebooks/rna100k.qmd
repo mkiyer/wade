@@ -1,6 +1,6 @@
 ---
 title: "RNA100k: private API and scaling workbench"
-subtitle: "WADE 0.2.0 · single-test release candidate · review pending"
+subtitle: "WADE 0.2.0 · RNA100K workbench"
 format:
   html:
     html-math-method: mathml
@@ -83,7 +83,7 @@ res=cached_wade(counts,cond,normalization=norm,test_genes=keep,strata=strata,
                 gene_names=genes["gene_name"].to_numpy(),sample_names=selected["library"].to_numpy(),max_permutations=1999,seed=1)
 wade.write_results(res,OUT/"diagnostic-all-genes.tsv")
 _ = (OUT/"timing.json").write_text(json.dumps(dict(seconds=time.perf_counter()-start,genes=int(res.tested.sum()),
-    samples=len(cond),max_permutations=1999,capped=int(np.sum(res.tested & (res.n_exceedances<20))),
+    samples=len(cond),max_permutations=1999,capped=int(np.sum(res.tested & ((res.area_permutations==1999) | (res.subset_permutations==1999)))),
     count_sha256=array_hash(counts),discovery_claim=False),indent=2)+"\n")
 ```
 

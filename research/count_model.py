@@ -36,7 +36,8 @@ Sections (default: all):
   real         the area test on TCGA prostate with its own labels: the depth kept, the calls
                against the unthinned test by level, and how the calls move with the thinning seed
 
-Since 25 October 2026 the subset test thins: its count-model measurements are research/subset_range.py's.
+Since 25 October 2026 the subset test thins: its count-model measurements are research/subset_pooled.py's
+(the shipped four draws) and research/subset_range.py's (the constructions compared on the way).
 The constructions measured before (the Laplace fold, rank and count-exact score tests, depth choices) are
 in git at commit e4fd67f and recorded in docs/research-ideas.md; rescaled_subset_test keeps the subset
 test of 30 September 2026 for the studies that measured it.
@@ -158,11 +159,9 @@ def area_pvalues(z, cond, seed):
 
 
 def tests(counts, factors, cond, rows, seed=1):
-    """The area test (on counts thinned to the shallowest depth), the same test on the unthinned
-    normalized counts (the pre-build DE test), and the subset test as wade() runs it, for genes `rows`."""
-    x = expression(jittered(counts, rows, seed), factors)
+    """The area test (on counts thinned to the shallowest depth) and the subset test as wade() runs
+    them, for genes `rows`."""
     return dict(area=area_pvalues(area_values(counts, rows, factors, seed), cond, seed),
-                unthinned=area_pvalues(x, cond, seed),
                 subset=subset_test(counts, factors, cond, rows, direction="both", stop=STOP, maximum=MAXIMUM, seed=seed)[0])
 
 

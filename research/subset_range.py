@@ -1,21 +1,20 @@
-"""The subset test's validated range: can it reach below 128 reads per sample?
+"""The subset test's validated range: could it reach below 128 reads per sample? (It now reaches 32.)
 
 Until 25 October 2026 the subset test registered the cases onto the controls by the Wasserstein-1
 fold, a fold on count + 1 held fixed through the shuffles. Under the count model it was calibrated
-only where the sparser group expects at least 128 reads per sample: at low counts a fold, or a difference in depth
-between the groups, changes Poisson noise and zeros as well as levels, and that reads as a subset
+only where the lower group averages at least 128 reads per sample: at low counts a fold, or a difference in
+depth between the groups, changes Poisson noise and zeros as well as levels, and that reads as a subset
 (docs/validation.md). Thinning keeps the count model exact: a thinned mixed-Poisson count is mixed
 Poisson at the lower rate, whatever the latent level. This study measures constructions that thin
 instead of scaling, on the count model's reference (research/count_model.py: TCGA prostate tumours, a
 random split per gene, thinned binomially by design), at the arms that set the 128-read bound:
 
-  package                the test until 25 October 2026: W1 fold on count + 1, unthinned normalized
-                         counts (count_model.rescaled_subset_test)
-  equalized, scaled      every sample thinned to the smallest size factor (as the area test), then the
-                         shipped W1 registration
+  package                the rescaled test, until 25 October 2026: W1 fold on count + 1, unthinned
+                         normalized counts (count_model.rescaled_subset_test)
   equalized, thinned     every sample thinned to the smallest size factor; the higher group thinned
                          further by the W1 fold of the equalized counts; no registration in the shuffles
-                         (the test since 25 October 2026, validated at 32 reads)
+                         (one draw, with this study's own generator; the shipped test averages four draws,
+                         research/subset_pooled.py)
   equalized, fixed point the same with the fold by the W1 fixed point (thin, register, multiply, five
                          rounds; docs/research-ideas.md, section 4.2)
   oracle                 every sample thinned to the smallest exposure given by its size factor and the
@@ -29,16 +28,18 @@ Sections (default: all):
              0.05 / 0.01 / 0.001; every 4th gene
   bimodal    real zero-inflated genes (GSTM1, ERAP2, PSPHP1, UGT2B17) under random splits of the tumours
   power      subsets planted by thinning (a tenth of the cases 8x, a fifth 4x) at low counts, by level
-  seeds      the subset test on TCGA prostate with its own labels (445 tumours v 52 normals): how its
-             calls move between seeds 1 and 2, by the lower group's mean. The package at relative_error
-             0.2 and 0.1 (each seed draws the jitter, the thinning and the shuffles); seed 1's thinned pool
-             under each seed's shuffles (the shuffles' share); and the rescaled test of before 25 October
+  seeds      the one-draw thinned test (the package's subset_test with draws=1, as wade() ran it on 25
+             October) on TCGA prostate with its own labels (445 tumours v 52 normals): how its calls move
+             between seeds 1 and 2, by the lower group's mean, at relative_error 0.2 and 0.1 (stop 25 and
+             100; each seed draws the jitter, the thinning and the shuffles); seed 1's thinned pool under
+             each seed's shuffles (the shuffles' share); and the rescaled test of before 25 October
 
     WADE_TCGA_CONFIG=.release/0.2.0/tcga-config.json RAYON_NUM_THREADS=6 PYTHONPATH=src:research \\
         python research/subset_range.py [section ...]
 """
 import sys
 import time
+from math import ceil
 
 import numpy as np
 
@@ -47,12 +48,13 @@ from count_model import EDGES, LABELS, cohort_ratio, dataset, levels, share, sha
 from wade import _kernel
 from wade._means import equalized as package_equalized, expression, jittered
 from count_model import rescaled_subset_test as subset_test
-from wade._subsets import advance as package_advance, split, thinned as package_thinned, walks
+from wade._subsets import advance as package_advance, split, subset_test as package_subset_test
+from wade._subsets import thinned as package_thinned, walks
 from wade.permutation import STREAM_BLOCK, stream_block
 from wade.pvalues import sequential_p, settled
 
 MAXIMUM, STOP = 9_999, 25
-CONSTRUCTIONS = ("package", "equalized, scaled", "equalized, thinned", "equalized, fixed point", "oracle")
+CONSTRUCTIONS = ("package", "equalized, thinned", "equalized, fixed point", "oracle")
 
 
 def plain(x, cond, seed=1, direction="both"):
@@ -112,9 +114,6 @@ def constructions(counts, factors, cond, rows, fold, seed=1, which=CONSTRUCTIONS
     if "package" in which:
         out["package"] = subset_test(expression(jittered(counts, rows, seed), factors), cond, direction="both",
                                      stop=STOP, maximum=MAXIMUM, seed=seed)[0]
-    if "equalized, scaled" in which:
-        out["equalized, scaled"] = subset_test(expression(jittered(level, rows, seed), ones), cond, direction="both",
-                                               stop=STOP, maximum=MAXIMUM, seed=seed)[0]
     if "equalized, thinned" in which:
         thinned = thin_higher(level, cond, w1_fold(level, cond, rows, seed), rng)
         out["equalized, thinned"] = plain(expression(jittered(thinned, rows, seed), ones), cond, seed)
@@ -216,7 +215,7 @@ def seeds(seeds_=(1, 2), alpha=0.05, markers=("ERG", "ETV1", "ETV4", "FLI1", "SP
     d = tcga("prostate")
     raw, cond, factors, names = d["raw"], d["cond"].astype(np.uint8), d["factors"], list(d["names"])
     rows = np.arange(len(raw))
-    norm = wade.Normalization.from_size_factors(raw, factors, source="TCGA primary RLE")
+    lower = np.minimum(*[(raw[:, cond == c] / factors[cond == c]).mean(axis=1) for c in (1, 0)])
     marked = [(g, names.index(g)) for g in markers if g in names]
     print(f"\n== seeds: the subset test on TCGA prostate, {int(cond.sum())} tumours v {int((cond == 0).sum())} normals, "
           f"{len(raw):,} tested genes, BH q <= {alpha}; calls under seeds {seeds_[0]} and {seeds_[1]}, by the lower "
@@ -234,16 +233,15 @@ def seeds(seeds_=(1, 2), alpha=0.05, markers=("ERG", "ETV1", "ETV4", "FLI1", "SP
         print("    called by both, of those called by either: " + " | ".join(cells), flush=True)
         print("    " + "; ".join(f"{g} q {q[0][i]:.3g} / {q[1][i]:.3g}" for g, i in marked), flush=True)
 
-    lower = first = None
+    maximum, first = wade.DEFAULT_MAX_PERMUTATIONS, None
     for precision in (0.2, 0.1):
-        res = [wade.wade(raw, cond, normalization=norm, gene_names=d["names"], seed=s, fdr=alpha,
-                         relative_error=precision) for s in seeds_]
-        if lower is None:
-            first, lower = res[0], np.minimum(res[0].case_mean, res[0].control_mean)
-        report(f"the package, relative_error {precision}: each seed draws the jitter, the thinning and the shuffles",
-               [r.subset_padj for r in res], lower)
+        q = [wade.bh_adjust(package_subset_test(raw, factors, cond, rows, direction="both", stop=ceil(1 / precision ** 2),
+                                                maximum=maximum, seed=s, draws=1)[0]) for s in seeds_]
+        first = q[0] if first is None else first
+        report(f"one thinning draw, relative_error {precision}: each seed draws the jitter, the thinning and the "
+               f"shuffles (every run finished)", q, lower)
 
-    stop, maximum = 25, wade.DEFAULT_MAX_PERMUTATIONS                        # the defaults (relative_error 0.2)
+    stop = 25                                                                  # the default (relative_error 0.2)
     described = expression(jittered(raw, rows, seeds_[0]), factors)        # the package's subset_test, its stages apart
     ran = np.flatnonzero(split(described, cond)[3] > 0)
     pool, _ = package_thinned(raw[ran], factors, cond, rows[ran], seeds_[0])
@@ -256,8 +254,8 @@ def seeds(seeds_=(1, 2), alpha=0.05, markers=("ERG", "ETV1", "ETV4", "FLI1", "SP
         pv = np.ones(len(raw))
         pv[ran] = sequential_p(exceed, tried, stop=stop, maximum=maximum)
         finished.append(wade.bh_adjust(pv))
-    print(f"  finished runs reproduce the package's seed {seeds_[0]} calls: "
-          f"{np.array_equal(finished[0] <= alpha, first.subset_padj <= alpha)}", flush=True)
+    print(f"  its stages apart reproduce the one-draw test's seed {seeds_[0]} calls: "
+          f"{np.array_equal(finished[0] <= alpha, first <= alpha)}", flush=True)
     report(f"the jitter and thinning of seed {seeds_[0]}, the shuffles of each seed (every run finished)", finished, lower)
 
     rescaled = [wade.bh_adjust(subset_test(expression(jittered(raw, rows, s), factors), cond, direction="both",

@@ -13,21 +13,18 @@ dependencies:
   # Runtime: keep in step with pyproject.toml.
   - numpy>=1.24
   # Build toolchain for the Rust kernel, inside the environment.
-  - rust>=1.75
+  - rust>=1.88
   - maturin>=1.5,<2
-  # The optional extras (io, plot, saddlepoint).
+  # The optional extras (io, plot).
   - polars
   - plotly>=6
   - matplotlib-base>=3.8
-  - anywidget
-  - scipy>=1.10
+  - scipy>=1.11
   # Tests.
   - pytest>=7
   - pandas>=2.0
   # Notebooks (notebooks/*.qmd). Quarto itself is installed separately
-  # (https://quarto.org); python-kaleido is plotly's static export and needs a
-  # Chrome/Chromium on the machine.
+  # (https://quarto.org).
   - ipykernel
   - pyyaml
   - fastexcel
-  - python-kaleido>=1.0

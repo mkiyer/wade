@@ -12,10 +12,10 @@ thinned mixed-Poisson count is mixed Poisson at the lower rate, whatever the lat
 (thinned). Every sample is first thinned to the smallest size factor, as the area test thins
 them, so that no difference in depth reads as a subset. The fold that best aligns the two groups'
 quantile functions of log(count + 1), the Wasserstein-1 fold of those equalized counts, is then
-taken out of the higher group by thinning it further, rather than by rescaling it: at low counts
-a rescaling changes levels but not Poisson noise or zeros, and the extra noise reads as
-concentration. The test shuffles labels over the thinned pool and walks each shuffle. Each walk
-is a prefix sum, O(n) per shuffle.
+taken out of the higher group by thinning it further, which leaves every count with the Poisson
+noise and zeros of its lower rate. This is done in DRAWS independent draws; the test shuffles
+labels over the thinned pools and scores each shuffle by the mean of their walks. Each walk is a
+prefix sum, O(n) per shuffle.
 """
 import numpy as np
 
@@ -64,17 +64,16 @@ def thinned(counts, factors, cond, rows, seed, code=None, draws=1):
     pools, folds = [], []
     for draw in range(draws):
         level = equalized(counts, rows, factors, seed, code, draw)
-        ones = np.ones(level.shape[1])
-        x = expression(jittered(level, rows, seed, draw), ones)
+        x = jittered(level, rows, seed, draw)
         if code is None:
-            fold = _kernel.split(*_sorted(x, cond))[4]
+            fold = split(x, cond)[4]
         else:
             fold = np.exp(_weighted_median(*_stratum_folds(x, cond, code)))
         share = np.where(cond == 1, np.where(fold > 1, 1 / fold, 1.0)[:, None], np.where(fold < 1, fold, 1.0)[:, None])
         out = np.empty(level.shape, np.int64)
-        for i, (row, index) in enumerate(zip(level, rows)):
+        for i, (row, index) in enumerate(zip(level, rows, strict=True)):
             out[i] = stream(seed, index, 3, draw).binomial(row, share[i])
-        pool = expression(jittered(out, rows, seed, draw), ones)
+        pool = jittered(out, rows, seed, draw)
         if code is not None:
             logs = np.log1p(pool)
             centre = np.median(logs, axis=1, keepdims=True)
@@ -108,6 +107,7 @@ def _weighted_median(values, weights):
     below = np.cumsum(weights[order], axis=1)
     total = weights.sum()
     rows = np.arange(len(values))
+    # 1e-12: far above the rounding of a sum of strata weights, far below any gap between two such sums.
     first = np.argmax(2 * below >= total * (1 - 1e-12), axis=1)       # the first value at or past half the weight
     half = np.abs(2 * below[rows, first] - total) <= 1e-12 * total
     after = ranked[rows, np.minimum(first + 1, values.shape[1] - 1)]
@@ -141,14 +141,13 @@ def aligned(x, cond, code):
 
 
 def walks(x, cond, shift, *, direction, draws=1):
-    """Each gene's registered pool, ready to be walked under any labelling, and the observed
-    labelling's score.
+    """Each gene's pool, ready to be walked under any labelling, and the observed labelling's score.
 
-    The cases are carried back by the gene's registration shift (a fold on count + 1) and pooled
-    with the controls; the pool is sorted, with each value's sample beside it, so the walk reads
-    both groups in order whatever the labels. Returns the pool, its sample order and the scores.
-    With draws > 1, x holds each gene's draws in consecutive rows (a shift for each), and a gene's
-    score is the mean of its draws' scores.
+    The cases are carried back by shift, a fold on count + 1 (ones for the package's thinned pools;
+    research's rescaled test passes its registration), and pooled with the controls; the pool is
+    sorted, with each value's sample beside it, so the walk reads both groups in order whatever the
+    labels. Returns the pool, its sample order and the scores. With draws > 1, x holds each gene's
+    draws in consecutive rows (a shift for each), and a gene's score is the mean of its draws' scores.
     """
     cond = np.ascontiguousarray(cond, dtype=np.uint8)
     pooled = np.where(cond == 1, _carry(x, shift[:, None], undo=True), x)
@@ -201,10 +200,10 @@ def subset_test(counts, factors, cond, rows, *, direction, stop, maximum, seed, 
     advance(pooled, order, observed, cond, exceed, tried, direction=direction, stop=stop, maximum=maximum,
             threshold=-np.inf, seed=seed, code=code, draws=draws)
     genes = len(counts)
-    pvalue, hits, draws = np.ones(genes), np.zeros(genes, np.uint64), np.zeros(genes, np.uint64)
-    hits[ran], draws[ran] = exceed, tried
+    pvalue, hits, shuffles = np.ones(genes), np.zeros(genes, np.uint64), np.zeros(genes, np.uint64)
+    hits[ran], shuffles[ran] = exceed, tried
     pvalue[ran] = sequential_p(exceed, tried, stop=stop, maximum=maximum)
-    return pvalue, hits, draws
+    return pvalue, hits, shuffles
 
 
 def _sorted(x, cond):

@@ -1,3 +1,2 @@
-# Every file is LF on every platform. The JSON fixtures under tests/ are
-# byte-compared, so a CRLF checkout on Windows would fail the suite.
+# Every file is LF on every platform.
 * text=auto eol=lf

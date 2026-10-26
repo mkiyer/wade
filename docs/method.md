@@ -21,20 +21,23 @@ the sample's depth as the normalizer measures it.
 The test gene mask is fixed after fitting and never refits the factors. A
 normalized count c_gj/s_j is reads per sample at the cohort's typical depth.
 The size factors serve twice: as the denominators of the effects, and as the
-depths the area test's thinning equalizes.
+depths both tests' thinning equalizes.
 
 Counts are discrete, and many samples share a count, above all zero. Each count
 c_gj therefore receives independent jitter u_gj ~ Uniform(0, 1), drawn from a
 stream seeded by the run's seed and the gene's row, so that it depends neither
-on chunking nor on which other genes are tested. The subset is found and tested
-on
+on chunking nor on which other genes are tested. The subset is found and
+described on the jittered normalized counts
 
 \[x_{gj}=(c_{gj}+u_{gj})/s_j .\]
 
+Both tests run on thinned counts (below).
+
 ## The area
 
-Let Q₁ and Q₀ be the empirical quantile functions of the n₁ cases and n₀
-controls. The signed area between them is exactly the difference in means,
+Let Q₁ and Q₀ be the empirical quantile functions of the n₁ cases' and the n₀
+controls' normalized counts. The signed area between them is exactly the
+difference in means,
 
 \[\int_0^1 \{Q_1(u)-Q_0(u)\}\,du=\bar m_1-\bar m_0,\]
 
@@ -53,9 +56,7 @@ The **fold** is the ratio of the same two means,
 
 with no pseudocount either: +∞ when the controls have no reads, −∞ when the
 cases have none. The area fraction is (f − 1)/(f + 1): 1/3 for a doubling,
-−1/3 for a halving, and ±1 when one group has no reads. These are the
-difference, fraction and fold of the author's HITLIB method (`diff.mean`,
-`diff.frac` and `fc`).
+−1/3 for a halving, and ±1 when one group has no reads.
 
 ## The area test
 
@@ -78,12 +79,14 @@ out, not called; well-expressed genes lose little. The test's values are
 \[z_{gj}=(C'_{gj}+u_{gj})/\min_k s_k,\qquad C'_{gj}\sim\text{Binomial}(c_{gj},\pi_j),\]
 
 with the thinning drawn from a stream seeded by the run's seed and the gene's
-row (counts rounded to whole reads), and u_gj the gene's jitter.
-`params["depth_equalized"]` records min_k s_k over the median size factor: the
-share of its reads the median sample keeps. The effects above use every read;
-only the test runs on the thinned counts. The exactness needs the size factors
-to be the true exposures up to one common constant: RLE on all genes, when
-most genes do not change, or on internal control genes that do not.
+row (key 1; counts rounded to whole reads), and u_gj the gene's jitter.
+`params["depth_equalized"]` records the share of its reads the median sample
+keeps: min_k s_k over the median size factor. The effects above use every
+read; only the test runs on the thinned counts. The exactness needs the size
+factors to be the true exposures up to one common constant: RLE on all genes,
+when most genes do not change, or on internal control genes that do not
+([validation](validation.md#normalization-when-many-genes-change) measures the
+case where many genes change).
 
 **The statistic.** The difference in means of z is an increasing function of
 the cases' total A, the sum of n₁ of the gene's n values drawn without
@@ -172,22 +175,27 @@ lemma 4.1).
 
 ## The subset
 
-Let z = x + 1 for the cases and w = x + 1 for the controls, and let a group's
-Lorenz curve L(t) be the share of its total held by its lowest fraction t. At
-the case boundaries t = k/n₁, k = 1, …, n₁ − 1, the walk
+Let y = x + 1, with Q₁ and Q₀ here the quantile functions of the cases' and the
+controls' x, and ȳ₁ and ȳ₀ the groups' means of y. A group's Lorenz curve
+L(t) is the share of its total of y held by its lowest fraction t: L₁ for the
+cases, L₀ for the controls. At the case boundaries t = k/n₁,
+k = 1, …, n₁ − 1, the walk
 
-\[R(k)=\bar z\,\{L_z(k/n_1)-L_w(k/n_1)\}\]
+\[R(k)=\bar y_1\,\{L_1(k/n_1)-L_0(k/n_1)\}\]
 
-starts and ends at zero. It is also the running departure of the case
-quantiles from f{Q₀(u) + 1} − 1, f = z̄/w̄, the prediction if every case
-carried the fold of the means, so each R(k) is a prefix sum and a walk costs
-O(n). The statistic, `lorenz_gap`, is
+starts and ends at zero. It is also the integral from 0 to k/n₁ of the case
+quantiles' departure from (ȳ₁/ȳ₀){Q₀(u) + 1} − 1, the prediction if every
+case carried the fold of the means of y. Each R(k) is a prefix sum, so a walk
+costs O(n). The statistic, `lorenz_gap`, is
 
-\[G=\max_k\{L_w(k/n_1)-L_z(k/n_1)\}_+=-\min_k R(k)/\bar z:\]
+\[G=\max_k\{L_0(k/n_1)-L_1(k/n_1)\}_+=\max\{0,-\min_k R(k)\}/\bar y_1:\]
 
 the largest amount by which the cases' Lorenz curve falls below the controls',
-or how much more concentrated expression is among the cases. Any common fold on
-count + 1 applied to every case leaves it unchanged.
+or how much more concentrated expression is among the cases.
+
+**Fold invariance.** A common fold on count + 1 applied to every case, y → cy
+with c > 0, leaves the gap, the cut and the subset unchanged. It keeps the
+cases' order and ties, and a Lorenz curve is a share, so L₁ does not move.
 
 The cut is the highest boundary among the walk's minima, within the rounding of
 its sums; boundaries fall only between distinct case values (equal within 100
@@ -197,76 +205,91 @@ subset is the smaller side of the cut, which departs further per case: the
 cases above it (`"up"`) or below it (`"down"`); equal sides count as up.
 `subset_fraction` is its share of the cases.
 
-**The registration.** `alignment_log2fc` is log₂ ρ, the fold on count + 1 that
-best aligns the groups' quantile functions of log(count + 1): the weighted
-median of log{(Q₁(u) + 1)/(Q₀(u) + 1)} over their merged breakpoints, which
-minimizes the area between the two (their Wasserstein-1 distance). Where the
-median is an interval its midpoint is taken, so swapping the groups inverts ρ
-exactly. Under an alternative it is an alignment, not necessarily any
-subgroup's fold. `subset_log2fc` is log₂ of the subset's mean of count + 1 over
-ρ times the controls' mean of count + 1 over the same quantiles. In genes whose
-extreme values dominate both groups the two can point opposite ways; read the
-side from `subset_side`.
+**The common fold.** ρ is the fold on count + 1 that best aligns the cases'
+quantile function of log(count + 1) with the controls': β = log ρ minimizes
+
+\[\int_0^1\bigl|\log\{Q_1(u)+1\}-\log\{Q_0(u)+1\}-\beta\bigr|\,du,\]
+
+the Wasserstein-1 distance between the cases' log(count + 1) and the
+controls' moved by β. It is a registration of the two quantile functions, and
+the column `alignment_log2fc` reports log₂ ρ.
+
+- **It is a weighted median.** ∫|a(u) − β| du is smallest at a median of a(u)
+  for u ~ Uniform(0, 1). Here a(u) is constant between consecutive points of
+  {k/n₁} ∪ {j/n₀}, so β is the weighted median of those constant values,
+  weighted by the segments' lengths.
+- **Its midpoint.** Where the median is an interval its midpoint is taken, so
+  swapping the groups inverts ρ exactly.
+- Under an alternative it still aligns the two groups, but it need not be
+  any subgroup's fold.
+
+`subset_log2fc` is log₂ of the subset's mean of y over ρ times the controls'
+mean of y over the same quantiles: the subset's fold over what the common fold
+predicts for it. In genes whose extreme values dominate both groups it can
+point against `subset_side`; the side is read from `subset_side`.
 
 ## The subset test
 
 The null is that every case carries one common fold of the controls'
-distribution: under the count model, the cases' latent levels are the controls'
-times one fold. At low counts a fold changes Poisson noise and zeros as well as
-levels, so rescaling the cases' counts cannot reproduce the null, and the extra
-noise of the lower group reads as concentration. Thinning can reproduce it: a
-thinned mixed-Poisson count is mixed Poisson at the lower rate, whatever the
-latent level. The test therefore runs on counts made exchangeable by thinning.
+distribution: under the count model, the cases' latent levels are the
+controls' times one fold. A fold of the latent level changes the counts'
+Poisson noise and zeros as well as their level. Thinning reproduces exactly
+that: a thinned mixed-Poisson count is mixed Poisson at the lower rate,
+whatever the latent level. The test therefore runs on counts made exchangeable
+by thinning.
 
-1. **Depth.** Every sample is thinned to the smallest size factor, the area
+1. **Depth.** Every sample is thinned to the smallest size factor, by the area
    test's own draw (above), so that no difference in depth reads as a subset.
-2. **The fold.** ρ is the Wasserstein-1 fold of those equalized, jittered
-   counts: the weighted median of the log ratio of the groups' quantile
-   functions of log(count + 1), the midpoint of any median interval.
-3. **Thinning by the fold.** The higher group is thinned further by ρ. Each
-   case keeps each read with chance 1/ρ when ρ > 1; each control keeps each
-   read with chance ρ when ρ < 1. The draw comes from a stream seeded by the
-   run's seed and the gene's row (key 3). With the true fold, the groups'
-   thinned counts are exchangeable under the null.
+2. **The fold.** ρ̃ is the common fold of those equalized, jittered counts
+   C′ + u, in reads at the smallest size factor: the same construction as ρ,
+   on these values.
+3. **Thinning by the fold.** The higher group is thinned further by ρ̃. Each
+   case keeps each read with chance 1/ρ̃ when ρ̃ > 1; each control keeps each
+   read with chance ρ̃ when ρ̃ < 1. The draw comes from a stream seeded by the
+   run's seed and the gene's row (key 3), and the counts are jittered again.
+   With the true fold, the groups' thinned counts are exchangeable under the
+   null.
 4. **Four draws.** Steps 1–3 are drawn four times, independently: draw 0 from
-   the streams above, draw d from the same keys with d appended. Each gene
-   then has four thinned pools.
-5. **The shuffles.** Labels are shuffled over the jittered thinned counts with
-   no further registration. Every shuffle walks all four pools, and its score
-   is the mean of their gaps, compared with the observed mean. One draw's
-   chance thinning therefore no longer decides a call on its own.
+   the streams above, draw d from the same keys with d appended (the jitter's
+   key taking a 0 before it). Each gene then has four thinned pools, each with
+   its own ρ̃.
+5. **The score.** A labelling's score is the mean of the four pools' gaps. The
+   pools are walked as they are: by fold invariance, no further alignment
+   would change a gap.
+6. **The shuffles.** Labels are shuffled over the four pools at once, and each
+   shuffle's score is compared with the observed one. Each shuffle costs four
+   walks.
 
 `direction="both"` counts shuffles whose mean gap reaches the observed one.
 `"up"` signs each walk's gap by its subset's side (positive above the rest of
 the cases), averages the signed gaps, and counts those at least the observed
-mean; `"down"` the reverse. Stopping and p-values follow the shuffled rule above. A gene without a
-subset on its normalized counts, the subset that is reported, has p = 1.
+mean; `"down"` the reverse. Stopping and p-values follow the shuffled rule
+above; the subset test is always shuffled. A gene whose reported subset
+(read on x) is "none" has p = 1.
 
-The subset's description (its side, share, fold and gap) is read on normalized
-counts, as the area's effects are; only the test runs on thinned counts.
+The subset's description (its side, share, fold and gap) is read on x, as the
+area's effects are read on normalized counts; only the test runs on thinned
+counts.
 
-The fold is estimated from the same data and held fixed through the shuffles,
-so the test is approximate. Under the count model it is calibrated where the
-sparser group expects at least 32 reads per sample
-(`params["subset_validated_reads"]`). Its worst share there at p ≤ 0.01 is
-1.8%, which an exact test with the true fold also reaches by chance
-([validation](validation.md#the-subset-test-under-the-count-model)). Below 32
-reads it can be anti-conservative when every case carries a fold. `wade()` warns
-how many tested genes have a group mean of normalized counts below 32, and
-`params["subset_validated_genes"]` counts the rest.
+**Approximate.** The test is not exact, for two reasons.
+- The fold ρ̃ is estimated from the same data and held fixed through the
+  shuffles.
+- Each pool alone is exchangeable under the null with the true fold. The four
+  together need not be exactly so: a sample's draws are more alike the more of
+  its reads it keeps, and that share differs between samples.
 
-Each pool alone is exchangeable under the null. The four together need not
-be exactly so: a sample's draws are more alike the more of its reads it keeps,
-and that share differs between samples. The averaged test was therefore
-measured, not derived. It holds the single draw's level at 32 reads and above,
-and steadies its calls ([validation](validation.md#the-subset-test-under-the-count-model)).
-Each draw costs one walk per shuffle, so the subset test takes about four
-times as long as one draw would.
+Its level is therefore measured, not derived. It is validated where the lower
+group averages at least 32 reads per sample
+(`params["subset_validated_reads"]`;
+[validation](validation.md#the-subset-test-under-the-count-model)). `wade()`
+warns how many tested genes average fewer than 32 reads per sample in their
+lower group, and `params["subset_validated_genes"]` counts the rest.
 
 ## Rarity
 
 Let gene g's subset lie at cut k_g, with k_g cases below it, and let
-d_h(k) = L_w,h(k/n₁) − L_z,h(k/n₁) be gene h's gap at boundary k. The walk
+d_h(k) = L₀(k/n₁) − L₁(k/n₁), on gene h's curves, be gene h's gap at boundary
+k. The gaps are read on the values the subset is described on. The walk
 computes d_h(k) at every k, and gives −∞ where equal cases forbid a boundary.
 
 - **Why size-matched.** Lorenz curves lie on or below the diagonal, so
@@ -290,8 +313,8 @@ computes d_h(k) at every k, and gives −∞ where equal cases forbid a boundary
   G ([Bates, Candès, Lei, Romano and Sesia, 2023](https://doi.org/10.1214/22-AOS2244)).
   Ranking within a group keeps that property within each group
   ([Vovk, 2013](https://doi.org/10.1007/s10994-013-5355-6)).
-- **The two groups.** The tested genes whose lower group mean is at least
-  32 reads per sample, the subset test's validated range, and the rest.
+- **The two groups.** The tested genes in the subset test's validated range,
+  whose lower group averages at least 32 reads per sample, and the rest.
 
 The cost is about |G|² comparisons of gaps, in chunks of genes. Rarity is
 relative to the cohort's genes and is not a test. Selecting genes by it before
@@ -315,10 +338,12 @@ exchangeable; strata may differ in anything.
 - Every shuffle exchanges labels only within strata. The stream's block
   generator permutes each stratum's labels in turn, in the order of the
   strata, so the stream stays position-indexed.
-- Both tests are then exact under the stratified null, up to the subset test's
-  registration.
+- The area test is then exact under the stratified null. The subset test is
+  as exact as without strata: approximate, through its estimated fold and its
+  four draws.
 - A stratum with only one group cannot move a label, so its samples are left
-  out of both tests.
+  out of both tests. Strata therefore cannot separate a batch that coincides
+  with the condition.
 - The effective size is N_eff = Σ_s n₁ₛn₀ₛ/nₛ.
 - With one stratum holding both groups, the tests are the unstratified ones on
   its samples.
@@ -327,7 +352,8 @@ exchangeable; strata may differ in anything.
 - Each stratum is thinned to its own smallest size factor,
   z_gj = (C′_gj + u_gj)/min_{k∈s(j)} s_k. Exchangeability within a stratum
   needs equal depths only there, and the size factors need be right only up
-  to one constant per stratum.
+  to one constant per stratum. `params["depth_equalized"]` is then the median
+  of the samples' shares kept.
 - The values are centred within their stratum. The statistic is the cases'
   total, the Cochran–Mantel–Haenszel sum
   T = Σ_s (n₁ₛn₀ₛ/nₛ)(z̄₁ₛ − z̄₀ₛ), centred at zero under the stratified null,
@@ -361,20 +387,33 @@ This is an (S + 1)-dimensional double saddlepoint.
 **The subset test, with strata.**
 1. Each stratum is thinned to its own smallest size factor.
 2. One fold is taken for every case: the weighted median of the strata's own
-   Wasserstein-1 folds of the equalized counts, with weights n₁ₛn₀ₛ/nₛ. Where
-   the weights below a value make exactly half, it is the midpoint.
-3. The higher group is thinned by that fold in every stratum.
+   common folds of the equalized, jittered counts, with weights n₁ₛn₀ₛ/nₛ.
+   Where the weights below a value make exactly half, it is the midpoint.
+3. The higher group is thinned by that fold in every stratum, and the counts
+   are jittered again.
 4. Each stratum is moved, by a fold on count + 1, to the cohort's median
    log(count + 1). Within a stratum every sample moves alike, so no label is
    favoured.
-5. One walk compares the pooled cases with the pooled controls, with labels
-   shuffled within strata.
+5. Steps 1–4 are drawn four times, as without strata, each draw with its own
+   fold.
+6. A labelling's score is the mean of the four pools' gaps, each walk
+   comparing the pooled cases with the pooled controls. Labels are shuffled
+   within strata.
 
 The null is that within each stratum every case carries one fold of the
 stratum's controls, the same fold in every stratum, while strata may differ in
-level. The subset is described on normalized counts with each stratum moved to
-the cohort's level and the cases carried back by the strata's fold. Four other
-constructions were measured and set aside ([plan](strata-plan.md), section 4).
+level.
+
+The subset is described on x, unthinned, by the same construction:
+- one fold, the weighted median of the strata's own common folds of x;
+  `alignment_log2fc` reports it;
+- each stratum moved, by a fold on count + 1, to the cohort's median
+  log(count + 1), its level taken with that fold out of its cases;
+- that fold then taken out of the cases.
+
+The side, share, fold and gap are read on these values as without strata.
+The constructions set aside are in
+[research ideas](research-ideas.md#9-strata-constructions-set-aside).
 
 **The effects.**
 - case_mean and control_mean are the Mantel–Haenszel standardized means over
@@ -391,7 +430,7 @@ arbitrary dependence.
 
 ## Implementation
 
-The walk and the registration are native code (`rust/src/lib.rs`), one
+The walk and the common fold are native code (`rust/src/lib.rs`), one
 implementation for the observed split and for every shuffle, run over genes in
 parallel. The thinning, the saddlepoint and the shuffled area test are NumPy,
 vectorized over genes. Genes are processed in bounded chunks with no genes ×
@@ -401,21 +440,15 @@ chunking nor threads change an answer.
 
 ## Limits
 
-- **Exchangeability is assumed,** across the cohort or, with strata, within
-  each stratum. Batch confounded with the groups breaks it. Strata repair a
-  batch that both groups share; nothing separates a batch that coincides with
-  the condition. Depth is handled by the
-  thinning, but only through size factors: when many genes change one way, the
-  size factors absorb part of that change and unchanged genes look changed
-  ([validation](validation.md#normalization-when-many-genes-change)).
-- **The area test's null is one distribution for both groups.** It is built to
-  detect a difference in means, but it can also reject when the groups differ
-  only in spread or shape: with equal means, a smaller group that is also the
-  wider one was called at about 33% at p ≤ 0.05 in simulation
-  ([research ideas](research-ideas.md), section 2.4). Rank such genes by their
-  area, which stays near zero.
-- **The subset test plugs in an estimated fold** and is validated only where
-  the sparser group expects at least 32 reads per sample. Below that, a
-  valid test would need the fold's estimation inside its null.
-- **A subset is a description** of where cases depart from a common fold, not a
-  set of individually significant patients or a prevalence estimate.
+These follow from the mathematics. What they mean in use, with the other
+limits, is in the [manual](manual.md#limits).
+
+- **The area test's null is one distribution for both groups.** That null
+  says more than equal means. Groups that differ only in spread or shape
+  break it, so the test can reject them while their area, the difference in
+  means, stays near zero.
+- **The subset test is approximate.** It plugs in an estimated fold and
+  averages four pools that need not be jointly exchangeable. Its level is
+  therefore measured, not derived, and validated only where the lower group
+  averages at least 32 reads per sample. A test valid below that would need
+  the fold's estimation inside its null.

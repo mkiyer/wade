@@ -1,4 +1,4 @@
-"""Frozen biological truth for the replicated direction/scale comparison."""
+"""The confirmation protocols' simulated transcriptomes: frozen biological truth, regenerated from their seeds."""
 import numpy as np
 
 

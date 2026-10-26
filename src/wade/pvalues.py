@@ -4,6 +4,12 @@ import numpy as np
 TIE_RTOL = 100 * np.finfo(float).eps                       # values this close are equal
 
 
+def certified(threshold):
+    """Just below threshold, so that BH's own arithmetic, m p / rank <= fdr, holds for a bound
+    certified at it."""
+    return threshold * (1 - TIE_RTOL)
+
+
 def sequential_p(exceed, tried, *, stop, maximum):
     """Besag–Clifford p-values, only at the prespecified stopping time.
 
@@ -33,9 +39,8 @@ def bound(exceed, tried, *, stop, maximum):
     """
     k, t = np.asarray(exceed, dtype=np.int64), np.asarray(tried, dtype=np.int64)
     reach = t + stop - k                                     # where the stop-th exceedance could fall
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return np.where(k >= stop, stop / np.maximum(t, 1),
-                        np.where(reach <= maximum, stop / reach, (k + maximum - t + 1) / (maximum + 1)))
+    return np.where(k >= stop, stop / np.maximum(t, 1),
+                    np.where(reach <= maximum, stop / reach, (k + maximum - t + 1) / (maximum + 1)))
 
 
 def settled(exceed, tried, *, stop, maximum, threshold):
@@ -68,8 +73,7 @@ def settle(fixed, live, exceed, tried, advance, *, fdr, stop, maximum):
     r, t, passes = m, fdr, 1
     while (count := int(np.sum(p <= t))) != r:
         r, t = count, count * fdr / m
-        # Certified strictly below t, so that BH's own arithmetic, m p / rank <= fdr, holds too.
-        below = t * (1 - TIE_RTOL)
+        below = certified(t)
         need = np.flatnonzero(live & ~settled(exceed, tried, stop=stop, maximum=maximum, threshold=below))
         if len(need):
             advance(need, below)

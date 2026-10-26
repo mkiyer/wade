@@ -32,8 +32,8 @@ def plot_gene(result, gene, *, backend="matplotlib", theme="light", title=None):
     """ECDF and exact empirical quantile effects for one gene, on the log2 scale.
 
     The annotation gives the fold of the group means and the area and subset q-values. The dotted
-    line on the quantile panel is the alignment, the fold the subset test holds every case to.
-    Vertical lines mark the subset's boundary on both panels.
+    line on the quantile panel is the common fold (alignment_log2fc), the fold the subset test
+    holds every case to. Vertical lines mark the subset's boundary on both panels.
     """
     from ..diagnostics import gene_detail
     i = result.gene_index(gene)

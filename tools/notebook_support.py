@@ -80,10 +80,10 @@ def markdown_table(frame, directory=None, label=None, digits=3, display_names=No
     print()
 
 
-def inference_fingerprint(extra=(), package_dir=None):
+def inference_fingerprint():
     """Hash executed inference code, native kernel and numerical dependencies."""
     import wade
-    package = Path(package_dir) if package_dir is not None else Path(wade.__file__).parent
+    package = Path(wade.__file__).parent
     files = list(package.glob("*.py")) + list(package.glob("_kernel*.so")) + list(package.glob("_kernel*.pyd"))
     def code_hash(path):
         path = Path(path)
@@ -98,17 +98,9 @@ def inference_fingerprint(extra=(), package_dir=None):
                     node.body.pop(0)
         return hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest()
     hashes = {p.name: code_hash(p) for p in files}
-    hashes.update({str(Path(p).name): code_hash(p) for p in extra})
     hashes["numpy_version"] = np.__version__
     hashes["scipy_version"] = version("scipy")
     return hashes
-
-
-def r_fingerprint():
-    import subprocess
-    completed = subprocess.run(["Rscript", "-e", "library(waddR); sessionInfo()"],
-                               check=True, capture_output=True, text=True)
-    return hashlib.sha256(completed.stdout.encode()).hexdigest()
 
 
 def save_arrays(path, value):
@@ -191,13 +183,7 @@ def cached_computation(key, compute, *, namespace):
 
 
 def wade_cache_key(counts, cond, **kwargs):
-    """Cache identity for a public wade() call made by a notebook."""
-    if hasattr(cond, "vector"):
-        vector = cond.vector(kwargs.get("sample_names"))
-        condition_meta = dict(case=cond.case, control=cond.control,
-                              column=cond.column, dropped=list(cond.dropped))
-    else:
-        vector, condition_meta = np.asarray(cond), None
+    """Cache identity for a public wade() call made by a notebook, with cond a 0/1 vector."""
     def arg(value):
         from wade.normalize import Normalization
         if isinstance(value, Normalization):
@@ -206,8 +192,7 @@ def wade_cache_key(counts, cond, **kwargs):
             return {"array_sha256": array_hash(np.asarray(value))}
         return value
     return dict(inference=inference_fingerprint(), counts=array_hash(counts),
-                cond=array_hash(vector),
-                condition_meta=condition_meta, parameters={k: arg(v) for k, v in kwargs.items()})
+                cond=array_hash(np.asarray(cond)), parameters={k: arg(v) for k, v in kwargs.items()})
 
 
 def cached_wade(counts, cond, **kwargs):

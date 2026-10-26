@@ -1,19 +1,9 @@
 """Palette and labels: everything a figure says that is not a number.
 
-A :class:`Theme` is the tokens a figure is drawn with, and **every colour
-literal in the package is in one of the three built-ins below** — a test pins
-that, because a colour spelled in a renderer is a colour the other renderer
-and the other themes cannot follow.
-
-Both renderers read the same tokens, so a figure reads the same whichever one
-drew it, and the labels live here once rather than in each backend. This module
-imports nothing but the standard library, which is what keeps it the leaf of
-the subpackage.
-
-Colour scales are named by **role**, not by colormap: the data layer says a
-quantity is sequential or diverging, and the theme says what those look like.
-Only names both backends accept may be used (``viridis`` yes, ``coolwarm`` no —
-plotly does not have it).
+A :class:`Theme` is the tokens a figure is drawn with, and every colour literal in the package is
+in one of the three built-ins below, so that both renderers and every theme follow it. Both
+renderers read the same tokens, so a figure reads the same whichever one drew it. This module
+imports nothing but the standard library, which keeps it the leaf of the subpackage.
 """
 
 from __future__ import annotations
@@ -33,12 +23,10 @@ class Theme:
         house = replace(THEMES["light"], case="#7b3fa0", ctrl="#3fa07b")
         plot_volcano(res, theme=house)
 
-    Every colour is a ``#rrggbb`` hex string; ``surface`` in particular is
-    split into channels for translucent label boxes. ``font`` and
-    ``plotly_template`` are read by the plotly renderer only; matplotlib's
-    fonts are left to matplotlib.
+    Every colour is a ``#rrggbb`` hex string. ``font`` and ``plotly_template``
+    are read by the plotly renderer only; matplotlib's fonts are left to
+    matplotlib.
     """
-
 
     #: Titles, axis labels, the log-ratio curve, direct point labels.
     ink: str
@@ -54,56 +42,31 @@ class Theme:
     case: str
     #: The control group.
     ctrl: str
-    #: A quantity with a floor and a ceiling, the subset fractions above all.
-    sequential: str
-    #: A signed quantity read against zero, a log₂ fold change above all.
-    diverging: str
     font: str
     plotly_template: str
-
-    def scale(self, role: str) -> str:
-        """The colormap for a colour spec's ``role`` (see :data:`_COLOR_SPECS`)."""
-        if role not in ("sequential", "diverging"):
-            raise ValueError(f"colour role must be 'sequential' or 'diverging'; got {role!r}")
-        return self.sequential if role == "sequential" else self.diverging
-
-    def box(self, alpha: float = 0.8) -> str:
-        """The surface as a translucent ``rgba()``, for boxes behind in-plot text.
-
-        plotly wants one string where matplotlib takes a colour and an alpha,
-        so the conversion lives here rather than in the renderer — which is
-        what keeps ``rgba(255,255,255,0.8)`` from being written into it.
-        """
-        r, g, b = (int(self.surface[i:i + 2], 16) for i in (1, 3, 5))
-        return f"rgba({r},{g},{b},{alpha})"
 
 
 _SANS = "system-ui, -apple-system, 'Segoe UI', sans-serif"
 
-#: The three built-ins. ``"light"`` is the palette the README's figures were
-#: drawn with and is the default; the warm greys are deliberate, and the dark
-#: theme inverts them rather than going to neutral. ``case``/``ctrl`` stay a
+#: The three built-ins. ``"light"`` is the default; the warm greys are
+#: deliberate, and the dark theme inverts them rather than going to neutral. ``case``/``ctrl`` stay a
 #: blue–orange pair in all three because it survives colour-vision deficiency.
 THEMES = {
     "light": Theme(
         ink="#0b0b0b", muted="#898781", grid="#e1e0d9", axis="#c3c2b7",
         surface="#ffffff", case="#2a78d6", ctrl="#eb6834",
-        sequential="viridis", diverging="RdBu_r",
         font=_SANS, plotly_template="plotly_white",
     ),
     "dark": Theme(
         ink="#f2f1ea", muted="#8f8d85", grid="#2b2c26", axis="#4a4b42",
         surface="#141410", case="#5aa2f2", ctrl="#f5904f",
-        sequential="viridis", diverging="RdBu_r",
         font=_SANS, plotly_template="plotly_dark",
     ),
     # Maximum legibility rather than a house style: pure black on pure white,
-    # a grid dark enough to survive a projector, and cividis, which is built
-    # for colour-vision deficiency where viridis is only safe for it.
+    # and a grid dark enough to survive a projector.
     "high-contrast": Theme(
         ink="#000000", muted="#3a3a3a", grid="#a8a8a8", axis="#000000",
         surface="#ffffff", case="#0033aa", ctrl="#cc4400",
-        sequential="cividis", diverging="RdBu_r",
         font=_SANS, plotly_template="plotly_white",
     ),
 }

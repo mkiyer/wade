@@ -1,19 +1,32 @@
-# TCGA gene-count examples for WADE 0.2.0
+# TCGA gene-count examples
 
-Design frozen on 2026-09-11 before inspecting the new marker p-values.
-The user selected full gene counts for both cancers and omitted all
-splice-junction analyses from these examples. Results and figures require
-the author's approval before release.
+The [prostate](../notebooks/examples.qmd) and
+[breast](../notebooks/examples-breast.qmd) notebooks run WADE on TCGA gene
+counts. This page is their data contract: the inputs, who is eligible, the
+gene filter and the settings. The [manual](manual.md) explains the method and
+its limits.
 
 ## Inputs and provenance
 
-The counts and sample metadata come from the RNA100K compendium (release
-`rna100k_2026-01-28`: STAR gene counts for the 62,754 genes of GENCODE v44,
-GRCh38 primary assembly, plus 92 ERCC spike-ins, uniformly processed by the
-lab's `mibulkrnaseq` pipeline, with metadata harmonized by
-`rnaseq-metadata-harmonize`). The lab's `rna100k` package
-extracts one cohort bundle per cancer: TCGA primary tumours and normal-adjacent
-tissue plus GTEx normal tissue, one library per patient and sample class.
+- **Counts.** STAR gene counts from the RNA100K compendium, release
+  `rna100k_2026-01-28`: 62,846 rows, the 62,754 genes of GENCODE v44 on the
+  GRCh38 primary assembly and 92 ERCC spike-ins.
+  - The lab processed the TCGA reads itself, with its `mibulkrnaseq`
+    pipeline. The counts are not a GDC count release and are not
+    numerically identical to one.
+  - The examples test every supplied row that passes the filter below.
+- **Metadata.** Harmonized by `rnaseq-metadata-harmonize`.
+- **Bundles.** The lab's `rna100k` package extracts one bundle per cancer:
+  TCGA primary tumours and normal-adjacent tissue, and GTEx normal tissue,
+  one library per patient and sample class.
+  - Each bundle records the release, the query, the annotation version read
+    from the GTF, and checksums of its files. The loader verifies them.
+  - Rows are joined by GENCODE v44 ID. The bundle's unique `label` (the
+    symbol, or `symbol|gene_id` where symbols repeat) names genes in WADE.
+- **GTEx normals.** The notebooks use the TCGA libraries only. Validation
+  uses the prostate bundle's GTEx normals ([strata](validation.md#strata)).
+- **Open gap.** The count pipeline's own record, its workflow and genome
+  versions, is not yet part of the bundles ([ISSUES](../ISSUES.md)).
 
 ```sh
 rna100k extract cohorts/prostate-tcga-gtex --one-per patient_uid,sample_class \
@@ -21,15 +34,11 @@ rna100k extract cohorts/prostate-tcga-gtex --one-per patient_uid,sample_class \
            AND sample_class IN ('tumor', 'normal_adjacent')) OR (study = 'gtex' AND sample_class = 'control'))"
 ```
 
-(and the same with `'Breast'`). Each bundle records the release, the query and
-checksums of its files; the loader verifies them. Gene rows are joined by
-GENCODE v44 ID, and the bundle's unique `label` (the symbol, or `symbol|gene_id`
-where symbols repeat) names genes in WADE. The primary examples use the TCGA
-libraries only; the GTEx normals are there for sensitivity analyses.
+The breast bundle uses the same query with `'Breast'`.
 
-The configuration (copy [the template](../notebooks/tcga-config.example.json)
-and set `WADE_TCGA_CONFIG`) names the two bundles and the annotation snapshot;
-relative paths resolve against its folder.
+**Rendering.** Copy [the template](../notebooks/tcga-config.example.json) and
+set `WADE_TCGA_CONFIG` to it. The configuration names the two bundles and the
+annotation snapshot; relative paths resolve against its folder.
 
 ```sh
 python tools/fetch_tcga_annotations.py /path/to/frozen-tcga-annotations
@@ -38,110 +47,115 @@ WADE_TCGA_CONFIG=/path/to/tcga-config.json quarto render examples.qmd
 WADE_TCGA_CONFIG=/path/to/tcga-config.json quarto render examples-breast.qmd
 ```
 
-The downloader reads only public annotations and never sends local sample
-lists or expression values to the service. It records URLs, UTC retrieval
-times, response checksums and record counts. It reuses verified snapshots;
-a changed or unrecorded file fails verification. Request a new snapshot by
-using a new directory rather than overwriting the old one.
+**Annotations.** `tools/fetch_tcga_annotations.py` freezes them.
 
-Sources: [TCGA prostate, Cell 2015](https://doi.org/10.1016/j.cell.2015.10.025),
-[TCGA breast, Nature 2012](https://www.nature.com/articles/nature11412), and
-the cBioPortal studies [prostate publication](https://www.cbioportal.org/study/summary?id=prad_tcga_pub),
-[breast PanCancer](https://www.cbioportal.org/study/summary?id=brca_tcga_pan_can_atlas_2018)
-and [breast TCGA clinical](https://www.cbioportal.org/study/summary?id=brca_tcga).
-The PanCancer GISTIC profile supplies the discrete ERBB2 copy-number value;
-`2` denotes its high-level amplification category, not an absolute copy count.
+- It reads only public annotations, and never sends local sample lists or
+  expression values to the service.
+- It records URLs, UTC retrieval times, response checksums and record counts.
+- It reuses verified snapshots; a changed or unrecorded file fails
+  verification. A new snapshot goes in a new directory.
+- Sources: [TCGA prostate, Cell 2015](https://doi.org/10.1016/j.cell.2015.10.025),
+  [TCGA breast, Nature 2012](https://www.nature.com/articles/nature11412), and
+  the cBioPortal studies
+  [prostate publication](https://www.cbioportal.org/study/summary?id=prad_tcga_pub),
+  [breast PanCancer](https://www.cbioportal.org/study/summary?id=brca_tcga_pan_can_atlas_2018)
+  and [breast TCGA clinical](https://www.cbioportal.org/study/summary?id=brca_tcga).
+- The PanCancer GISTIC profile supplies the discrete ERBB2 copy-number
+  value. `2` is its high-level amplification category, not an absolute copy
+  count.
 
-These counts come from the lab's own processing of the TCGA reads, not a
-GDC count release, and should not be described as numerically identical to one.
-Reads were aligned with STAR to the GRCh38 primary assembly and counted
-against GENCODE v44; each bundle's manifest records the annotation version read
-from the GTF itself.
+## Eligibility
 
-## Fixed preprocessing and primary populations
+- Primary tumours and normal-adjacent tissue from TCGA; no metastases.
+- One library per patient and sample class, after sorting by patient, sample
+  and library. Excluded duplicates are exported.
+- A TCGA sample ID is the first 15 barcode characters, and its first 12 must
+  equal the patient ID.
+- Annotation joins are many-to-one and keep the count columns' order.
+  Missing clinical labels are reported, never imputed as negatives.
+- **Prostate:** every eligible patient.
+- **Breast:** female patients only. Sex comes from the TCGA clinical
+  annotations, with agreement checked across sources. Male and unknown-sex
+  records are exported as exclusions.
+- Histology, protocol, preservation and annotation coverage are reported, not
+  used to exclude samples.
+- **The independent design** keeps every normal-adjacent sample and the
+  tumours of the patients without one, so every patient appears once.
 
-Use primary tumours and normal-adjacent tissue, excluding metastases.
-Sort by patient, sample and library; keep one library per patient and
-sample class. Export excluded duplicates. TCGA sample IDs are the first
-15 barcode characters, and the first 12 must agree with the patient ID.
-Annotation joins are many-to-one and preserve the exact count-column order.
-Missing clinical labels are reported, not imputed as negatives.
-
-Prostate includes all eligible patients. Breast is restricted to female
-patients, with sex obtained from TCGA clinical annotations and agreement
-checked across sources. Male and unknown-sex records are exported as
-exclusions. This defines the target population before inspecting marker
-effects. Histology, protocol, preservation and annotation coverage are
-reported; they are not silently used for additional outcome-driven exclusion.
-
-The production recipe fits DESeq2-compatible RLE on **all supplied rows before
-its testing filter**, after sample eligibility and patient separation. The
-primary comparison has its own fitted object; the four breast subtype
-comparisons share one fit on their eligible tumour-only cohort. Subsetting a
-fitted object never re-centers its factors. The count denominator is that
-relative size factor. The area test runs on counts thinned binomially until
-every sample's size factor equals the smallest, and the subset test on
-`count / size_factor` with
-seeded jitter; figures and descriptions use log2. Raw full-input totals
-accompany library QC, independently of the RLE factors. No genomic span is used
-as a transcript length.
-
-This ordering distinguishes initial sample/reference QC from the subsequent
-testing filter; it is not a general prohibition on prefiltering. RLE's
-reference assumption must be justified. RLE alone does not remove
-depth-dependent sampling variance (the area test's thinning does) or
-confounding, and when many genes change together the reference itself can
-shift.
-
-A gene is eligible if it has at least 10 raw counts in at least five pooled
-samples and pooled mean CPM of at least 0.1. No case/control or marker label
-enters this filter. Keep the resulting gene universe constant across primary
-and sensitivity comparisons within each cancer, and keep factors fixed within
-each analysis family as described above.
-“Full gene counts” describes the assay and whole supplied feature universe;
-it does not promise that every annotated human gene was in the upstream matrix.
-
-The independent primary analysis keeps normals and excludes the corresponding
-tumours. Every patient appears once. Paired analyses in earlier development
-are not part of the migrated example; they are preserved as historical work.
-
-| Cohort | Unique eligible tumours / normals | Independent primary | Tested genes |
-|---|---:|---:|---:|
+| Cohort | Eligible tumours / normals | Independent design, tumours / normals | Tested genes |
+| --- | ---: | ---: | ---: |
 | Prostate | 497 / 52 | 445 / 52 | 24,246 |
 | Female breast | 1,083 / 112 | 971 / 112 | 25,328 |
 
-These are design counts, not approved results.
+The independent breast design also holds 1,083 samples: each of the 112
+normals has a patient with an eligible tumour, which the design leaves out.
 
-## Inference and interpretation
+## Size factors and the gene filter
 
-Both primary comparisons use the defaults: `direction="both"`,
-`pvalues="auto"`, `relative_error=0.2`, seed 1 and the 999,999-shuffle
-budget, with one BH family per test over the tested genes. Every output
-includes the stopping records, the depth kept by the area test's thinning and
-the fitted normalization provenance.
+- **Size factors.** RLE on every supplied row, fitted after sample
+  eligibility and before the filter.
+  - The primary design has its own fit. The four breast subtype contrasts
+    share one, fitted on their tumours.
+  - Selecting samples from a fit keeps its factors; nothing is re-centred.
+- **The filter.** A gene is tested if it has at least 10 raw counts in at
+  least five samples and a mean CPM of at least 0.1, over all eligible
+  samples pooled. No label enters it.
+  - Every comparison within a cancer tests the same genes.
+  - This is the examples' recipe, not a universal threshold.
+- **Library QC** reads raw totals over all supplied rows, independent of the
+  size factors. No genomic span is used as a transcript length.
+- **What the values are.** As in every WADE run, both tests use thinned
+  counts, and the subset columns read jittered normalized counts
+  ([depth equalization](manual.md#depth-equalization)). Figures plot
+  log2 of the jittered normalized count + 1. What RLE assumes, and when it fails, is in
+  the [manual](manual.md#size-factors).
 
-The four breast subtype-versus-other-three contrasts use all eligible
-annotated tumours, one per patient. Normal-like and unknown labels are excluded
-only from those secondary contrasts. They use the same test-gene universe,
-tumour reference, seed and prespecified 99,999-shuffle budget. One additional
-BH family per test covers all four contrasts × all tested genes; with the
-shuffled floor of 10⁻⁵ a subset discovery needs several genes at the floor
-together. This is an exploratory expression-label association analysis.
+## Settings
 
-Prostate fusion-confirmed, expression-high, negative and unknown labels stay
-separate. SPINK1 is an expression-high comparator. The notebook reports observed
-expression and supplied annotations; it does not assign fusion membership.
-There is no selected ERG-negative inference in this migrated example.
-PAM50 is expression-derived, so marker agreement is not independent validation.
-Receptor status and DNA copy-number calls provide complementary measurements
-in the same patients, not an independent cohort. HER2-enriched is not
-synonymous with clinical HER2 positivity, nor basal-like with triple-negative
-disease.
+- **Primary comparisons,** tumours against normals: `wade()`'s defaults.
+  - `direction="both"`, `pvalues="auto"`, `relative_error=0.2`, `fdr=0.05`,
+    `max_permutations=999_999`, seed 1.
+  - Each test has one BH family over the tested genes.
+  - With `fdr=0.05`, the called genes report p-value bounds
+    ([p-values](manual.md#p-values)).
+- **Records.** Every run writes its full table and manifest: the stopping
+  records, the depth kept and the normalization's provenance.
+- **Breast subtype contrasts.** Each of Luminal A, Luminal B, HER2-enriched
+  and Basal-like against the other three.
+  - The tumours: every eligible tumour annotated with one of the four, one
+    per patient. That is 945 tumours: 499, 197, 78 and 171. Normal-like and
+    unknown labels are left out of these contrasts only.
+  - The settings: the subtype size factors, the same tested genes, seed 1,
+    `fdr=0.05` and `max_permutations=99_999`.
+  - Each contrast decides at `fdr=0.05` within its own family, so its called
+    genes report bounds certified for that family.
+  - The notebook then pools the four contrasts into one BH family per test:
+    4 × 25,328 = 101,312 hypotheses, exported as `q_area_four_contrasts`
+    and `q_subset_four_contrasts`. Every reported p-value is at least its
+    finished one, so the pooled BH calls a subset of what it would call on
+    finished runs. The pooled family is conservative, and its decisions are
+    not those of finished runs.
+  - The shuffled floor is 10⁻⁵. A subset discovery in the pooled family
+    needs at least 21 genes at the floor (101,312 × 10⁻⁵ / 0.05 = 20.3).
+  - This is an exploratory association with expression-derived labels.
 
-`area` and `area_fraction` compare the group means, and the subset columns
-describe the cases that depart from the one fold every tumour would share, so a
-lowered area and a raised subset can coexist. The notebooks compare the ERG,
-ETV1, ETV4 and FLI1 subsets with the fusion annotations, and the ERBB2 and GRB7
-subsets with GISTIC amplification calls; WADE never sees either. `subset_padj`
-tests whether every tumour could carry one common fold; it does not certify
-individual patients.
+## Labels and their reading
+
+- **Prostate fusions.** Fusion-confirmed, expression-high, negative and
+  unknown labels stay separate. SPINK1 is an expression-high comparator.
+  - The notebook reports expression and the supplied annotations; it does
+    not assign fusion membership.
+  - Only tumours annotated fusion-positive or negative enter precision and
+    recall.
+- **Breast.** PAM50 is expression-derived, so marker agreement is not
+  independent validation.
+  - Receptor status and DNA copy-number calls are complementary measurements
+    in the same patients, not an independent cohort.
+  - HER2-enriched is not clinical HER2 positivity, and basal-like is not
+    triple-negative disease.
+  - ERBB2 amplification is GISTIC category `2`; other calls count as
+    negatives, and missing calls are left out.
+- **What WADE sees.** The notebooks compare the ERG, ETV1, ETV4 and FLI1
+  subsets with the fusion annotations, and the ERBB2 and GRB7 subsets with
+  the GISTIC calls. WADE never sees either. What a subset does and does not
+  say is in the [manual](manual.md#limits).

@@ -1,6 +1,6 @@
 //! The subset walk, its registration, and the shuffles of its permutation test.
 //!
-//! For sorted cases and controls, the mean shift predicts case quantile u at
+//! For sorted cases and controls, the fold of the means on count + 1 predicts case quantile u at
 //! fold * (Q_control(u) + 1) - 1, where fold = (case mean + 1) / (control mean + 1). The running
 //! departure R(k), the integral of Q_case minus that prediction from 0 to k/n1, is a prefix sum
 //! at each boundary between the k-th and (k+1)-th case, so one walk costs O(n).
@@ -9,7 +9,7 @@
 //! group's Lorenz curve of count + 1. The walk's depth divided by the case mean plus one is
 //! therefore the largest amount by which the cases' Lorenz curve falls below the controls': how
 //! much more concentrated expression is among the cases. The gap is unchanged by a fold on
-//! count + 1 applied to every case, so a shuffle walks registered values as they are.
+//! count + 1 applied to every case, so a shuffle walks the pooled values as they are.
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -281,7 +281,7 @@ fn gaps<'py>(
     Ok(curves.into_pyarray(py))
 }
 
-/// One gene, ready to be walked under any labelling: `values` are its registered values, sorted,
+/// One gene, ready to be walked under any labelling: `values` are its pooled values, sorted,
 /// and `at` gives each value's sample, so both groups stay sorted as the values are read in order.
 struct Walker<'a> {
     grid: &'a Grid,
@@ -437,20 +437,20 @@ fn tally<'py>(
     let pool = Pool::new(&pooled, &order, draws)?;
     let n = pool.n;
     let (lab, observed) = (labels.as_slice()?, observed.as_slice()?);
-    let (hits, draws) = (exceed.as_slice()?, tried.as_slice()?);
+    let (hits, shuffles) = (exceed.as_slice()?, tried.as_slice()?);
     if !labels.is_c_contiguous() || labels.as_array().ncols() != n || observed.len() != pool.genes
-        || hits.len() != pool.genes || draws.len() != pool.genes || stop == 0 || stop > maximum
+        || hits.len() != pool.genes || shuffles.len() != pool.genes || stop == 0 || stop > maximum
         || threshold.is_nan()
     {
         return Err(PyValueError::new_err("invalid shuffles or records"));
     }
-    if hits.iter().zip(draws).any(|(&k, &t)| k > t || t > maximum || (!settled(k, t, stop, maximum, threshold) && t < first)) {
+    if hits.iter().zip(shuffles).any(|(&k, &t)| k > t || t > maximum || (!settled(k, t, stop, maximum, threshold) && t < first)) {
         return Err(PyValueError::new_err("a running gene's next shuffle precedes this block"));
     }
     let n1 = cases_in(lab, n)?;
     let grid = Grid::new(n1, n - n1);
     let end = first + (lab.len() / n) as u64;
-    let mut records: Vec<(u64, u64)> = hits.iter().copied().zip(draws.iter().copied()).collect();
+    let mut records: Vec<(u64, u64)> = hits.iter().copied().zip(shuffles.iter().copied()).collect();
     py.detach(|| {
         records.par_iter_mut().enumerate().for_each(|(g, record)| {
             if settled(record.0, record.1, stop, maximum, threshold) || record.1 >= end {
