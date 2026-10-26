@@ -3,9 +3,12 @@ import numpy as np
 
 
 def datasets(protocol):
+    """The registry of matrices: replicates per allocation and panel (protocol version 7 gives each panel
+    its own count, "replicates"; earlier versions one, "replicates_per_cell")."""
     for allocation, (nc, n0) in enumerate(protocol["allocations"]):
         for panel_index, panel in enumerate(protocol["panels"]):
-            for replicate in range(protocol["replicates_per_cell"]):
+            count = protocol["replicates"][panel] if "replicates" in protocol else protocol["replicates_per_cell"]
+            for replicate in range(count):
                 yield dict(id=f"{panel}-{nc}v{n0}-r{replicate:02d}", n_case=nc, n_control=n0,
                            panel=panel, replicate=replicate, biology=protocol["biology"][replicate % 2],
                            seed=[protocol["seed_root"], allocation, panel_index, replicate],
@@ -24,14 +27,15 @@ def generate(protocol, settings):
     cv2 = rng.uniform(*cfg["biological_cv2_range"], g)
     first = cfg["reference_controls"]
     means[:first] = 100
-    profile_means = np.repeat(cfg["profile_means"], len(cfg["profiles"]))
+    copies = cfg.get("profile_copies", 1)                 # the profile panel repeated (version 7: 16)
+    profile_means = np.tile(np.repeat(cfg["profile_means"], len(cfg["profiles"])), copies)
     profile_indices = np.arange(first, first+len(profile_means))
     means[profile_indices] = profile_means
     profile = np.full(g, "background_null", dtype="<U52")
     if settings["panel"] == "mixed":
-        profile[profile_indices] = np.tile(cfg["profiles"], len(cfg["profile_means"]))
-    shared = np.arange(profile_indices[-1]+1, profile_indices[-1]+1+cfg["shared_tail_null_profiles"])
-    means[shared] = cfg["profile_means"]
+        profile[profile_indices] = np.tile(cfg["profiles"], len(cfg["profile_means"]) * copies)
+    shared = np.arange(profile_indices[-1]+1, profile_indices[-1]+1+cfg["shared_tail_null_profiles"] * copies)
+    means[shared] = np.tile(cfg["profile_means"], copies)
     profile[shared] = "shared_tail_null"
     module = np.arange(g) % cfg["lognormal_modules"]
     rho = cfg["within_module_log_correlation"]

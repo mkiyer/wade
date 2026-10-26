@@ -14,7 +14,7 @@ imported by the package.
 | `pvalue_accuracy.py` | The computed area-test p-value against every labelling or 20 million shuffles, across small, unbalanced and balanced designs, and how well its own error estimate tracks its error |
 | `subset_recovery.py` | Whether the subsets recover the planted cases, on the side they were planted, and the subset test, on the confirmation's matrices |
 | `subset_significance.py` | Calibration of the subset test, and its significance as a subset grows toward the whole cohort |
-| `confirm.py`, `protocols/confirmation.json` | The frozen fresh-seed confirmation: simulated 16,384-gene transcriptomes through the public API, with a two-sided Wilcoxon comparator. The protocol file records version 6; version 7 is pending |
+| `confirm.py`, `protocols/confirmation-v7.json` | The fresh-seed confirmation, protocol version 7, predeclared 26 October 2026: 27 checks, each sized for power 0.9 at an unacceptable error rate, over simulated transcriptomes (through the public API, with a Wilcoxon comparator), count-model nulls, real TCGA genes under random labels, stratified nulls and biological recovery. `protocols/confirmation.json` is version 6, which `subset_recovery.py` regenerates |
 | `wade_research/point_simulation.py` | The count generator shared by the confirmation and the studies |
 
 ```sh
@@ -33,7 +33,9 @@ WADE_TCGA_CONFIG=.release/0.2.0/tcga-config.json RAYON_NUM_THREADS=6 PYTHONPATH=
 PYTHONPATH=src:research python research/pvalue_accuracy.py
 PYTHONPATH=src:research python research/subset_recovery.py
 PYTHONPATH=src:research python research/subset_significance.py
-PYTHONPATH=src:research python research/confirm.py --output .release/0.2.0/confirmation-new
+WADE_TCGA_CONFIG=.release/0.2.0/tcga-config.json RAYON_NUM_THREADS=6 PYTHONPATH=src:research \
+    python research/confirm.py --output .release/0.2.0/confirmation-v7 [--arm ...] [--resume]
+PYTHONPATH=src:research python research/confirm.py --output .release/0.2.0/confirmation-v7 --evaluate
 ```
 
 Results and their interpretation are in [validation](../docs/validation.md).

@@ -1,0 +1,577 @@
+{
+  "version": 7,
+  "predeclared": "2026-10-26, before any version-7 data were generated. The protocol and research/confirm.py were committed together (the commit that adds this file), and a run records its git HEAD and refuses to start with uncommitted changes to the package, the script or this file.",
+  "phase": "Confirmation of the frozen 0.2.0 procedure on fresh seeds. Results do not change the procedure.",
+  "procedure": {
+    "call": "wade.wade(counts, cond, direction='both', pvalues='auto', relative_error=0.2, max_permutations=999999, fdr=0.05, normalization=RLE fit on the complete matrix, test_genes=wade.filter_counts(counts, min_count=3, min_samples=2), seed=permutation_seed[, strata=study])",
+    "frozen": "the normalization (one size factor per sample), the depth equalization (binomial thinning to the smallest size factor, per stratum with strata), the subset test (thinning by the Wasserstein-1 fold, four thinning draws, validated range 32 reads), the filtering, the direction (both), Monte Carlo stopping (Besag-Clifford at 25 exceedances, decision-based at fdr), and both statistics",
+    "per_gene_arms": "each gene has its own labelling, which wade() cannot take, so these arms run the functions wade() runs, with its settings and every run finished (fdr=None): the area test's saddlepoint, shuffled where its error estimate exceeds relative_error, and the subset test. A preflight checks them against wade() itself, with and without strata, and the run stops if they differ.",
+    "pvalues": "auto",
+    "relative_error": 0.2,
+    "max_permutations": 999999,
+    "fdr": 0.05,
+    "stop_exceedances": 25,
+    "subset_draws": 4,
+    "subset_validated_reads": 32,
+    "alpha": [
+      0.05,
+      0.1
+    ]
+  },
+  "rule": {
+    "familywise_false_fail": 0.05,
+    "power": 0.9,
+    "checks": 27,
+    "per_check_level": 0.001851851851851852,
+    "decision": "Each check passes unless its estimate is significantly above the acceptable value, one-sided at familywise_false_fail / checks: an exact binomial test for shares (of independent null tests, or of matrices), a t test over matrices for mean proportions. A check also needs power >= 0.9 at the unacceptable value, computed at its realized size (exact binomial power zigzags with the size, so 'size' is the smallest size that reaches it); a check without it is reported as underpowered and does not pass.",
+    "acceptable_and_unacceptable": "per-gene null rates and false discovery proportions: acceptable at the nominal level, unacceptable at 1.5 times it; the chance of any discovery under the complete null: unacceptable at twice the level; the union of the two tests' lists: acceptable at twice the level, unacceptable at three times it (author's decision, 2026-10-26)",
+    "no_zero_event_rules": "every check is sized by the rule above; none passes by observing no events",
+    "dependence": "the per-gene arms give each gene its own random labelling; their null tests share samples, which the binomial test ignores"
+  },
+  "seed_root": 2026102607,
+  "arms": {
+    "simulated": {
+      "generator": {
+        "background_mean_range": [
+          0.05,
+          1000
+        ],
+        "biological_cv2_range": [
+          0.2,
+          1.0
+        ],
+        "exposure_log_sd": 0.35,
+        "lognormal_modules": 64,
+        "within_module_log_correlation": 0.2,
+        "reference_controls": 64,
+        "all_zero_genes": 1,
+        "profile_means": [
+          0.5,
+          5,
+          50,
+          500
+        ],
+        "profiles": [
+          "bulk_up_1.5x",
+          "bulk_down_two_thirds",
+          "subset_up_5pct_4x",
+          "subset_up_10pct_4x",
+          "subset_up_20pct_4x",
+          "subset_up_10pct_16x",
+          "subset_down_10pct_quarter",
+          "bulk_half_subset_up_10pct_8x",
+          "bulk_half_subset_up_10pct_32x",
+          "bulk_half_subset_up_10pct_128x",
+          "bulk_half_subset_up_10pct_1024x",
+          "same_mean_wider",
+          "mean_preserving_subset_10pct_4x",
+          "opposing_20pct",
+          "singleton_up_16x"
+        ],
+        "shared_tail_null_profiles": 4,
+        "retired": "bulk_half_subset_up_10pct_4x: below the information limit (2026-09-27 review); replaced by the 8-1024x raised-subset series",
+        "profile_copies": 16
+      },
+      "genes": 16384,
+      "allocations": [
+        [
+          250,
+          250
+        ],
+        [
+          500,
+          50
+        ],
+        [
+          50,
+          500
+        ]
+      ],
+      "panels": [
+        "complete_null",
+        "mixed"
+      ],
+      "replicates": {
+        "complete_null": 160,
+        "mixed": 20
+      },
+      "biology": [
+        "gamma",
+        "correlated_lognormal"
+      ],
+      "intended_direction": {
+        "up": [
+          "bulk_up_1.5x",
+          "subset_up_5pct_4x",
+          "subset_up_10pct_4x",
+          "subset_up_20pct_4x",
+          "subset_up_10pct_16x",
+          "bulk_half_subset_up_10pct_8x",
+          "bulk_half_subset_up_10pct_32x",
+          "bulk_half_subset_up_10pct_128x",
+          "bulk_half_subset_up_10pct_1024x",
+          "mean_preserving_subset_10pct_4x",
+          "singleton_up_16x"
+        ],
+        "down": [
+          "bulk_down_two_thirds",
+          "subset_down_10pct_quarter"
+        ],
+        "either": [
+          "same_mean_wider",
+          "opposing_20pct"
+        ]
+      },
+      "no_subset": [
+        "background_null",
+        "shared_tail_null",
+        "bulk_up_1.5x",
+        "bulk_down_two_thirds"
+      ],
+      "comparator": "Two-sided Wilcoxon rank-sum per gene (asymptotic, tie-corrected) on the same normalized counts and test mask; one BH family over the tested genes, as for WADE; a call's side is the sign of U - n1*n0/2",
+      "null": "Independent biological patients; exposures independent of condition; no injected group confounding",
+      "power": "descriptive: the share of each profile x abundance called on its intended side and on the other, for the area test, the subset test and the comparator",
+      "seeds": "matrix seed [seed_root, allocation, panel, replicate], permutation seed [..., 97], as protocol version 6; the preflight uses [seed_root, 199, ...]"
+    },
+    "count_model": {
+      "reference": "research/count_model.py dataset(): TCGA prostate tumours, a random split per gene, thinned binomially by design; data set k (in the order designs x depths x arms, from 1) seeded seed_root x 1000 + k; tests seeded [seed_root, 101, k]",
+      "designs": [
+        [
+          222,
+          223
+        ],
+        [
+          40,
+          405
+        ],
+        [
+          405,
+          40
+        ]
+      ],
+      "depths": [
+        1,
+        0.125
+      ],
+      "arms": [
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          0.5,
+          1
+        ],
+        [
+          1,
+          0.5
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          "cohort"
+        ],
+        [
+          2,
+          0.5
+        ]
+      ],
+      "arms_note": "[fold, exposure]; 'cohort' is the TCGA prostate design's own exposure imbalance (median tumour over median normal size factor)",
+      "every": 4,
+      "area_nulls": "arms without a fold",
+      "subset_nulls": "every arm",
+      "bins": "expected reads per sample in the sparser group: level x depth x min(p1, p0)"
+    },
+    "real_labels": {
+      "cohorts": [
+        "prostate",
+        "breast"
+      ],
+      "designs": {
+        "prostate": [
+          [
+            40,
+            405
+          ],
+          [
+            222,
+            223
+          ],
+          [
+            405,
+            40
+          ]
+        ],
+        "breast": [
+          [
+            88,
+            883
+          ],
+          [
+            485,
+            486
+          ],
+          [
+            883,
+            88
+          ]
+        ]
+      },
+      "labels": "the cohort's tumours, a random split per gene into the design, seeded [seed_root, 102, cohort, design]; tests seeded [seed_root, 102, cohort, design, 97]; the cohort's own RLE size factors",
+      "bins": "the lower group's mean normalized count"
+    },
+    "strata": {
+      "simulated_studies": "research/strata.py model_dataset(): the two designs of MODEL_DESIGNS, batch sd 0 and 0.5; folds 1 (both tests), 1.5 and 3 (the subset test)",
+      "sites": "TCGA prostate tumours relabelled within their sites with 4+ tumours, a quarter or three quarters pseudo-cases by size order; folds 1 and 1.5",
+      "layout": "the real contrast's five sites, their tumours relabelled with the real design's case shares; folds 1 and 1.5",
+      "gtex": "TCGA normal-adjacent and GTEx prostate normals, relabelled within study, three quarters and a quarter pseudo-cases",
+      "genes_per_set": 16000,
+      "seeds": "data set k (simulated studies first, then sites, layout, gtex): gene picks and relabellings from [seed_root, 103, k]; simulated studies generated with seed seed_root x 1000 + k; tests seeded [seed_root, 103, k, 97]",
+      "tests": "both tests with the strata as codes (wade(..., strata=study))",
+      "bins": "simulated studies: each gene's smallest expected reads over the strata's groups; real nulls: the lower group's mean normalized count"
+    },
+    "biology": "descriptive: the TCGA notebooks' recovery of ERG, ETV1, ETV4 and FLI1 fusions and ERBB2 amplification, rendered from the frozen package (notebooks/results), copied into the run"
+  },
+  "checks": [
+    {
+      "id": "simulated/any/area/0.05",
+      "arm": "simulated",
+      "test": "area",
+      "quantity": "share of complete-null matrices with any discovery (q <= level)",
+      "level": 0.05,
+      "acceptable": 0.05,
+      "unacceptable": 0.1,
+      "scope": "tested genes",
+      "size": 458,
+      "unit": "matrices"
+    },
+    {
+      "id": "simulated/any/area/0.1",
+      "arm": "simulated",
+      "test": "area",
+      "quantity": "share of complete-null matrices with any discovery (q <= level)",
+      "level": 0.1,
+      "acceptable": 0.1,
+      "unacceptable": 0.2,
+      "scope": "tested genes",
+      "size": 215,
+      "unit": "matrices"
+    },
+    {
+      "id": "simulated/any/subset/0.05",
+      "arm": "simulated",
+      "test": "subset",
+      "quantity": "share of complete-null matrices with any discovery (q <= level)",
+      "level": 0.05,
+      "acceptable": 0.05,
+      "unacceptable": 0.1,
+      "scope": "genes in the subset test's validated range (lower group mean >= 32 normalized reads)",
+      "size": 458,
+      "unit": "matrices"
+    },
+    {
+      "id": "simulated/any/subset/0.1",
+      "arm": "simulated",
+      "test": "subset",
+      "quantity": "share of complete-null matrices with any discovery (q <= level)",
+      "level": 0.1,
+      "acceptable": 0.1,
+      "unacceptable": 0.2,
+      "scope": "genes in the subset test's validated range (lower group mean >= 32 normalized reads)",
+      "size": 215,
+      "unit": "matrices"
+    },
+    {
+      "id": "simulated/fdp/area/0.05",
+      "arm": "simulated",
+      "test": "area",
+      "quantity": "mean false discovery proportion over partial-null matrices",
+      "level": 0.05,
+      "acceptable": 0.05,
+      "unacceptable": 0.07500000000000001,
+      "scope": "tested genes; false = calls on unaltered genes",
+      "size": 60,
+      "unit": "matrices",
+      "power_note": "a one-sided t test over the 60 matrices; power >= 0.9 at the unacceptable value while the per-matrix standard deviation is at most 0.0463; above that the check is underpowered"
+    },
+    {
+      "id": "simulated/fdp/area/0.1",
+      "arm": "simulated",
+      "test": "area",
+      "quantity": "mean false discovery proportion over partial-null matrices",
+      "level": 0.1,
+      "acceptable": 0.1,
+      "unacceptable": 0.15000000000000002,
+      "scope": "tested genes; false = calls on unaltered genes",
+      "size": 60,
+      "unit": "matrices",
+      "power_note": "a one-sided t test over the 60 matrices; power >= 0.9 at the unacceptable value while the per-matrix standard deviation is at most 0.0926; above that the check is underpowered"
+    },
+    {
+      "id": "simulated/fdp/subset/0.05",
+      "arm": "simulated",
+      "test": "subset",
+      "quantity": "mean false discovery proportion over partial-null matrices",
+      "level": 0.05,
+      "acceptable": 0.05,
+      "unacceptable": 0.07500000000000001,
+      "scope": "validated range; false = calls on genes in no_subset",
+      "size": 60,
+      "unit": "matrices",
+      "power_note": "a one-sided t test over the 60 matrices; power >= 0.9 at the unacceptable value while the per-matrix standard deviation is at most 0.0463; above that the check is underpowered"
+    },
+    {
+      "id": "simulated/fdp/subset/0.1",
+      "arm": "simulated",
+      "test": "subset",
+      "quantity": "mean false discovery proportion over partial-null matrices",
+      "level": 0.1,
+      "acceptable": 0.1,
+      "unacceptable": 0.15000000000000002,
+      "scope": "validated range; false = calls on genes in no_subset",
+      "size": 60,
+      "unit": "matrices",
+      "power_note": "a one-sided t test over the 60 matrices; power >= 0.9 at the unacceptable value while the per-matrix standard deviation is at most 0.0926; above that the check is underpowered"
+    },
+    {
+      "id": "simulated/union/0.05",
+      "arm": "simulated",
+      "test": "area or subset",
+      "quantity": "mean false discovery proportion of the union of the area calls and the validated-range subset calls",
+      "level": 0.05,
+      "acceptable": 0.1,
+      "unacceptable": 0.15,
+      "scope": "false = listed genes that are unaltered",
+      "size": 60,
+      "unit": "matrices",
+      "power_note": "a one-sided t test over the 60 matrices; power >= 0.9 at the unacceptable value while the per-matrix standard deviation is at most 0.0926; above that the check is underpowered"
+    },
+    {
+      "id": "count_model/area/0.05",
+      "arm": "count_model",
+      "test": "area",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.05,
+      "acceptable": 0.05,
+      "unacceptable": 0.07500000000000001,
+      "scope": "every null gene",
+      "size": 1613,
+      "unit": "null tests"
+    },
+    {
+      "id": "count_model/area/0.01",
+      "arm": "count_model",
+      "test": "area",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.01,
+      "acceptable": 0.01,
+      "unacceptable": 0.015,
+      "scope": "every null gene",
+      "size": 8455,
+      "unit": "null tests"
+    },
+    {
+      "id": "count_model/area/0.001",
+      "arm": "count_model",
+      "test": "area",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.001,
+      "acceptable": 0.001,
+      "unacceptable": 0.0015,
+      "scope": "every null gene",
+      "size": 85324,
+      "unit": "null tests"
+    },
+    {
+      "id": "count_model/subset/0.05",
+      "arm": "count_model",
+      "test": "subset",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.05,
+      "acceptable": 0.05,
+      "unacceptable": 0.07500000000000001,
+      "scope": "null genes in the validated range (expected or lower-group reads >= 32)",
+      "size": 1613,
+      "unit": "null tests"
+    },
+    {
+      "id": "count_model/subset/0.01",
+      "arm": "count_model",
+      "test": "subset",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.01,
+      "acceptable": 0.01,
+      "unacceptable": 0.015,
+      "scope": "null genes in the validated range (expected or lower-group reads >= 32)",
+      "size": 8455,
+      "unit": "null tests"
+    },
+    {
+      "id": "count_model/subset/0.001",
+      "arm": "count_model",
+      "test": "subset",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.001,
+      "acceptable": 0.001,
+      "unacceptable": 0.0015,
+      "scope": "null genes in the validated range (expected or lower-group reads >= 32)",
+      "size": 85324,
+      "unit": "null tests"
+    },
+    {
+      "id": "real_labels/area/0.05",
+      "arm": "real_labels",
+      "test": "area",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.05,
+      "acceptable": 0.05,
+      "unacceptable": 0.07500000000000001,
+      "scope": "every null gene",
+      "size": 1613,
+      "unit": "null tests"
+    },
+    {
+      "id": "real_labels/area/0.01",
+      "arm": "real_labels",
+      "test": "area",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.01,
+      "acceptable": 0.01,
+      "unacceptable": 0.015,
+      "scope": "every null gene",
+      "size": 8455,
+      "unit": "null tests"
+    },
+    {
+      "id": "real_labels/area/0.001",
+      "arm": "real_labels",
+      "test": "area",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.001,
+      "acceptable": 0.001,
+      "unacceptable": 0.0015,
+      "scope": "every null gene",
+      "size": 85324,
+      "unit": "null tests"
+    },
+    {
+      "id": "real_labels/subset/0.05",
+      "arm": "real_labels",
+      "test": "subset",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.05,
+      "acceptable": 0.05,
+      "unacceptable": 0.07500000000000001,
+      "scope": "null genes in the validated range (expected or lower-group reads >= 32)",
+      "size": 1613,
+      "unit": "null tests"
+    },
+    {
+      "id": "real_labels/subset/0.01",
+      "arm": "real_labels",
+      "test": "subset",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.01,
+      "acceptable": 0.01,
+      "unacceptable": 0.015,
+      "scope": "null genes in the validated range (expected or lower-group reads >= 32)",
+      "size": 8455,
+      "unit": "null tests"
+    },
+    {
+      "id": "real_labels/subset/0.001",
+      "arm": "real_labels",
+      "test": "subset",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.001,
+      "acceptable": 0.001,
+      "unacceptable": 0.0015,
+      "scope": "null genes in the validated range (expected or lower-group reads >= 32)",
+      "size": 85324,
+      "unit": "null tests"
+    },
+    {
+      "id": "strata/area/0.05",
+      "arm": "strata",
+      "test": "area",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.05,
+      "acceptable": 0.05,
+      "unacceptable": 0.07500000000000001,
+      "scope": "every null gene",
+      "size": 1613,
+      "unit": "null tests"
+    },
+    {
+      "id": "strata/area/0.01",
+      "arm": "strata",
+      "test": "area",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.01,
+      "acceptable": 0.01,
+      "unacceptable": 0.015,
+      "scope": "every null gene",
+      "size": 8455,
+      "unit": "null tests"
+    },
+    {
+      "id": "strata/area/0.001",
+      "arm": "strata",
+      "test": "area",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.001,
+      "acceptable": 0.001,
+      "unacceptable": 0.0015,
+      "scope": "every null gene",
+      "size": 85324,
+      "unit": "null tests"
+    },
+    {
+      "id": "strata/subset/0.05",
+      "arm": "strata",
+      "test": "subset",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.05,
+      "acceptable": 0.05,
+      "unacceptable": 0.07500000000000001,
+      "scope": "null genes in the validated range (expected or lower-group reads >= 32)",
+      "size": 1613,
+      "unit": "null tests"
+    },
+    {
+      "id": "strata/subset/0.01",
+      "arm": "strata",
+      "test": "subset",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.01,
+      "acceptable": 0.01,
+      "unacceptable": 0.015,
+      "scope": "null genes in the validated range (expected or lower-group reads >= 32)",
+      "size": 8455,
+      "unit": "null tests"
+    },
+    {
+      "id": "strata/subset/0.001",
+      "arm": "strata",
+      "test": "subset",
+      "quantity": "share of null genes with p <= level",
+      "level": 0.001,
+      "acceptable": 0.001,
+      "unacceptable": 0.0015,
+      "scope": "null genes in the validated range (expected or lower-group reads >= 32)",
+      "size": 85324,
+      "unit": "null tests"
+    }
+  ]
+}
